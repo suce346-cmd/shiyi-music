@@ -45,6 +45,7 @@ export default function App() {
         setStreamText(text); setStatus("streaming");
       });
       setResult(newResult); setStatus("done");
+      saveToHistory(`优化: ${feedback}`, newResult.raw);
     } catch (e) {
       setStatus("error"); setErrorMessage(String(e));
     }
