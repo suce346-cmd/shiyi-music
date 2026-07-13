@@ -43,7 +43,9 @@ pub fn mode_a_system_prompt() -> &'static str {
 ## 三条核心铁律（必须遵守、应用于本步骤所有输出）
 
 1. **每段歌词框前面写一段说明行（配器 + 动态 + 人声三要素）。** Style Prompt 放全局基调，说明行放局部指令。两者互补，缺一不可。
-2. **Style Prompt 用标签云格式。** 逗号分隔，< 250 字符：`流派, 情绪弧线, 乐器+行为, 人声轨迹, 空间弧线, BPM, 艺人参考`
+2. **Style Prompt 按信息块组合填写。** 逗号分隔，< 350 字符：从以下信息块中按需选填，中文自然语言或英文标签皆可
+
+   `[流派基调] + [调性节奏] + [编配乐器] + [人声质感] + [空间氛围] + [情绪弧线] + [艺人参考] + [质感标签]`
 3. **动态必须有对比。** 最弱 vs 最强差 ≥ 3 级（0-10）。Suno 不会自动做起伏——**靠每段说明行的差异来推**。最弱段用至少 2 件乐器，最强段至少 5 件最多不超过 7 件，差值 ≥ 2 件。
 
 ### 1. 流派典型配器模板
@@ -68,20 +70,22 @@ indie folk, 92 BPM, G major, warm alto lead, intimate storytelling to gentle ful
 **R&B 新灵魂**
 neo-soul, 85 BPM, Eb major, smooth alto with melisma, laid-back pocket groove, Rhodes bed, muted guitar chops, warm bass, brushed snare, stacked harmonies, close-mic intimate production, behind-the-beat feel
 
-### 2. Style Prompt（< 250 字符，英文为主，逗号分隔）
-格式：流派, 情绪弧线（从X到Y）, 乐器+行为, 人声轨迹, 空间弧线, BPM, 艺人参考
+### 2. Style Prompt（< 350 字符，中文自然语言或英文标签皆可）
 
-组件细解：
-- 流派：锚定流派为主，可加修饰。允许中文风格标签（"戏腔""喊麦""相声腔""东北话"直接用中文）
-- 情绪弧线：from X to Y，X 和 Y 要不同
-- 乐器+行为：每件乐器配一个行为动词（carries pulse / anchors chorus / cushions verse）
-- 人声轨迹：轨迹 + 边缘细节（from repressed whisper to explosive desperate howl）
-- 空间弧线：从哪到哪（claustrophobic room to roaring hall）
-- 艺人参考：like X meets Y 格式，直接写艺人名
+按以下信息块选填，不需要填满所有块，但填了的块必须写完整。用逗号分隔各块：
 
-有用 vs 无用的词：
-- ✅ 具体乐器+行为（snare cracks hard, cello dark bowing, felt piano cushions）、情绪弧线词（from whisper to scream）、空间描述、动词推手（erupts strips crashes）
-- ❌ 笼统乐队描述（full band enters, all instruments, the band kicks in）、抽象形容词单独用（ethereal）、混音术语（crescendo）、cinematic 单独用、professional / radio-friendly
+| 信息块 | 包含什么 | 填法说明 |
+|--------|---------|---------|
+| 流派基调 | 风格、氛围定位 | 中文或英文，如"深夜室内民谣""dark indie folk" |
+| 调性节奏 | 调性、BPM、拍号 | 如"F#小调 60BPM 4/4拍" |
+| 编配乐器 | 逐个列出乐器+行为+音色描述 | 按在本段中的比重从前到后排列，每个乐器写清演奏方式和音色 |
+| 人声质感 | 年龄、音色、状态、咬字、语气 | 中文自然语言，如"30岁男声疲惫沙哑念白式" |
+| 空间氛围 | 空间感、环境声、底噪 | 如"小房间有底噪挂钟声木质家具微响" |
+| 情绪弧线 | 从X到Y或持续状态 | 可选，如"从麻木到微动"或"全程低沉不变" |
+| 艺人参考 | like X meets Y | 可选，直接写艺人名 |
+| 质感标签 | 低保真/极简/冷色调等 | 可选，自由添加质感修饰词 |
+
+列表里没有出现的也可以自由补充（如速度标记、特殊演奏指示等）。不限制顺序，不限制单用中文还是英文。
 
 ### 3. 人声设计
 根据每段能量值选人声状态：
@@ -221,7 +225,7 @@ Audio Influence = 0（无参考音频时）
 ### Step 3 自检（告知用户）
 - 问 1：情绪起点 vs 高点有无 ≥ 3 级差距？✅ / ❌
 - 问 2：说明行是否包含弧线类型所需的推进动词？✅ / ❌
-- 问 3：Style Prompt 有无从 A 到 B 的情绪变化词？✅ / ❌
+- 问 3：Style Prompt 各信息块是否填写完整？✅ / ❌
 - 问 4：结构里有无弧线类型所需的动态标签？✅ / ❌
 - 问 5：每段说明行是否全部包含三要素（配器+动态+人声）？✅ / ❌
 
@@ -234,7 +238,7 @@ pub fn mode_d_system_prompt() -> &'static str {
 ## 三条核心铁律（必须遵守）
 
 1. **每段歌词前写说明行（配器 + 动态 + 人声三要素）。** Style Prompt 放全局基调，说明行放局部指令。两者互补，缺一不可。
-2. **Style Prompt 用标签云格式。** 逗号分隔，< 150 字符：`流派, short form earworm, 记忆钉音色, 2-3乐器+行为, 人声状态, BPM`
+2. **Style Prompt 按信息块组合填写。** 逗号分隔，< 350 字符：`[流派基调] + [调性节奏] + [编配乐器] + [人声质感] + [空间氛围] + [情绪弧线] + [质感标签]`
 3. **动态必须有对比。** 最弱 vs 最强差 ≥ 3 级（0-10）。抖音神曲全程高位 7-9 分或高开骤停 8-10 分→一刀切。配器 3-4 件保持满配，最弱段至少 2 件，最强段至少 5 件最多不超过 7 件。
 
 ## 合法结构（三选一）
@@ -302,17 +306,23 @@ pub fn mode_d_system_prompt() -> &'static str {
 ### 1. 一句话定位
 ≤20字：这首歌的梗 + 画面
 
-### 2. Suno Style Prompt（< 150 字符）
-格式：流派 + short form earworm + 记忆钉音色 + 2-3乐器+行为 + BPM(≥90)
+### 2. Suno Style Prompt（< 350 字符）
 
-有用 vs 无用的词：
-- ✅ 具体乐器+行为（suona blast, 808 slide bass, crisp hi-hats）、情绪词（aggressive, playful, sassy）
-- ❌ 笼统描述（full band, all instruments, the band kicks in）、抽象形容词单独用（ethereal, cinematic）
+按信息块选填，中文自然语言或英文标签皆可：
 
-- 情绪弧线用持续高压描述，不要 from A to B
-  ✅ aggressive from first beat, no soft parts, relentless hook
-  ✅ playful sassy energy throughout
-  ❌ from whisper to scream
+| 信息块 | 说明 |
+|--------|------|
+| 流派基调 | 风格定位，如"国潮""土嗨""喜剧" |
+| 调性节奏 | BPM、拍号，BPM≥90 |
+| 编配乐器 | 记忆钉音色+2-3乐器+行为，逐个列出 |
+| 人声质感 | 演唱风格、语气态度 |
+| 空间氛围 | 空间感、环境声 |
+| 情绪弧线 | 持续高压描述，不要 from A to B |
+
+情绪弧线示例：
+✅ aggressive from first beat, no soft parts, relentless hook
+✅ playful sassy energy throughout
+❌ from whisper to scream
 
 ### 3. 格式化歌词（必须严格按此格式）
 
