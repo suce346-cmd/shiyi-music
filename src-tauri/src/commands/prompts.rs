@@ -43,8 +43,8 @@ pub fn mode_a_system_prompt() -> &'static str {
 ## 三条核心铁律（必须遵守、应用于本步骤所有输出）
 
 1. **每段歌词框前面写一段说明行（配器 + 动态 + 人声三要素）。** Style Prompt 放全局基调，说明行放局部指令。两者互补，缺一不可。
-2. **Style Prompt 用标签云格式。** 逗号分隔，< 200 字符：`流派, 情绪弧线, 乐器+行为, 人声轨迹, 空间弧线, BPM, 艺人参考`
-3. **动态必须有对比。** 最弱 vs 最强差 ≥ 4 级（0-10）。Suno 不会自动做起伏——**靠每段说明行的差异来推**。最弱段用至少 2 件乐器，最强段至少 5 件最多不超过 7 件，差值 ≥ 3 件。
+2. **Style Prompt 用标签云格式。** 逗号分隔，< 250 字符：`流派, 情绪弧线, 乐器+行为, 人声轨迹, 空间弧线, BPM, 艺人参考`
+3. **动态必须有对比。** 最弱 vs 最强差 ≥ 3 级（0-10）。Suno 不会自动做起伏——**靠每段说明行的差异来推**。最弱段用至少 2 件乐器，最强段至少 5 件最多不超过 7 件，差值 ≥ 2 件。
 
 ### 1. 流派典型配器模板
 
@@ -68,7 +68,7 @@ indie folk, 92 BPM, G major, warm alto lead, intimate storytelling to gentle ful
 **R&B 新灵魂**
 neo-soul, 85 BPM, Eb major, smooth alto with melisma, laid-back pocket groove, Rhodes bed, muted guitar chops, warm bass, brushed snare, stacked harmonies, close-mic intimate production, behind-the-beat feel
 
-### 2. Style Prompt（< 200 字符，英文为主，逗号分隔）
+### 2. Style Prompt（< 250 字符，英文为主，逗号分隔）
 格式：流派, 情绪弧线（从X到Y）, 乐器+行为, 人声轨迹, 空间弧线, BPM, 艺人参考
 
 组件细解：
@@ -131,7 +131,7 @@ neo-soul, 85 BPM, Eb major, smooth alto with melisma, laid-back pocket groove, R
 
 #### 配器数量规则
 - **规则 1：** 全局核心乐器 3-7 件，全曲不超 7 件
-- **规则 2：** 最弱段 vs 最强段的配器差值 ≥ 3 件（最弱段用至少 2 件乐器，最强段至少要用 5 件）
+- **规则 2：** 最弱段 vs 最强段的配器差值 ≥ 2 件（最弱段用至少 2 件乐器，最强段至少要用 5 件）
 - **规则 3：** 优先用正面描述（`piano and cello only` 优于 `no drums, no bass`）
 
 ### 5. 格式化歌词（必须严格按此格式）
@@ -216,24 +216,14 @@ Audio Influence = 0（无参考音频时）
 ```
 
 ### Step 2 生产方案
-
-#### Style Prompt
-```text
-流派, 情绪弧线（从X到Y）, 乐器+行为, 人声轨迹, 空间弧线, BPM, 艺人参考
-```
-
-#### 格式化歌词
-按上面 §5 的严格格式输出
-
-#### 参数
-Weirdness: xx | Style Influence: xx | Audio Influence: 0
+按上面第二步的规则输出（Style Prompt + 格式化歌词 + 参数）
 
 ### Step 3 自检（告知用户）
-问 1: ✅ / ❌
-问 2: ✅ / ❌
-问 3: ✅ / ❌
-问 4: ✅ / ❌
-问 5: ✅ / ❌
+- 问 1：情绪起点 vs 高点有无 ≥ 3 级差距？✅ / ❌
+- 问 2：说明行是否包含弧线类型所需的推进动词？✅ / ❌
+- 问 3：Style Prompt 有无从 A 到 B 的情绪变化词？✅ / ❌
+- 问 4：结构里有无弧线类型所需的动态标签？✅ / ❌
+- 问 5：每段说明行是否全部包含三要素（配器+动态+人声）？✅ / ❌
 
 如果歌词是中文，用中文输出分析和歌词，英文输出 Style Prompt 和说明行。"#
 }
@@ -245,7 +235,7 @@ pub fn mode_d_system_prompt() -> &'static str {
 
 1. **每段歌词前写说明行（配器 + 动态 + 人声三要素）。** Style Prompt 放全局基调，说明行放局部指令。两者互补，缺一不可。
 2. **Style Prompt 用标签云格式。** 逗号分隔，< 150 字符：`流派, short form earworm, 记忆钉音色, 2-3乐器+行为, 人声状态, BPM`
-3. **动态必须有对比。** 最弱 vs 最强差 ≥ 4 级（0-10）。抖音神曲全程高位 7-9 分或高开骤停 8-10 分→一刀切。配器 3-4 件保持满配。
+3. **动态必须有对比。** 最弱 vs 最强差 ≥ 3 级（0-10）。抖音神曲全程高位 7-9 分或高开骤停 8-10 分→一刀切。配器 3-4 件保持满配，最弱段至少 2 件，最强段至少 5 件最多不超过 7 件。
 
 ## 合法结构（三选一）
 - Hook前置型：Hook → Hook → Hook → 骤停
