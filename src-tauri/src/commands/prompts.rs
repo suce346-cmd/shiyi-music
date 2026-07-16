@@ -138,6 +138,42 @@ neo-soul, 85 BPM, Eb major, smooth alto with melisma, laid-back pocket groove, R
 - **规则 2：** 最弱段 vs 最强段的配器差值 ≥ 2 件（最弱段用至少 2 件乐器，最强段至少要用 5 件）
 - **规则 3：** 优先用正面描述（`piano and cello only` 优于 `no drums, no bass`）
 
+#### 乐器参考库（选不同的组合，避免重复）
+
+**快速流派调色板：**
+| 流派 | 核心配器 |
+|------|---------|
+| 抒情流行 | fingerpicked guitar, felt piano, warm bass, brushed snare |
+| 摇滚 | distorted guitar, live drums, bass, big chorus |
+| 民谣 | acoustic guitar, upright bass, soft percussion, cello |
+| 说唱 | 808 bass, trap hats, dark piano loop, vocal ad-libs |
+| R&B | Rhodes/Wurlitzer, pocket drums, bass, harmony stacks |
+| 氛围/独立 | delayed guitar, pads, sparse drums, reverb |
+| 电子舞曲 | four-on-the-floor kick, synth bass, bright pluck lead |
+| 电影管弦 | felt piano, string ostinato, brass swells, choir pads |
+
+**全球特色乐器（融合/特殊风格用）：**
+| 地区 | 乐器 |
+|------|------|
+| 东亚 | 二胡、古筝、琵琶、尺八、太鼓 |
+| 南亚 | 西塔琴、萨朗吉、班苏里、塔布拉 |
+| 中东 | 乌德琴、卡农、奈伊、达布卡 |
+| 西非 | 科拉琴、巴朗风、说话鼓、金贝 |
+| 拉丁 | 班多钮、恰兰戈、克纳、邦戈 |
+| 凯尔特 | 锡笛、尤利安风笛、小提琴、博德兰 |
+
+**常见和弦走向参考（按歌曲情绪选，不要只用一种）：**
+| 情绪 | 和弦走向 |
+|------|---------|
+| 温暖/治愈 | I–V–vi–IV（C–G–Am–F） |
+| 忧郁/伤感 | vi–IV–I–V（Am–F–C–G） |
+| 悬疑/紧张 | i–VII–VI–VII（Am–G–F–G） |
+| 大气/史诗 | I–V–vi–IV–I（C–G–Am–F–C） |
+| 爵士/松弛 | ii–V–I（Dm7–G7–Cmaj7） |
+| 流行/明快 | I–V–IV–I（C–G–F–C） |
+
+> 避免每首歌都用同一组乐器和同一个和弦走向，交替选择不同组合。
+
 ### 5. 格式化歌词（必须严格按此格式）
 
 结构标签单独成行，说明行单独成行，三要素用英文逗号分隔。格式死板，不允许发挥：
