@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { IconSettings, IconHistory, IconSparkles } from "@tabler/icons-react";
 import ModeSelector from "./components/ModeSelector";
 import InputPanel from "./components/InputPanel";
@@ -30,6 +30,8 @@ export default function App() {
   const [history, setHistory] = useState<ChatMessage[]>([]);
   const [lastUserInput, setLastUserInput] = useState("");
   const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>(loadHistory);
+  const historyRef = useRef(historyEntries);
+  historyRef.current = historyEntries;
   const [showHistory, setShowHistory] = useState(false);
   const [historyView, setHistoryView] = useState<HistoryEntry | null>(null);
   const { settings, updateSettings, showSettings, setShowSettings } = useSettings();
@@ -53,7 +55,7 @@ export default function App() {
 
   const saveToHistory = (input: string, output: string) => {
     const entry: HistoryEntry = { id: newId(), mode, input, output, timestamp: Date.now() };
-    const updated = [entry, ...historyEntries];
+    const updated = [entry, ...historyRef.current];
     setHistoryEntries(updated); saveHistory(updated);
   };
   const deleteHistory = (id: string) => { const u = historyEntries.filter(e => e.id !== id); setHistoryEntries(u); saveHistory(u); };

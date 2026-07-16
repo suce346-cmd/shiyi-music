@@ -162,17 +162,19 @@ neo-soul, 85 BPM, Eb major, smooth alto with melisma, laid-back pocket groove, R
 | 拉丁 | 班多钮、恰兰戈、克纳、邦戈 |
 | 凯尔特 | 锡笛、尤利安风笛、小提琴、博德兰 |
 
-**常见和弦走向参考（按歌曲情绪选，不要只用一种）：**
-| 情绪 | 和弦走向 |
-|------|---------|
-| 温暖/治愈 | I–V–vi–IV（C–G–Am–F） |
-| 忧郁/伤感 | vi–IV–I–V（Am–F–C–G） |
-| 悬疑/紧张 | i–VII–VI–VII（Am–G–F–G） |
-| 大气/史诗 | I–V–vi–IV–I（C–G–Am–F–C） |
-| 爵士/松弛 | ii–V–I（Dm7–G7–Cmaj7） |
-| 流行/明快 | I–V–IV–I（C–G–F–C） |
+**和弦走向参考（非必须，仅作灵感参考，不要每首用同一组）：**
+| 情绪/风格 | 可选走向 |
+|-----------|---------|
+| 温暖/治愈 | I–V–vi–IV / I–iii–IV–V |
+| 忧郁/伤感 | vi–IV–I–V / i–VI–III–VII |
+| 悬疑/紧张 | i–VII–VI–VII / i–iv–V–i |
+| 大气/史诗 | I–V–vi–IV–I / i–VI–VII–i |
+| 爵士/松弛 | ii–V–I / iii–VI–ii–V |
+| 流行/明快 | I–V–IV–I / I–IV–V–IV |
+| 民谣/叙事 | I–V–vi–IV / I–ii–IV–V |
+| 黑暗/低沉 | i–VII–VI–V / i–iv–i–V |
 
-> 避免每首歌都用同一组乐器和同一个和弦走向，交替选择不同组合。
+> 和弦走向不是必须填的，也可以完全不用写进 Style Prompt。如果需要写，每首歌换一组，不要重复。
 
 ### 5. 格式化歌词（必须严格按此格式）
 
