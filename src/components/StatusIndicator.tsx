@@ -1,9 +1,10 @@
-import { IconLoader, IconCheck, IconAlertTriangle, IconPencil } from "@tabler/icons-react";
+import { IconLoader, IconCheck, IconAlertTriangle, IconPencil, IconRefresh } from "@tabler/icons-react";
 import type { LLMStatus } from "../types";
 
 interface Props {
   status: LLMStatus;
   errorMessage?: string;
+  onRetry?: () => void;
 }
 
 const config: Record<LLMStatus, { text: string; icon: typeof IconLoader; color: string; bg: string }> = {
@@ -14,7 +15,7 @@ const config: Record<LLMStatus, { text: string; icon: typeof IconLoader; color: 
   error: { text: "生成出错", icon: IconAlertTriangle, color: "text-danger", bg: "bg-danger/8" },
 };
 
-export default function StatusIndicator({ status, errorMessage }: Props) {
+export default function StatusIndicator({ status, errorMessage, onRetry }: Props) {
   if (status === "idle") return null;
   const c = config[status];
   const Icon = c.icon;
@@ -24,7 +25,16 @@ export default function StatusIndicator({ status, errorMessage }: Props) {
       <Icon size={16} className={status === "loading" || status === "streaming" ? "animate-spin" : ""} />
       <span className="font-medium">{c.text}</span>
       {status === "error" && errorMessage && (
-        <span className="text-xs opacity-70 truncate ml-1">{errorMessage}</span>
+        <span className="text-xs opacity-70 truncate ml-1 flex-1">{errorMessage}</span>
+      )}
+      {status === "error" && onRetry && (
+        <button onClick={onRetry}
+          className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium
+                     bg-danger/10 hover:bg-danger/20 border border-danger/20
+                     transition-all duration-150 active:scale-95 shrink-0">
+          <IconRefresh size={13} />
+          重试
+        </button>
       )}
       {(status === "loading" || status === "streaming") && (
         <span className="flex gap-1 ml-1">

@@ -20,3 +20,7 @@
   --color-warning: oklch(0.75 0.18 80);
   --color-danger: oklch(0.60 0.22 25);
 }
+@keyframes fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}

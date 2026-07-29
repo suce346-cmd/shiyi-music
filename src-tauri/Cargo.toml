@@ -2,7 +2,7 @@
 name = "suno-prompt-generator"
 version = "0.1.0"
 description = "Suno Prompt Generator — desktop app for generating Suno AI music prompts"
-authors = []
+authors = ["shiyi"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -24,4 +24,3 @@ serde_json = "1"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 tokio = { version = "1", features = ["rt", "macros"] }
 futures-util = "0.3"
-

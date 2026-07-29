@@ -1,30 +1,23 @@
 import { useState } from "react";
 import { IconSend, IconSparkles, IconEdit } from "@tabler/icons-react";
-import { generatePrompt } from "../hooks/useLLM";
-import type { Mode, AppSettings, LLMResponse, LLMStatus } from "../types";
+import type { Mode, AppSettings } from "../types";
 
 interface Props {
   mode: Mode;
   disabled: boolean;
   settings: AppSettings;
-  onStatusChange: (s: LLMStatus) => void;
-  onResultChange: (r: LLMResponse | null) => void;
-  onStreamUpdate: (t: string) => void;
-  onUserInputChange: (i: string) => void;
-  onResultSave: (input: string, result: LLMResponse) => void;
-  onError?: (msg: string) => void;
+  onGenerate: (userInput: string) => void;
 }
 
 export default function InputPanel({
-  mode, disabled, settings, onStatusChange, onResultChange, onStreamUpdate,
-  onUserInputChange, onResultSave, onError,
+  mode, disabled, settings, onGenerate,
 }: Props) {
   const [lyrics, setLyrics] = useState("");
   const [inspiration, setInspiration] = useState("");
   const [originalLyrics, setOriginalLyrics] = useState("");
   const [newTheme, setNewTheme] = useState("");
 
-  const handleSubmit = async () => {
+  const handleSubmit = () => {
     if (!settings.apiKey) { alert("请先在设置中填写 API Key"); return; }
     let userInput = "";
     if (mode === "mode_a") {
@@ -36,18 +29,9 @@ export default function InputPanel({
       if (!newTheme.trim()) { alert("请填写新主题/故事"); return; }
     } else {
       userInput = inspiration;
-      if (!inspiration.trim()) { alert("请填写灵感/话题/梗"); return; }
+      if (!inspiration.trim()) { alert("请填写灵感/话题/情绪/故事"); return; }
     }
-
-    onStatusChange("loading"); onResultChange(null); onStreamUpdate(""); onUserInputChange(userInput);
-    try {
-      const result = await generatePrompt(mode, userInput, settings, (text) => {
-        onStreamUpdate(text); onStatusChange("streaming");
-      });
-      onResultChange(result); onResultSave(userInput, result); onStatusChange("done");
-    } catch (e) {
-      const msg = String(e); onStatusChange("error"); onError?.(msg); alert(`生成失败：${msg}`);
-    }
+    onGenerate(userInput);
   };
 
   return (
@@ -93,17 +77,17 @@ export default function InputPanel({
         </>
       )}
 
-      {mode === "mode_d" && (
+      {(mode === "mode_b" || mode === "mode_d") && (
         <div>
           <label className="flex items-center gap-1.5 text-xs text-text-muted mb-2">
-            <IconSparkles size={14} /> 灵感 / 话题 / 梗
+            <IconSparkles size={14} /> {mode === "mode_b" ? "灵感 / 话题 / 情绪 / 故事" : "灵感 / 话题 / 梗"}
           </label>
           <textarea value={inspiration} onChange={e => setInspiration(e.target.value)}
             className="w-full h-32 bg-surface-0 border border-border rounded-xl p-3.5 text-sm
                        text-text-1 placeholder:text-text-muted/40 resize-y
                        focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500
                        transition-all duration-150"
-            placeholder="比如：一个人走路踩到香蕉皮摔倒的尴尬瞬间..." disabled={disabled} />
+            placeholder={mode === "mode_b" ? "比如：一个人在异乡过年，看着窗外烟花想起小时候的故乡..." : "比如：一个人走路踩到香蕉皮摔倒的尴尬瞬间..."} disabled={disabled} />
         </div>
       )}
 

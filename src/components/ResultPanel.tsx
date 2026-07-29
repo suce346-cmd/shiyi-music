@@ -1,52 +1,90 @@
 import { useState } from "react";
-import { IconCopy, IconCheck, IconRefresh } from "@tabler/icons-react";
-import type { LLMResponse, LLMStatus } from "../types";
+import { IconCopy, IconCheck, IconRefresh, IconUser, IconRobot } from "@tabler/icons-react";
+import type { ChatTurn, LLMStatus } from "../types";
 
 interface Props {
-  result: LLMResponse | null;
+  conversation: ChatTurn[];
   streamText: string;
   status: LLMStatus;
   onRefine: (feedback: string) => void;
+  readOnly?: boolean;
 }
 
-export default function ResultPanel({ result, streamText, status, onRefine }: Props) {
-  const displayText = result?.raw || streamText || "";
+export default function ResultPanel({ conversation, streamText, status, onRefine, readOnly }: Props) {
   const [copied, setCopied] = useState(false);
   const [feedback, setFeedback] = useState("");
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(displayText);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    const allAssistant = conversation
+      .filter(t => t.role === "assistant")
+      .map(t => t.content)
+      .join("\n\n---\n\n");
+    try {
+      await navigator.clipboard.writeText(allAssistant);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // clipboard API 不可用时静默失败
+    }
   };
 
-  if (!displayText) return null;
+  // 构建显示列表：已有对话 + 正在流式输出的临时 assistant 轮
+  const turns: ChatTurn[] = [...conversation];
+  if (streamText && status !== "done") {
+    turns.push({ role: "assistant", content: streamText, timestamp: Date.now() });
+  }
+
+  if (turns.length === 0 && !streamText) return null;
 
   return (
-    <div className="mt-4 animate-[fade_200ms_ease]">
-      {/* Result Card */}
-      <div className="bg-surface-2 rounded-2xl border border-border shadow-sm overflow-hidden">
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-border/50">
-          <h2 className="text-sm font-medium text-text-1">生成结果</h2>
+    <div className="mt-4 animate-[fade_200ms_ease] space-y-3">
+      {/* 对话流 */}
+      {turns.map((turn, i) => {
+        const isUser = turn.role === "user";
+        const isStreaming = i === turns.length - 1 && !isUser && status === "streaming";
+        const Icon = isUser ? IconUser : IconRobot;
+
+        return (
+          <div key={i} className={`flex gap-3 ${isUser ? "flex-row-reverse" : ""}`}>
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0
+              ${isUser ? "bg-surface-0 border border-border" : "bg-brand-500/10"}`}>
+              <Icon size={15} className={isUser ? "text-text-2" : "text-brand-600"} />
+            </div>
+            <div className={`flex-1 min-w-0 ${isUser ? "max-w-[85%]" : ""}`}>
+              <div className={`text-xs font-medium mb-1 ${isUser ? "text-text-muted text-right" : "text-brand-600"}`}>
+                {isUser ? "用户" : "AI"}
+              </div>
+              <div className={`rounded-2xl px-4 py-3 text-xs leading-relaxed whitespace-pre-wrap font-mono
+                ${isUser
+                  ? "bg-surface-0 border border-border text-text-2"
+                  : "bg-surface-2 border border-border text-text-1"}
+                max-h-80 overflow-y-auto selection:bg-brand-500/20`}>
+                {turn.content}
+                {isStreaming && (
+                  <span className="inline-block w-1.5 h-4 bg-brand-500 ml-0.5 animate-pulse rounded-sm align-middle" />
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+
+      {/* 复制按钮 — 只在有 AI 回复时显示 */}
+      {conversation.some(t => t.role === "assistant") && (
+        <div className="flex justify-end">
           <button onClick={handleCopy}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-text-2
-                       bg-surface-0 hover:bg-border border border-border/50
+                       bg-surface-2 hover:bg-border border border-border/50
                        transition-all duration-150 active:scale-95">
             {copied ? <IconCheck size={14} className="text-success" /> : <IconCopy size={14} />}
             {copied ? "已复制" : "复制全部"}
           </button>
         </div>
-        <pre className="text-xs leading-relaxed whitespace-pre-wrap font-mono
-                        text-text-1 p-5 max-h-96 overflow-y-auto
-                        selection:bg-brand-500/20">
-          {displayText}
-          {status === "streaming" && <span className="inline-block w-1.5 h-4 bg-brand-500 ml-0.5 animate-pulse rounded-sm" />}
-        </pre>
-      </div>
+      )}
 
-      {/* Iteration — only when done */}
-      {status === "done" && (
-        <div className="mt-4 bg-surface-2 rounded-2xl border border-border shadow-sm p-5 space-y-3">
+      {/* 优化输入 — 仅在 done 且非只读时显示 */}
+      {status === "done" && !readOnly && (
+        <div className="bg-surface-2 rounded-2xl border border-border shadow-sm p-5 space-y-3">
           <div className="flex items-center gap-2">
             <IconRefresh size={16} className="text-text-muted" />
             <h3 className="text-sm font-medium text-text-1">优化方向</h3>

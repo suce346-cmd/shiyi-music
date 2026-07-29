@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
     ModeA,
+    ModeB,
     ModeC,
     ModeD,
 }
@@ -20,12 +21,12 @@ pub struct LLMRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LLMResponse {
     pub raw: String,
+    pub finish_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamChunk {
     pub content: String,
-    pub finished: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
