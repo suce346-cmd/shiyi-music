@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { IconSend, IconSparkles } from "@tabler/icons-react";
+import { IconSend, IconSparkles, IconEdit } from "@tabler/icons-react";
 import { generatePrompt } from "../hooks/useLLM";
 import type { Mode, AppSettings, LLMResponse, LLMStatus } from "../types";
 
@@ -21,13 +21,23 @@ export default function InputPanel({
 }: Props) {
   const [lyrics, setLyrics] = useState("");
   const [inspiration, setInspiration] = useState("");
+  const [originalLyrics, setOriginalLyrics] = useState("");
+  const [newTheme, setNewTheme] = useState("");
 
   const handleSubmit = async () => {
     if (!settings.apiKey) { alert("请先在设置中填写 API Key"); return; }
-    const isModeA = mode === "mode_a";
-    const userInput = isModeA ? lyrics : inspiration;
-    if (isModeA && lyrics.trim().length < 10) { alert("歌词至少 10 个字以上"); return; }
-    if (!isModeA && !inspiration.trim()) { alert("请填写灵感/话题/梗"); return; }
+    let userInput = "";
+    if (mode === "mode_a") {
+      userInput = lyrics;
+      if (lyrics.trim().length < 10) { alert("歌词至少 10 个字以上"); return; }
+    } else if (mode === "mode_c") {
+      userInput = `原歌词：\n${originalLyrics}\n\n新主题：\n${newTheme}`;
+      if (!originalLyrics.trim()) { alert("请填写原歌词"); return; }
+      if (!newTheme.trim()) { alert("请填写新主题/故事"); return; }
+    } else {
+      userInput = inspiration;
+      if (!inspiration.trim()) { alert("请填写灵感/话题/梗"); return; }
+    }
 
     onStatusChange("loading"); onResultChange(null); onStreamUpdate(""); onUserInputChange(userInput);
     try {
@@ -42,7 +52,7 @@ export default function InputPanel({
 
   return (
     <div className="bg-surface-2 rounded-2xl border border-border shadow-sm p-5 space-y-4">
-      {mode === "mode_a" ? (
+      {mode === "mode_a" && (
         <div>
           <label className="flex items-center gap-1.5 text-xs text-text-muted mb-2">
             <IconSparkles size={14} /> 粘贴歌词
@@ -54,7 +64,36 @@ export default function InputPanel({
                        transition-all duration-150"
             placeholder="粘贴歌词文本..." disabled={disabled} />
         </div>
-      ) : (
+      )}
+
+      {mode === "mode_c" && (
+        <>
+          <div>
+            <label className="flex items-center gap-1.5 text-xs text-text-muted mb-2">
+              <IconEdit size={14} /> 原歌词
+            </label>
+            <textarea value={originalLyrics} onChange={e => setOriginalLyrics(e.target.value)}
+              className="w-full h-32 bg-surface-0 border border-border rounded-xl p-3.5 text-sm
+                         text-text-1 placeholder:text-text-muted/40 resize-y
+                         focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500
+                         transition-all duration-150"
+              placeholder="粘贴原歌词..." disabled={disabled} />
+          </div>
+          <div>
+            <label className="flex items-center gap-1.5 text-xs text-text-muted mb-2">
+              <IconSparkles size={14} /> 新主题 / 故事
+            </label>
+            <textarea value={newTheme} onChange={e => setNewTheme(e.target.value)}
+              className="w-full h-24 bg-surface-0 border border-border rounded-xl p-3.5 text-sm
+                         text-text-1 placeholder:text-text-muted/40 resize-y
+                         focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500
+                         transition-all duration-150"
+              placeholder="比如：把这首歌改成讲述一个北漂青年过年回家的故事..." disabled={disabled} />
+          </div>
+        </>
+      )}
+
+      {mode === "mode_d" && (
         <div>
           <label className="flex items-center gap-1.5 text-xs text-text-muted mb-2">
             <IconSparkles size={14} /> 灵感 / 话题 / 梗
@@ -76,7 +115,7 @@ export default function InputPanel({
                    shadow-lg shadow-brand-500/20 hover:shadow-brand-500/30
                    transition-all duration-150">
         <IconSend size={16} />
-        {!settings.apiKey ? "请先在 ⚙ 设置中填写 API Key" : disabled ? "生成中..." : "生成 Prompt"}
+        {!settings.apiKey ? "请先在 ⚙ 设置中填写 API Key" : disabled ? "生成中..." : "生成"}
       </button>
     </div>
   );

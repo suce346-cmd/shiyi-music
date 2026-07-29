@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { IconX, IconTrash, IconHistory, IconFileText, IconBrandTiktok } from "@tabler/icons-react";
+import { IconX, IconTrash, IconHistory, IconFileText, IconBrandTiktok, IconEdit } from "@tabler/icons-react";
 import type { HistoryEntry, Mode } from "../types";
 
 interface Props {
@@ -10,8 +10,8 @@ interface Props {
   onClose: () => void;
 }
 
-const modeIcon: Record<Mode, typeof IconFileText> = { mode_a: IconFileText, mode_d: IconBrandTiktok };
-const modeLabel: Record<Mode, string> = { mode_a: "Mode A", mode_d: "Mode D" };
+const modeIcon: Record<Mode, typeof IconFileText> = { mode_a: IconFileText, mode_c: IconEdit, mode_d: IconBrandTiktok };
+const modeLabel: Record<Mode, string> = { mode_a: "Mode A", mode_c: "Mode C", mode_d: "Mode D" };
 
 export default function HistoryPanel({ entries, onDelete, onClear, onSelect, onClose }: Props) {
   const [confirmClear, setConfirmClear] = useState(false);

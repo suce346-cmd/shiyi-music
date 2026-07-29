@@ -1,4 +1,4 @@
-export type Mode = "mode_a" | "mode_d";
+export type Mode = "mode_a" | "mode_c" | "mode_d";
 
 export interface LLMRequest {
   mode: Mode;

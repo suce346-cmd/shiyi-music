@@ -12,6 +12,7 @@ pub async fn generate_prompt(
 ) -> Result<LLMResponse, String> {
     let system_prompt = match request.mode {
         Mode::ModeA => prompts::mode_a_system_prompt(),
+        Mode::ModeC => prompts::mode_c_system_prompt(),
         Mode::ModeD => prompts::mode_d_system_prompt(),
     };
 
@@ -97,6 +98,7 @@ pub async fn refine_prompt(
 ) -> Result<LLMResponse, String> {
     let system_prompt = match request.mode {
         Mode::ModeA => prompts::mode_a_system_prompt(),
+        Mode::ModeC => prompts::mode_c_system_prompt(),
         Mode::ModeD => prompts::mode_d_system_prompt(),
     };
 

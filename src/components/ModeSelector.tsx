@@ -1,4 +1,4 @@
-import { IconFileText, IconBrandTiktok } from "@tabler/icons-react";
+import { IconFileText, IconBrandTiktok, IconEdit } from "@tabler/icons-react";
 import type { Mode } from "../types";
 
 interface Props {
@@ -14,6 +14,12 @@ const modes: { value: Mode; label: string; desc: string; icon: typeof IconFileTe
     icon: IconFileText,
   },
   {
+    value: "mode_c",
+    label: "Mode C 重新填词",
+    desc: "原歌词 + 新主题 → 保留字数韵脚意象重新填词",
+    icon: IconEdit,
+  },
+  {
     value: "mode_d",
     label: "Mode D 抖音爆款",
     desc: "一个灵感 → 15-45 秒抖音神曲全流程",
@@ -23,7 +29,7 @@ const modes: { value: Mode; label: string; desc: string; icon: typeof IconFileTe
 
 export default function ModeSelector({ mode, onChange }: Props) {
   return (
-    <div className="grid grid-cols-2 gap-3 mb-6">
+    <div className="grid grid-cols-3 gap-3 mb-6">
       {modes.map((m) => {
         const active = mode === m.value;
         const Icon = m.icon;
