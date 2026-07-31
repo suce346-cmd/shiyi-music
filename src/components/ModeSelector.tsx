@@ -7,35 +7,15 @@ interface Props {
 }
 
 const modes: { value: Mode; label: string; desc: string; icon: typeof IconFileText }[] = [
-  {
-    value: "mode_a",
-    label: "Mode A 完整方案",
-    desc: "已有歌词 → 分析 → Style Prompt + 格式化歌词 + 参数",
-    icon: IconFileText,
-  },
-  {
-    value: "mode_b",
-    label: "Mode B 经典创作",
-    desc: "一个灵感 → 从零创作经典歌曲级别全流程",
-    icon: IconStars,
-  },
-  {
-    value: "mode_c",
-    label: "Mode C 重新填词",
-    desc: "原歌词 + 新主题 → 保留字数韵脚意象重新填词",
-    icon: IconEdit,
-  },
-  {
-    value: "mode_d",
-    label: "Mode D 抖音爆款",
-    desc: "一个灵感 → 60-90秒抖音神曲全流程",
-    icon: IconBrandTiktok,
-  },
+  { value: "mode_a", label: "完整方案", desc: "已有歌词 → 分析 → 编曲", icon: IconFileText },
+  { value: "mode_b", label: "经典创作", desc: "灵感 → 从零创作经典歌曲", icon: IconStars },
+  { value: "mode_c", label: "重新填词", desc: "原歌词 + 新主题 → 重填", icon: IconEdit },
+  { value: "mode_d", label: "抖音爆款", desc: "灵感 → 60-90秒神曲", icon: IconBrandTiktok },
 ];
 
 export default function ModeSelector({ mode, onChange }: Props) {
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+    <div className="space-y-1.5">
       {modes.map((m) => {
         const active = mode === m.value;
         const Icon = m.icon;
@@ -43,20 +23,29 @@ export default function ModeSelector({ mode, onChange }: Props) {
           <button
             key={m.value}
             onClick={() => onChange(m.value)}
-            className={`relative group p-4 rounded-2xl border-2 text-left transition-all duration-200
+            className={`relative w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left
+              transition-all duration-200
               ${active
-                ? "border-brand-500 bg-gradient-to-br from-brand-500/8 to-brand-500/3 shadow-lg shadow-brand-500/10"
-                : "border-border/50 bg-surface-2 hover:border-border hover:shadow-md"
+                ? "glass-panel border border-brand-500/30"
+                : "border border-transparent hover:bg-surface-2/50"
               }`}
           >
-            <div className={`w-9 h-9 rounded-xl flex items-center justify-center mb-3 transition-colors duration-200
-              ${active ? "bg-brand-500 text-white" : "bg-surface-0 text-text-2 group-hover:bg-border"}`}>
-              <Icon size={18} />
+            {active && (
+              <span className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-6 rounded-full brand-gradient-btn" />
+            )}
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition-all duration-200
+              ${active
+                ? "brand-gradient-btn text-white"
+                : "bg-surface-2/60 text-text-muted"}`}>
+              <Icon size={17} />
             </div>
-            <div className={`text-sm font-medium mb-0.5 transition-colors ${active ? "text-brand-600" : "text-text-1"}`}>
-              {m.label}
+            <div className="flex-1 min-w-0">
+              <div className={`text-[13px] font-medium leading-tight transition-colors
+                ${active ? "text-text-1" : "text-text-2"}`}>
+                {m.label}
+              </div>
+              <div className="text-[11px] text-text-muted leading-tight mt-0.5">{m.desc}</div>
             </div>
-            <div className="text-xs text-text-muted leading-relaxed">{m.desc}</div>
           </button>
         );
       })}

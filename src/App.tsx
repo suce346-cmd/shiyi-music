@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from "react";
-import { IconSettings, IconHistory, IconSparkles } from "@tabler/icons-react";
+import { IconSettings, IconHistory, IconSparkles, IconEye, IconEyeOff, IconPlug, IconLoader } from "@tabler/icons-react";
 import ModeSelector from "./components/ModeSelector";
 import InputPanel from "./components/InputPanel";
 import ResultPanel from "./components/ResultPanel";
@@ -18,7 +18,6 @@ function loadHistory(): HistoryEntry[] {
 function saveHistory(entries: HistoryEntry[]) {
   localStorage.setItem(HISTORY_KEY, JSON.stringify(entries));
 }
-
 function newId() { return crypto.randomUUID(); }
 
 export default function App() {
@@ -37,7 +36,28 @@ export default function App() {
   const [historyFilter, setHistoryFilter] = useState<Mode | "all">("all");
   const [lastFeedback, setLastFeedback] = useState("");
   const [currentHistoryId, setCurrentHistoryId] = useState<string | null>(null);
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [testingApi, setTestingApi] = useState(false);
+  const [testResult, setTestResult] = useState<"ok" | "fail" | null>(null);
   const { settings, updateSettings, showSettings, setShowSettings } = useSettings();
+
+  const handleTestApi = useCallback(async () => {
+    setTestingApi(true); setTestResult(null);
+    try {
+      const url = `${settings.baseUrl.replace(/\/$/, "")}/chat/completions`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}` },
+        body: JSON.stringify({ model: settings.model, messages: [{ role: "user", content: "hi" }], max_tokens: 1 }),
+        signal: AbortSignal.timeout(10000),
+      });
+      setTestResult(res.ok ? "ok" : "fail");
+    } catch {
+      setTestResult("fail");
+    } finally {
+      setTestingApi(false);
+    }
+  }, [settings]);
 
   const saveToHistory = useCallback((input: string, output: string, conv: ChatTurn[], currentMode: Mode) => {
     const entry: HistoryEntry = { id: newId(), mode: currentMode, input, output, conversation: conv, timestamp: Date.now() };
@@ -146,97 +166,140 @@ export default function App() {
   const filteredHistory = historyFilter === "all" ? historyEntries : historyEntries.filter(e => e.mode === historyFilter);
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-surface-0 via-surface-1 to-surface-0">
-      <div className="absolute top-0 left-0 right-0 h-48 bg-gradient-to-b from-brand-500/5 to-transparent pointer-events-none" />
+    <div className="h-screen flex flex-col overflow-hidden">
+      {/* Top bar */}
+      <header className="flex items-center justify-between px-4 py-2.5 border-b border-border/40 shrink-0 glass-panel">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-xl brand-gradient-btn flex items-center justify-center">
+            <IconSparkles size={16} className="text-white" />
+          </div>
+          <span className="text-[14px] font-semibold brand-gradient-text">shiyi音乐</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <button onClick={() => { setShowHistory(true); setHistoryView(null); }}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] text-text-2
+                       bg-surface-2/60 hover:bg-surface-3/80 border border-border/40 transition-all duration-150 active:scale-95">
+            <IconHistory size={14} /> 历史
+          </button>
+          <button onClick={() => { setShowSettings(!showSettings); setTestResult(null); }}
+            className="flex items-center justify-center w-8 h-8 rounded-lg text-text-2
+                       bg-surface-2/60 hover:bg-surface-3/80 border border-border/40 transition-all duration-150 active:scale-95">
+            <IconSettings size={15} />
+          </button>
+        </div>
+      </header>
 
-      <div className="relative max-w-2xl mx-auto px-4 py-8">
-        <header className="flex items-center justify-between mb-8">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center shadow-lg shadow-brand-500/20">
-              <IconSparkles size={20} className="text-white" />
+      {/* Settings dropdown */}
+      {showSettings && (
+        <div className="absolute right-4 top-14 z-40 w-80 p-3.5 glass-panel rounded-2xl border border-border/40
+                        animate-[fade_200ms_ease] space-y-3">
+          <h3 className="text-[13px] font-medium text-text-1">API 设置</h3>
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-[11px] text-text-muted">API Key</label>
+              <button onClick={() => setShowApiKey(!showApiKey)}
+                className="text-text-muted hover:text-text-2 transition-colors">
+                {showApiKey ? <IconEyeOff size={13} /> : <IconEye size={13} />}
+              </button>
             </div>
-            <div>
-              <h1 className="text-lg font-semibold text-text-1 tracking-tight">shiyi音乐</h1>
-              <p className="text-xs text-text-muted">AI 音乐提示词生成器</p>
+            <input type={showApiKey ? "text" : "password"} value={settings.apiKey}
+              onChange={e => { updateSettings({ apiKey: e.target.value }); setTestResult(null); }}
+              className="w-full bg-surface-0 border border-border/60 rounded-lg px-3 py-2 text-[13px]
+                         text-text-1 placeholder:text-text-muted/30 focus:outline-none
+                         focus:border-brand-500/40 focus:ring-1 focus:ring-brand-500/20
+                         transition-all duration-150" placeholder="sk-..." />
+          </div>
+          <div className="flex gap-2">
+            <div className="flex-1">
+              <label className="text-[11px] text-text-muted block mb-1">模型</label>
+              <input value={settings.model} onChange={e => { updateSettings({ model: e.target.value }); setTestResult(null); }}
+                className="w-full bg-surface-0 border border-border/60 rounded-lg px-3 py-2 text-[13px]
+                           text-text-1 focus:outline-none focus:border-brand-500/40 focus:ring-1 focus:ring-brand-500/20
+                           transition-all duration-150" />
+            </div>
+            <div className="flex-1">
+              <label className="text-[11px] text-text-muted block mb-1">API 地址</label>
+              <input value={settings.baseUrl} onChange={e => { updateSettings({ baseUrl: e.target.value }); setTestResult(null); }}
+                className="w-full bg-surface-0 border border-border/60 rounded-lg px-3 py-2 text-[13px]
+                           text-text-1 focus:outline-none focus:border-brand-500/40 focus:ring-1 focus:ring-brand-500/20
+                           transition-all duration-150" />
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <button onClick={() => { setShowHistory(true); setHistoryView(null); }}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm text-text-2
-                         bg-surface-2 hover:bg-border border border-border/50 transition-all duration-150">
-              <IconHistory size={16} /> 历史
-            </button>
-            <button onClick={() => setShowSettings(!showSettings)}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm text-text-2
-                         bg-surface-2 hover:bg-border border border-border/50 transition-all duration-150">
-              <IconSettings size={16} />
-            </button>
-          </div>
-        </header>
+          <button onClick={handleTestApi} disabled={testingApi || !settings.apiKey}
+            className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-[12px] font-medium
+                       bg-surface-2 hover:bg-surface-3 border border-border/50 text-text-2
+                       disabled:opacity-50 transition-all duration-150 active:scale-[0.98]">
+            {testingApi ? <IconLoader size={13} className="animate-spin" /> : <IconPlug size={13} />}
+            {testResult === "ok" && "连接成功"}
+            {testResult === "fail" && "连接失败，请检查"}
+            {testResult === null && (testingApi ? "测试中..." : "测试连接")}
+          </button>
+        </div>
+      )}
 
-        {showSettings && (
-          <div className="mb-6 p-5 bg-surface-2 rounded-2xl border border-border shadow-lg animate-[fade_200ms_ease] space-y-3">
-            <h3 className="text-sm font-medium text-text-1">API 设置</h3>
-            <div>
-              <label className="text-xs text-text-muted block mb-1.5">API Key</label>
-              <input type="password" value={settings.apiKey}
-                onChange={e => updateSettings({ apiKey: e.target.value })}
-                className="w-full bg-surface-0 border border-border rounded-xl px-3.5 py-2.5 text-sm
-                           text-text-1 placeholder:text-text-muted/50 focus:outline-none
-                           focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 transition-all duration-150" placeholder="sk-..." />
-            </div>
-            <div className="flex gap-3">
-              <div className="flex-1">
-                <label className="text-xs text-text-muted block mb-1.5">模型</label>
-                <input value={settings.model} onChange={e => updateSettings({ model: e.target.value })}
-                  className="w-full bg-surface-0 border border-border rounded-xl px-3.5 py-2.5 text-sm
-                             text-text-1 focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
+      {/* Main content */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Left panel */}
+        <div className="w-[300px] shrink-0 flex flex-col border-r border-border/40 overflow-y-auto">
+          <div className="p-3 border-b border-border/50">
+            <ModeSelector mode={mode} onChange={(m) => {
+              setMode(m); setStatus("idle"); setStreamText(""); setErrorMessage("");
+              setConversation([]); chatHistoryRef.current = [];
+              setLastUserInput(""); setLastFeedback("");
+              setHistoryView(null); setCurrentHistoryId(null);
+            }} />
+          </div>
+
+          <div className="p-3 flex-1">
+            {historyView && (
+              <div className="mb-3 p-2.5 bg-brand-500/8 border border-brand-500/20 rounded-lg flex items-center justify-between">
+                <span className="text-[11px] text-brand-400 truncate">
+                  {MODE_LABELS[historyView.mode]} · {new Date(historyView.timestamp).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                </span>
+                <button onClick={() => setHistoryView(null)}
+                  className="text-[11px] text-brand-400 hover:text-brand-300 font-medium shrink-0 ml-2">关闭</button>
               </div>
-              <div className="flex-1">
-                <label className="text-xs text-text-muted block mb-1.5">API 地址</label>
-                <input value={settings.baseUrl} onChange={e => updateSettings({ baseUrl: e.target.value })}
-                  className="w-full bg-surface-0 border border-border rounded-xl px-3.5 py-2.5 text-sm
-                             text-text-1 focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
-              </div>
+            )}
+
+            <InputPanel mode={mode} disabled={status === "loading" || status === "streaming"}
+              settings={settings} onGenerate={handleGenerate} />
+          </div>
+        </div>
+
+        {/* Right panel */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {status !== "idle" && (
+            <div className="shrink-0">
+              <StatusIndicator status={status} errorMessage={errorMessage} onRetry={handleRetry} />
             </div>
+          )}
+
+          <div className="flex-1 overflow-y-auto p-4">
+            {historyView ? (
+              <ResultPanel conversation={historyView.conversation || [
+                { role: "user", content: historyView.input, timestamp: historyView.timestamp },
+                { role: "assistant", content: historyView.output, timestamp: historyView.timestamp }
+              ]} streamText="" status="done" onRefine={() => {}} readOnly />
+            ) : (conversation.length > 0 || streamText) ? (
+              <ResultPanel conversation={conversation} streamText={streamText} status={status} onRefine={handleRefine} />
+            ) : (
+              <div className="flex flex-col items-center justify-center h-full text-text-muted">
+                <div className="w-16 h-16 rounded-2xl glass-panel flex items-center justify-center mb-3">
+                  <IconSparkles size={28} className="text-brand-400/50" />
+                </div>
+                <p className="text-[13px]">在左侧输入内容开始生成</p>
+              </div>
+            )}
           </div>
-        )}
-
-        <ModeSelector mode={mode} onChange={(m) => {
-          setMode(m); setStatus("idle"); setStreamText(""); setErrorMessage("");
-          setConversation([]); chatHistoryRef.current = [];
-          setLastUserInput(""); setLastFeedback("");
-          setHistoryView(null); setCurrentHistoryId(null);
-        }} />
-
-        {historyView && (
-          <div className="mb-4 p-3.5 bg-brand-500/8 border border-brand-500/20 rounded-xl flex items-center justify-between">
-            <span className="text-xs text-brand-700">
-              查看历史 · {MODE_LABELS[historyView.mode]} · {new Date(historyView.timestamp).toLocaleString("zh-CN")}
-            </span>
-            <button onClick={() => setHistoryView(null)}
-              className="text-xs text-brand-600 hover:text-brand-700 font-medium">关闭</button>
-          </div>
-        )}
-
-        <InputPanel mode={mode} disabled={status === "loading" || status === "streaming"}
-          settings={settings} onGenerate={handleGenerate} />
-
-        {status !== "idle" && <StatusIndicator status={status} errorMessage={errorMessage} onRetry={handleRetry} />}
-
-        {historyView ? (
-          <ResultPanel conversation={historyView.conversation || [{ role: "user", content: historyView.input, timestamp: historyView.timestamp }, { role: "assistant", content: historyView.output, timestamp: historyView.timestamp }]} streamText="" status="done" onRefine={() => {}} readOnly />
-        ) : (conversation.length > 0 || streamText) ? (
-          <ResultPanel conversation={conversation} streamText={streamText} status={status} onRefine={handleRefine} />
-        ) : null}
-
-        {showHistory && (
-          <HistoryPanel entries={filteredHistory} allEntriesCount={historyEntries.length}
-            filter={historyFilter} onFilterChange={setHistoryFilter}
-            onDelete={deleteHistory} onClear={clearHistory}
-            onSelect={selectHistory} onClose={() => setShowHistory(false)} />
-        )}
+        </div>
       </div>
+
+      {showHistory && (
+        <HistoryPanel entries={filteredHistory} allEntriesCount={historyEntries.length}
+          filter={historyFilter} onFilterChange={setHistoryFilter}
+          onDelete={deleteHistory} onClear={clearHistory}
+          onSelect={selectHistory} onClose={() => setShowHistory(false)} />
+      )}
     </div>
   );
 }

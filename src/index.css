@@ -1,26 +1,109 @@
 @import "tailwindcss";
 
 @theme {
-  --color-brand-50: oklch(0.97 0.02 250);
-  --color-brand-100: oklch(0.93 0.04 250);
-  --color-brand-200: oklch(0.88 0.06 250);
-  --color-brand-500: oklch(0.62 0.19 250);
-  --color-brand-600: oklch(0.55 0.20 248);
-  --color-brand-700: oklch(0.48 0.18 246);
+  /* Brand: warm terracotta → amber gradient family */
+  --color-brand-300: oklch(0.88 0.08 60);
+  --color-brand-400: oklch(0.78 0.13 55);
+  --color-brand-500: oklch(0.68 0.17 50);
+  --color-brand-600: oklch(0.58 0.18 45);
 
-  --color-surface-0: oklch(0.985 0.002 260);
-  --color-surface-1: oklch(0.97 0.004 260);
-  --color-surface-2: oklch(0.95 0.006 260);
-  --color-border: oklch(0.90 0.008 260);
-  --color-text-1: oklch(0.15 0.01 260);
-  --color-text-2: oklch(0.45 0.01 260);
-  --color-text-muted: oklch(0.60 0.01 260);
+  /* Surfaces: warm cream / ivory layered system.
+     L=0.92~0.98 — bright, airy, warm-toned. */
+  --color-surface-0: oklch(0.95 0.012 80);
+  --color-surface-1: oklch(0.93 0.014 75);
+  --color-surface-2: oklch(0.90 0.016 70);
+  --color-surface-3: oklch(0.86 0.020 65);
+  --color-border: oklch(0.80 0.020 60);
+  --color-border-light: oklch(0.84 0.016 65);
 
-  --color-success: oklch(0.72 0.18 145);
-  --color-warning: oklch(0.75 0.18 80);
-  --color-danger: oklch(0.60 0.22 25);
+  /* Text: warm dark brown-charcoal, NOT pure black */
+  --color-text-1: oklch(0.28 0.015 55);
+  --color-text-2: oklch(0.45 0.015 55);
+  --color-text-muted: oklch(0.58 0.018 55);
+
+  /* Accents — warm, earthy, saturated */
+  --color-accent-purple: oklch(0.55 0.20 300);
+  --color-accent-pink: oklch(0.65 0.18 10);
+  --color-accent-cyan: oklch(0.60 0.12 210);
+  --color-accent-amber: oklch(0.75 0.16 70);
+
+  --color-success: oklch(0.62 0.15 150);
+  --color-warning: oklch(0.72 0.15 75);
+  --color-danger: oklch(0.58 0.20 25);
 }
+
+/* ── Global background: warm cream base with soft amber/peach radial glows ── */
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background-color: oklch(0.94 0.015 75);
+  background-image:
+    radial-gradient(ellipse 80% 60% at 15% 0%, oklch(0.90 0.06 60 / 0.60), transparent 60%),
+    radial-gradient(ellipse 70% 50% at 85% 10%, oklch(0.88 0.05 30 / 0.40), transparent 55%),
+    radial-gradient(ellipse 60% 80% at 80% 100%, oklch(0.92 0.04 90 / 0.45), transparent 60%),
+    radial-gradient(ellipse 50% 50% at 10% 90%, oklch(0.90 0.03 40 / 0.30), transparent 55%);
+  background-attachment: fixed;
+}
+
+/* ── Animations ── */
 @keyframes fade {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes streamBar {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+@keyframes glowPulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 0.8; }
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: oklch(0.78 0.025 60 / 0.6);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.70 0.030 55 / 0.8);
+}
+
+/* ── Glass panel: warm translucent ivory with soft shadow ── */
+.glass-panel {
+  background: oklch(0.93 0.014 75 / 0.82);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 0.50),
+    0 4px 24px oklch(0.60 0.03 55 / 0.15);
+}
+
+/* ── Brand gradient text: terracotta → amber ── */
+.brand-gradient-text {
+  background: linear-gradient(135deg, oklch(0.62 0.18 45), oklch(0.72 0.16 65));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* ── Brand gradient button: terracotta → amber ── */
+.brand-gradient-btn {
+  background: linear-gradient(135deg, oklch(0.62 0.18 45), oklch(0.68 0.17 55));
+  box-shadow: 0 2px 12px oklch(0.55 0.15 50 / 0.30);
+}
+.brand-gradient-btn:hover {
+  background: linear-gradient(135deg, oklch(0.66 0.18 45), oklch(0.72 0.17 55));
+  box-shadow: 0 4px 18px oklch(0.58 0.16 50 / 0.40);
 }
