@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
     ModeA,
@@ -9,13 +10,15 @@ pub enum Mode {
     ModeD,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LLMRequest {
-    pub mode: Mode,
-    pub user_input: String,
-    pub model: String,
-    pub api_key: String,
-    pub base_url: String,
+impl Mode {
+    pub fn to_str_name(&self) -> &'static str {
+        match self {
+            Mode::ModeA => "mode_a",
+            Mode::ModeB => "mode_b",
+            Mode::ModeC => "mode_c",
+            Mode::ModeD => "mode_d",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,18 +32,222 @@ pub struct StreamChunk {
     pub content: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChatMessage {
-    pub role: String,
-    pub content: String,
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    #[test]
+    fn mode_to_str_name() {
+        assert_eq!(Mode::ModeA.to_str_name(), "mode_a");
+        assert_eq!(Mode::ModeB.to_str_name(), "mode_b");
+        assert_eq!(Mode::ModeC.to_str_name(), "mode_c");
+        assert_eq!(Mode::ModeD.to_str_name(), "mode_d");
+    }
+
+    #[test]
+    fn pipeline_event_serializes_snake_case() {
+        let e = PipelineEvent::StepStart { role: PipelineRole::Emotion };
+        let json = serde_json::to_string(&e).unwrap();
+        assert!(json.contains("\"type\":\"step_start\""));
+        let v: Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["role"], "emotion");
+    }
+
+    #[test]
+    fn host_events_carry_stage() {
+        let start = PipelineEvent::HostStart { stage: HostStage::Summarize };
+        let done = PipelineEvent::HostDone { stage: HostStage::Initial };
+        let j1: Value = serde_json::from_str(&serde_json::to_string(&start).unwrap()).unwrap();
+        assert_eq!(j1["type"], "host_start");
+        assert_eq!(j1["stage"], "summarize");
+        let j2: Value = serde_json::from_str(&serde_json::to_string(&done).unwrap()).unwrap();
+        assert_eq!(j2["type"], "host_done");
+        assert_eq!(j2["stage"], "initial");
+        // 反序列化回枚举（前后端契约一致）
+        let back: PipelineEvent = serde_json::from_str(&serde_json::to_string(&start).unwrap()).unwrap();
+        match back {
+            PipelineEvent::HostStart { stage } => assert_eq!(stage, HostStage::Summarize),
+            _ => panic!("expected host_start"),
+        }
+    }
+
+    #[test]
+    fn host_stage_roundtrip() {
+        for s in [HostStage::Initial, HostStage::Summarize] {
+            let json = serde_json::to_string(&s).unwrap();
+            let back: HostStage = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, s);
+        }
+    }
+
+    #[test]
+    fn pipeline_request_parses_without_role_overrides() {
+        // 旧版 JSON（无 role_overrides 字段）必须兼容解析
+        let json = r#"{"mode":"mode_b","user_input":"雨天","model":"m1","api_key":"k1","base_url":"u1","extra":null}"#;
+        let req: PipelineRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.model, "m1");
+        assert!(req.role_overrides.is_none());
+        // 无 thinking 字段 → 默认关闭（旧前端兼容）
+        assert!(!req.thinking);
+    }
+
+    #[test]
+    fn pipeline_request_parses_thinking_flag() {
+        // 新前端显式传 thinking: true 必须生效
+        let json = r#"{"mode":"mode_b","user_input":"雨天","model":"m1","api_key":"k1","base_url":"u1","extra":null,"thinking":true}"#;
+        let req: PipelineRequest = serde_json::from_str(json).unwrap();
+        assert!(req.thinking);
+        // 序列化回 JSON 保留字段（前后端契约一致）
+        let back: PipelineRequest =
+            serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
+        assert!(back.thinking);
+    }
+
+    #[test]
+    fn pipeline_request_parses_role_overrides() {
+        let json = r#"{
+            "mode":"mode_b","user_input":"x","model":"global","api_key":"gk","base_url":"gu",
+            "extra":null,
+            "role_overrides":{
+                "auditor":{"model":"strong-model","api_key":"ak"},
+                "emotion":{"base_url":"https://small.example.com/v1"}
+            }
+        }"#;
+        let req: PipelineRequest = serde_json::from_str(json).unwrap();
+        let map = req.role_overrides.unwrap();
+        let auditor = map.get(&PipelineRole::Auditor).unwrap();
+        assert_eq!(auditor.model.as_deref(), Some("strong-model"));
+        assert_eq!(auditor.api_key.as_deref(), Some("ak"));
+        assert_eq!(auditor.base_url, None); // 未覆盖字段为空
+        let emotion = map.get(&PipelineRole::Emotion).unwrap();
+        assert_eq!(emotion.base_url.as_deref(), Some("https://small.example.com/v1"));
+        assert_eq!(emotion.model, None);
+        assert!(map.get(&PipelineRole::Host).is_none());
+    }
+
+    #[test]
+    fn role_api_override_roundtrip() {
+        let ov = RoleApiOverride {
+            model: Some("m".into()),
+            api_key: None,
+            base_url: None,
+        };
+        let json = serde_json::to_string(&ov).unwrap();
+        let back: RoleApiOverride = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.model.as_deref(), Some("m"));
+        assert_eq!(back.api_key, None);
+        // 缺字段 JSON 也能解析（serde default）
+        let sparse: RoleApiOverride = serde_json::from_str(r#"{"model":"x"}"#).unwrap();
+        assert_eq!(sparse.api_key, None);
+        assert_eq!(sparse.base_url, None);
+    }
 }
 
+// ---------------------------------------------------------------------------
+// 流水线架构 v3 类型（7 角色：固定 2 + 动态 5）
+// ---------------------------------------------------------------------------
+
+/// 流水线角色（固定 2 + 动态 5）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PipelineRole {
+    /// 👑 主持人：全局统领 + 汇总分发任务
+    Host,
+    /// 🔍 校验员：讨论轮审查提观点 + 最终格式输出端口
+    Auditor,
+    /// 🎭 情感分析师
+    Emotion,
+    /// 📝 作词人
+    Lyricist,
+    /// ✍️ 改词人
+    Reviser,
+    /// 🎤 制作人（编曲+配器合并）
+    Producer,
+    /// 🔥 流行风格分析师（抖音）
+    StyleAnalyst,
+}
+
+impl PipelineRole {
+    pub fn name(&self) -> &'static str {
+        match self {
+            PipelineRole::Host => "主持人",
+            PipelineRole::Auditor => "校验员",
+            PipelineRole::Emotion => "情感分析师",
+            PipelineRole::Lyricist => "作词人",
+            PipelineRole::Reviser => "改词人",
+            PipelineRole::Producer => "制作人",
+            PipelineRole::StyleAnalyst => "流行风格分析师",
+        }
+    }
+}
+
+/// 流水线步骤定义（动态角色，按序执行）
+#[derive(Debug, Clone)]
+pub struct PipelineStep {
+    pub role: PipelineRole,
+}
+
+/// 角色级 API 覆盖（可选，全字段可空；空字段 fallback 全局配置）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RoleApiOverride {
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub base_url: Option<String>,
+}
+
+/// 流水线请求（前端 → 后端）
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RefineRequest {
+pub struct PipelineRequest {
+    pub mode: Mode,
+    pub user_input: String,
     pub model: String,
     pub api_key: String,
     pub base_url: String,
-    pub mode: Mode,
-    pub history: Vec<ChatMessage>,
-    pub feedback: String,
+    /// 额外上下文（Mode C 原歌词）
+    pub extra: Option<String>,
+    /// 角色级 API 覆盖：某角色配了就用配的，没配的字段 fallback 全局
+    #[serde(default)]
+    pub role_overrides: Option<HashMap<PipelineRole, RoleApiOverride>>,
+    /// 思考模式：开启后按模型能力路由表注入厂商思考参数（旧前端无此字段 → 默认关闭）
+    #[serde(default)]
+    pub thinking: bool,
+}
+
+/// 主持人阶段（阶段 0 统领初稿 / 阶段 1 汇总分发），供前端区分文案
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostStage {
+    /// 阶段 0：用模式完整指令产出方案初稿
+    Initial,
+    /// 阶段 1：汇总角色修订 + 校验员观点，输出新版方案与任务分发
+    Summarize,
+}
+
+/// 流水线事件（后端 → 前端，复用 'pipeline' 通道）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PipelineEvent {
+    /// 某步骤开始
+    StepStart { role: PipelineRole },
+    /// 某步骤完成（带摘要）
+    StepDone { role: PipelineRole, summary: String },
+    /// 主持人阶段开始（stage 区分统领/汇总）
+    HostStart { stage: HostStage },
+    /// 主持人阶段完成
+    HostDone { stage: HostStage },
+    /// 校验开始
+    AuditStart,
+    /// 校验结果（通过/不通过+问题）
+    AuditResult { pass: bool, findings: Vec<String> },
+    /// 打回某步骤重跑
+    Retry { role: PipelineRole, reason: String },
+    /// 讨论轮：校验发现问题，主持人把修订任务分发到角色（下一轮讨论）
+    DiscussionRound { round: u32, roles: Vec<PipelineRole>, reason: String },
+    /// 整体失败
+    Failed { error: String },
 }

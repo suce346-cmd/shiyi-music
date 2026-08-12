@@ -69,6 +69,62 @@ body {
   50% { opacity: 0.8; }
 }
 
+/* ── Q版角色动态 ── */
+/* 呼吸悬浮：待命/思考时轻微上下浮动 */
+@keyframes bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
+.avatar-bob { animation: bob 2.4s ease-in-out infinite; }
+
+/* 发言跳起（被点击/聚焦提问时） */
+@keyframes jump {
+  0%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-14px); }
+  50% { transform: translateY(-14px); }
+  70% { transform: translateY(0); }
+}
+.avatar-jump { animation: jump 0.9s ease-in-out 2; }
+
+/* 完成弹跳（开心） */
+@keyframes celebrate {
+  0% { transform: translateY(0) rotate(0); }
+  25% { transform: translateY(-10px) rotate(-6deg); }
+  50% { transform: translateY(-14px) rotate(6deg); }
+  75% { transform: translateY(-6px) rotate(-4deg); }
+  100% { transform: translateY(0) rotate(0); }
+}
+.avatar-celebrate { animation: celebrate 0.8s ease-in-out 1; }
+
+/* 出错抖动 */
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-4px); }
+  40% { transform: translateX(4px); }
+  60% { transform: translateX(-3px); }
+  80% { transform: translateX(3px); }
+}
+.avatar-shake { animation: shake 0.5s ease-in-out 2; }
+
+/* 说话气泡弹出 */
+@keyframes bubbleIn {
+  from { opacity: 0; transform: translateY(8px) scale(0.9); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.speech-bubble { animation: bubbleIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+
+/* 发光波纹（发言/思考） */
+@keyframes glowRing {
+  0% { opacity: 0.5; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.5); }
+}
+.glow-ring { animation: glowRing 1.5s ease-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .avatar-bob, .avatar-jump, .avatar-celebrate, .avatar-shake,
+  .glow-ring, .speech-bubble { animation: none !important; }
+}
+
 /* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }

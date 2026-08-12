@@ -1,0 +1,1122 @@
+//! 圆桌编排器（v3 架构）：主持人统领 + 角色审改 + 校验员讨论轮审查 + 校验员格式端口。
+//!
+//! 三阶段：
+//! - 阶段 0：主持人用该模式的完整指令（prompts.rs，不查 CSV）产出方案初稿
+//! - 阶段 1：动态角色（专业审改员）审查方案 → 查 CSV 调素材 → 输出修订片段；
+//!   校验员审查（当前方案 + 本轮修订 + 任务分发，提出观点返回主持人）；
+//!   主持人汇总成新版完整方案 + 下轮任务分发（【任务分发】段切分）→ 再分发；
+//!   全角色与校验员无异议或满 3 轮收敛
+//! - 阶段 2：校验员按标准格式输出最终提示词包；代码硬校验兜底（失败打回重格式化）
+
+use crate::commands::{llm, prompts, roles, validator};
+use crate::knowledge::KnowledgeBase;
+use crate::models::{
+    HostStage, Mode, PipelineEvent, PipelineRequest, PipelineRole, PipelineStep,
+};
+use serde_json::{json, Value};
+use tauri::{AppHandle, Emitter, Runtime};
+
+/// 各模式的流水线动态角色（固定主持/校验由各自阶段独家执行）
+pub fn steps_for_mode(mode: &Mode) -> Vec<PipelineStep> {
+    use PipelineRole::*;
+    match mode {
+        // 想法模式（ModeB）：情感 → 作词 → 制作
+        Mode::ModeB => vec![Emotion, Lyricist, Producer],
+        // 歌词模式（ModeA）：情感 → 制作（跳过作词）
+        Mode::ModeA => vec![Emotion, Producer],
+        // 改写模式（ModeC）：改词 → 制作
+        Mode::ModeC => vec![Reviser, Producer],
+        // 抖音（ModeD）：情感 → 作词 → 流行 → 制作
+        Mode::ModeD => vec![Emotion, Lyricist, StyleAnalyst, Producer],
+    }
+    .into_iter()
+    .map(|role| PipelineStep { role })
+    .collect()
+}
+
+/// 加载知识库
+fn load_knowledge() -> Result<KnowledgeBase, String> {
+    KnowledgeBase::load_embedded()
+}
+
+/// 按模式取原版完整指令（主持人阶段 0 用，一字不改）
+fn prompt_for_mode(mode: &Mode) -> &'static str {
+    match mode {
+        Mode::ModeA => prompts::mode_a_system_prompt(),
+        Mode::ModeB => prompts::mode_b_system_prompt(),
+        Mode::ModeC => prompts::mode_c_system_prompt(),
+        Mode::ModeD => prompts::mode_d_system_prompt(),
+    }
+}
+
+/// 解析角色实际使用的 API 配置：角色覆盖优先，缺的字段逐项 fallback 全局
+pub fn resolve_api(req: &PipelineRequest, role: PipelineRole) -> (String, String, String) {
+    if let Some(map) = &req.role_overrides {
+        if let Some(ov) = map.get(&role) {
+            let base_url = ov.base_url.clone().unwrap_or_else(|| req.base_url.clone());
+            let api_key = ov.api_key.clone().unwrap_or_else(|| req.api_key.clone());
+            let model = ov.model.clone().unwrap_or_else(|| req.model.clone());
+            return (base_url, api_key, model);
+        }
+    }
+    (req.base_url.clone(), req.api_key.clone(), req.model.clone())
+}
+
+// ---------------------------------------------------------------------------
+// 角色审改（阶段 1）
+// ---------------------------------------------------------------------------
+
+/// 一条修订片段
+#[derive(Debug, Clone)]
+struct ReviewChange {
+    target: String,
+    content: String,
+    reason: String,
+}
+
+/// 角色审改结果
+#[derive(Debug, Clone)]
+struct ReviewResult {
+    agree: bool,
+    changes: Vec<ReviewChange>,
+    reason: String,
+    /// agree=true 时的已核查关键检查项清单（无异议最低门槛：必须列出核查依据，防偷懒 agree）
+    checked: Vec<String>,
+}
+
+/// target 合法枚举（P8：非法 target 归一为 other，主持人汇总时按杂项处理）
+fn normalize_target(t: &str) -> String {
+    match t {
+        "style_prompt" | "lyrics" | "params" | "other" => t.to_string(),
+        _ => "other".to_string(),
+    }
+}
+
+/// 解析审改 JSON（解析失败按"无异议"处理，避免流程死循环）。
+/// P8：content 为空的修订丢弃；非法 target 归一为 other。
+fn parse_review(raw: &str) -> ReviewResult {
+    let cleaned = strip_json_fence(raw);
+    if let Ok(v) = serde_json::from_str::<Value>(&cleaned) {
+        let agree = v["agree"].as_bool().unwrap_or(true);
+        let mut changes = Vec::new();
+        if let Some(arr) = v["changes"].as_array() {
+            for c in arr {
+                let content = c["content"].as_str().unwrap_or("").trim().to_string();
+                if content.is_empty() {
+                    continue; // 空修订无意义，丢弃
+                }
+                changes.push(ReviewChange {
+                    target: normalize_target(c["target"].as_str().unwrap_or("other")),
+                    content,
+                    reason: c["reason"].as_str().unwrap_or("").to_string(),
+                });
+            }
+        }
+        let reason = v["reason"].as_str().unwrap_or("").to_string();
+        let checked = v["checked"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|c| c.as_str().map(|s| s.trim().to_string()))
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        ReviewResult { agree, changes, reason, checked }
+    } else {
+        ReviewResult { agree: true, changes: vec![], reason: String::new(), checked: vec![] }
+    }
+}
+
+/// 审改结果 → 前端可读文本
+fn humanize_review(role: PipelineRole, r: &ReviewResult) -> String {
+    if r.agree {
+        // 无异议最低门槛：展示已核查清单（防"偷懒 agree"，让无异议可审计）
+        if r.checked.is_empty() {
+            format!("{}：无异议 ✅", role.name())
+        } else {
+            format!("{}：无异议 ✅（已核查：{}）", role.name(), r.checked.join(" / "))
+        }
+    } else {
+        let mut out = format!("{}：提出 {} 处修订", role.name(), r.changes.len());
+        for c in &r.changes {
+            let brief = if c.content.chars().count() > 40 {
+                c.content.chars().take(40).collect::<String>() + "…"
+            } else {
+                c.content.clone()
+            };
+            let reason = if c.reason.is_empty() { String::new() } else { format!("（{}）", c.reason) };
+            out.push_str(&format!("\n· {} → {}{}", c.target, brief, reason));
+        }
+        if !r.reason.is_empty() {
+            out.push_str(&format!("\n总体意见：{}", r.reason));
+        }
+        out
+    }
+}
+
+/// 取表某列全部值（按需检索候选词用）
+fn column_values(kb: &KnowledgeBase, table: &str, col: &str) -> Vec<String> {
+    kb.table(table)
+        .ok()
+        .and_then(|t| t.header_index(col).map(|idx| (t, idx)))
+        .map(|(t, idx)| {
+            t.rows
+                .iter()
+                .filter_map(|r| r.get(idx).cloned())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+/// 从方案文本提取候选词命中（候选词出现在方案中即命中；单字候选跳过——避免"深夜"误命中"夜"）
+fn matching_keywords(plan: &str, candidates: &[String]) -> Vec<String> {
+    candidates
+        .iter()
+        .filter(|c| c.chars().count() >= 2 && plan.contains(c.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// 方案能量范围（无能量标注时返回 None）。
+/// 统一走 knowledge 层实现（增强版支持 能量:/能量 /energy:/energy 四种格式），
+/// 避免与 validator::extract_energy_values 双实现漂移。
+fn plan_energy_range(plan: &str) -> Option<(u32, u32)> {
+    crate::knowledge::plan_energy_range_str(plan)
+}
+
+// ---------------------------------------------------------------------------
+// 注入量规范（条数上限）——集中定义，测试锁定，禁止散改
+// 依据：知识库注入是"参考素材"而非"全量拷贝"，条数过多则 LLM 记不住重点。
+// - 关键词表（emotions/cliches/hooks）：命中 6 条封顶——主词 1-3 个 + 近邻，6 条覆盖完整
+// - 流派表：3 条封顶——方案通常命中 1-2 个流派，3 条少而准
+// - 乐器表：15 件封顶——能量区间覆盖弧线两端，"少而准"验证值
+// - 未命中兜底：3 条示例（渲染函数内建行为，无常量——见 render_filtered_any 内部）
+// - suno_rules：校验员全量（40 条 < 50 截断上限）；其他角色按规则子集过滤
+// - 单角色一次注入总字数封顶：预算按最坏情况实测标定（制作人最大 ≈ 3900 字，取 4000）
+// ---------------------------------------------------------------------------
+/// 关键词表（emotions/cliches/hooks）命中条数上限
+pub const INJECT_MAX_KEYWORD_ROWS: usize = 6;
+/// 流派表命中条数上限
+pub const INJECT_MAX_STYLE_GENRE_ROWS: usize = 3;
+/// 乐器表能量区间命中件数上限
+pub const INJECT_MAX_INSTRUMENTS_ROWS: usize = 15;
+/// 全量表（suno_rules）渲染截断上限（当前 40 条规则，留 10 条余量防静默截断）
+pub const INJECT_MAX_FULL_ROWS: usize = 50;
+/// 单角色一次注入总字数封顶（超过告警；最坏情况 = 制作人三表全命中含 22 条规则子集 ≈ 4300 字）
+pub const INJECT_MAX_TOTAL_CHARS: usize = 4500;
+
+/// 微观②：按需检索注入——按角色绑定表 + 列投影 + 当前方案关键词过滤，只注入命中条目。
+/// - emotions/cliches/hooks/style_genre：候选词（emotion/cliche/hook_type/genre 列值）命中 → 过滤注入
+/// - instruments：按方案能量区间数值过滤（覆盖弧线两端），上限 15 件
+/// - suno_rules：校验员全量（格式端口必须全见）；其他角色按行子集过滤（rule 列 contains 匹配）
+/// - cols 投影：空切片 = 全列；非空 = 按角色只注入这些列（多角色侧重点）
+/// - subset 行子集：空切片 = 全行；非空 = 按 rule 列值过滤（如制作人只要参数/配器类规则）
+/// 条数上限见 INJECT_MAX_* 常量（集中定义，测试锁定）。
+fn inject_knowledge(kb: &KnowledgeBase, tables: &[(&str, &[&str], &[&str])], plan: &str) -> String {
+    let mut out = String::new();
+    for (t, cols, subset) in tables {
+        // 列投影：空切片 = 全列（None），非空 = 角色裁剪
+        let proj: Option<&[&str]> = if cols.is_empty() { None } else { Some(cols) };
+        let rendered = match *t {
+            "emotions" | "cliches" | "hooks" | "style_genre" => {
+                let col = match *t {
+                    "emotions" => "emotion",
+                    "cliches" => "cliche",
+                    "hooks" => "hook_type",
+                    _ => "genre",
+                };
+                let cands = matching_keywords(plan, &column_values(kb, t, col));
+                let refs: Vec<&str> = cands.iter().map(|s| s.as_str()).collect();
+                // 条数规范：流派 3 条封顶（命中通常 1-2 个），其余关键词表 6 条封顶
+                let limit: Option<usize> = if *t == "style_genre" {
+                    Some(INJECT_MAX_STYLE_GENRE_ROWS)
+                } else {
+                    Some(INJECT_MAX_KEYWORD_ROWS)
+                };
+                if refs.is_empty() {
+                    kb.render_filtered_any(t, &[(col, &[])], proj, plan, None)
+                } else {
+                    kb.render_filtered_any(t, &[(col, &refs)], proj, plan, limit)
+                }
+            }
+            "instruments" => {
+                match plan_energy_range(plan) {
+                    // 条数规范：能量区间命中 ≤15 件（"少而准"验证值）
+                    Some((e_min, e_max)) => {
+                        kb.render_instruments_by_energy(e_min, e_max, proj, plan, Some(INJECT_MAX_INSTRUMENTS_ROWS))
+                    }
+                    None => kb.render_filtered_any("instruments", &[("instrument", &[])], proj, plan, None), // 无能量：兜底
+                }
+            }
+            "suno_rules" => {
+                if subset.is_empty() {
+                    // 校验员：全量（规则必须全见）
+                    kb.render_table(t, proj, Some(INJECT_MAX_FULL_ROWS))
+                } else {
+                    // 其他角色：按规则名子集过滤（rule 列 contains 匹配）
+                    kb.render_filtered_any(t, &[("rule", subset)], proj, plan, None)
+                }
+            }
+            // 未知表：保守全量
+            _ => kb.render_table(t, proj, Some(INJECT_MAX_FULL_ROWS)),
+        };
+        match rendered {
+            Ok(rendered) => {
+                out.push_str(&rendered);
+                out.push('\n');
+            }
+            Err(e) => {
+                // 表可能在加载期被 P3 降级跳过——告警但不阻断
+                eprintln!("[inject_knowledge] 表 {} 注入失败: {}", t, e);
+            }
+        }
+    }
+    // 总字数封顶：超过预算告警（不截断——宁可让测试/日志暴露，也不破坏表格完整性）
+    if out.chars().count() > INJECT_MAX_TOTAL_CHARS {
+        eprintln!(
+            "[inject_knowledge] 注入总量 {} 字超过封顶 {} 字——检查 INJECT_MAX_* 常量或表内容",
+            out.chars().count(),
+            INJECT_MAX_TOTAL_CHARS
+        );
+    }
+    out
+}
+
+/// 角色审改：审查主持人当前方案 → 查 CSV → 输出修订片段 JSON
+async fn execute_review<R: Runtime>(
+    app: &AppHandle<R>,
+    role: PipelineRole,
+    current_plan: &str,
+    revisions_log: &[(String, String)],
+    next_tasks: &str,
+    req: &PipelineRequest,
+) -> Result<ReviewResult, String> {
+    let kb = load_knowledge()?;
+    let r = roles::role_for(role);
+
+    let mut system = String::new();
+    system.push_str(&format!("【角色】{} {}\n", r.name, r.emoji));
+    system.push_str(&format!("{}\n", r.system_prompt));
+    // 微观②：按需检索注入——按角色绑定表 + 当前方案关键词过滤，只注入命中条目（suno_rules 规则全量）
+    system.push_str(&inject_knowledge(&kb, r.knowledge_tables, current_plan));
+    system.push_str("\n输出 JSON（严格符合格式，不输出其他内容）：\n");
+    system.push_str(r.output_schema);
+
+    let mut user = format!("【主持人当前方案】\n{}\n\n", current_plan);
+    // Mode C：原歌词全链路传递——审改员逐行字数/韵脚对齐的依据（P2 硬校验前置）
+    if let Some(original) = &req.extra {
+        user.push_str(&format!("【原歌词（改写需逐行对齐）】\n{}\n\n", original));
+    }
+    if !revisions_log.is_empty() {
+        user.push_str("【已提修订（可参考，不要重复提同一问题）】\n");
+        for (name, rev) in revisions_log {
+            user.push_str(&format!("- {}：{}\n", name, rev));
+        }
+        user.push('\n');
+    }
+    if !next_tasks.is_empty() {
+        user.push_str(&format!(
+            "【主持人本轮任务分发（你这一轮要重点解决的问题）】\n{}\n\n",
+            next_tasks
+        ));
+    }
+    user.push_str("请审查：同意则输出 {\"agree\":true}；有优化点则输出 {\"agree\":false, \"changes\":[...]}。");
+
+    let (base_url, api_key, model) = resolve_api(req, role);
+    let _ = app.emit("pipeline", PipelineEvent::StepStart { role });
+    let raw = llm::call_llm_silent(
+        &base_url, &api_key, &model,
+        vec![json!({"role":"system","content":system}), json!({"role":"user","content":user})],
+        3000,
+        req.thinking,
+    )
+    .await?;
+    let result = parse_review(&raw);
+    let _ = app.emit("pipeline", PipelineEvent::StepDone {
+        role,
+        summary: humanize_review(role, &result),
+    });
+    Ok(result)
+}
+
+/// 校验员讨论轮审查：审查当前方案 + 本轮角色修订 + 主持人任务分发 → 提出观点返回主持人（复用 ReviewResult 契约）
+async fn execute_audit_review<R: Runtime>(
+    app: &AppHandle<R>,
+    current_plan: &str,
+    round_changes: &[(PipelineRole, Vec<ReviewChange>)],
+    revisions_log: &[(String, String)],
+    next_tasks: &str,
+    req: &PipelineRequest,
+) -> Result<ReviewResult, String> {
+    let kb = load_knowledge()?;
+
+    let mut system = String::new();
+    system.push_str("【角色】校验员 🔍\n");
+    system.push_str(roles::auditor_review_prompt());
+    system.push('\n');
+    if let Ok(rendered) = kb.render_table("suno_rules", None, Some(INJECT_MAX_FULL_ROWS)) {
+        system.push_str(&rendered);
+        system.push('\n');
+    }
+    system.push_str("\n输出 JSON（严格符合格式，不输出其他内容）：\n");
+    system.push_str(roles::REVIEW_SCHEMA_AUDITOR);
+
+    let mut user = format!("【主持人当前方案】\n{}\n\n", current_plan);
+    // Mode C：原歌词全链路传递——校验员核对逐行对齐（P2 硬校验前置）
+    if let Some(original) = &req.extra {
+        user.push_str(&format!("【原歌词（逐行字数对齐依据）】\n{}\n\n", original));
+        if req.mode == Mode::ModeC {
+            user.push_str("【Mode C 专项：必须核对新歌词与原歌词逐行对齐（行数一致、每行字数一致），发现漂移必须提出修订】\n\n");
+        }
+    }
+    if !round_changes.is_empty() {
+        user.push_str("【本轮各角色修订片段（审查合理性/冲突/漏项）】\n");
+        for (role, changes) in round_changes {
+            user.push_str(&format!("## {} 的修订：\n", role.name()));
+            for c in changes {
+                user.push_str(&format!(
+                    "- target: {} | content: {} | reason: {}\n",
+                    c.target, c.content, c.reason
+                ));
+            }
+        }
+        user.push('\n');
+    }
+    if !revisions_log.is_empty() {
+        user.push_str("【已提修订（不要重复提同一问题）】\n");
+        for (name, rev) in revisions_log {
+            user.push_str(&format!("- {}：{}\n", name, rev));
+        }
+        user.push('\n');
+    }
+    if !next_tasks.is_empty() {
+        user.push_str(&format!(
+            "【主持人本轮任务分发（核验任务是否覆盖漏项、分配是否合理）】\n{}\n\n",
+            next_tasks
+        ));
+    }
+    user.push_str("请审查并输出观点：同意则 {\"agree\":true}；有问题则 {\"agree\":false, \"changes\":[...]}。");
+
+    let (base_url, api_key, model) = resolve_api(req, PipelineRole::Auditor);
+    let _ = app.emit("pipeline", PipelineEvent::StepStart { role: PipelineRole::Auditor });
+    let raw = llm::call_llm_silent(
+        &base_url, &api_key, &model,
+        vec![json!({"role":"system","content":system}), json!({"role":"user","content":user})],
+        3000,
+        req.thinking,
+    )
+    .await?;
+    let result = parse_review(&raw);
+    let _ = app.emit("pipeline", PipelineEvent::StepDone {
+        role: PipelineRole::Auditor,
+        summary: humanize_review(PipelineRole::Auditor, &result),
+    });
+    Ok(result)
+}
+
+// ---------------------------------------------------------------------------
+// 主持人（阶段 0 统领 / 阶段 1 汇总）
+// ---------------------------------------------------------------------------
+
+/// 阶段 0：主持人用该模式的完整指令产出方案初稿（流式）
+async fn run_host_initial<R: Runtime>(app: &AppHandle<R>, req: &PipelineRequest) -> Result<String, String> {
+    let _ = app.emit("pipeline", PipelineEvent::HostStart { stage: HostStage::Initial });
+    let system = prompt_for_mode(&req.mode);
+    let (base_url, api_key, model) = resolve_api(req, PipelineRole::Host);
+    let mut user = format!("用户输入：\n{}\n\n请按上述方法论直接输出完整方案。", req.user_input);
+    // Mode C：原歌词在 extra，指令期望"原歌词 + 新主题"
+    if let Some(original) = &req.extra {
+        user = format!("原歌词：\n{}\n\n新主题/故事：\n{}\n\n请按上述方法论直接输出完整改词方案。", original, req.user_input);
+    }
+    let resp = llm::call_llm_stream(
+        app.clone(), &base_url, &api_key, &model,
+        vec![json!({"role":"system","content":system}), json!({"role":"user","content":user})],
+        req.thinking,
+    )
+    .await?;
+    let _ = app.emit("pipeline", PipelineEvent::HostDone { stage: HostStage::Initial });
+    Ok(resp.raw)
+}
+
+/// 阶段 1：主持人收集各角色修订 + 校验员观点，汇总成新版完整方案 + 下轮任务分发。
+/// 返回 (完整方案, 下轮任务段)；任务段为空 = 已收敛/无需下轮。
+async fn run_host_summarize<R: Runtime>(
+    app: &AppHandle<R>,
+    current_plan: &str,
+    round_changes: &[(PipelineRole, Vec<ReviewChange>)],
+    req: &PipelineRequest,
+) -> Result<(String, String), String> {
+    let host = roles::host();
+    let mut user = format!("【当前方案】\n{}\n\n【本轮各角色修订片段与校验员观点】\n", current_plan);
+    for (role, changes) in round_changes {
+        user.push_str(&format!("## {} 的修订：\n", role.name()));
+        for c in changes {
+            user.push_str(&format!("- target: {} | content: {} | reason: {}\n", c.target, c.content, c.reason));
+        }
+    }
+    user.push_str("\n请把修订整合进当前方案，输出新版完整方案（只含生产方案：Style Prompt + 歌词（含说明行）+ 参数，不要重复输出分析数据包）。");
+    user.push_str("如需下一轮讨论，在方案末尾单独一行【任务分发】后点名各角色下一轮要解决的具体问题；若已无必要则只输出方案，不输出该段。");
+    let (base_url, api_key, model) = resolve_api(req, PipelineRole::Host);
+    let _ = app.emit("pipeline", PipelineEvent::HostStart { stage: HostStage::Summarize });
+    let raw = llm::call_llm_silent(
+        &base_url, &api_key, &model,
+        vec![json!({"role":"system","content":host.system_prompt}), json!({"role":"user","content":user})],
+        3000,
+        req.thinking,
+    )
+    .await?;
+    let _ = app.emit("pipeline", PipelineEvent::HostDone { stage: HostStage::Summarize });
+    Ok(split_tasks(&raw))
+}
+
+// ---------------------------------------------------------------------------
+// 校验员（阶段 2：最终格式输出端口）
+// ---------------------------------------------------------------------------
+
+/// 阶段 2：校验员按标准格式输出最终提示词包（硬校验失败打回重格式化）
+async fn run_audit_format<R: Runtime>(
+    app: &AppHandle<R>,
+    current_plan: &str,
+    issues: Option<&[String]>,
+    req: &PipelineRequest,
+) -> Result<String, String> {
+    let _ = app.emit("pipeline", PipelineEvent::AuditStart);
+    let auditor = roles::auditor();
+    let kb = load_knowledge()?;
+    // Mode C 切换专用格式规范（通用规范诱导新增歌词段，与逐行对齐约束冲突）
+    let mut system = if req.mode == Mode::ModeC {
+        roles::auditor_format_prompt_mode_c().to_string()
+    } else {
+        auditor.system_prompt.to_string()
+    };
+    if let Ok(rules) = kb.render_table("suno_rules", None, Some(INJECT_MAX_FULL_ROWS)) {
+        system.push_str(&rules);
+        system.push('\n');
+    }
+    let mut user = format!("请按标准格式输出最终提示词包：\n\n{}", current_plan);
+    // Mode C：原歌词全链路传递——格式输出逐行字数对齐的依据（P2 硬校验前置）
+    if let Some(original) = &req.extra {
+        user.push_str(&format!("\n\n【原歌词（逐行字数对齐依据，改词必须逐行等字数输出）】\n{}", original));
+    }
+    // Mode C 专项：auditor 通用规范不含"改词"约束，必须显式声明（P2 硬校验前置）
+    if req.mode == Mode::ModeC {
+        user.push_str(
+            "\n\n【Mode C 改词专项（必须满足，校验会打回）】\n\
+1. 歌词是原歌词的逐行改写：新歌词总行数必须与原歌词完全一致（原歌词每行对应新歌词一行）\n\
+2. 每行字数（不含断句空格）与原歌词对应行完全一致\n\
+3. 禁止增删歌词行、禁止自由创作新歌词段落；段落结构必须与原歌词一致（原歌词几段新歌词就几段，原歌词无 Hook/Chorus 段则禁止新增，禁止为 Hook 加段）\n\
+4. 全部歌词行总数必须等于原歌词行数\n\
+5. 说明行必须带方括号（[乐器+行为, 空间, 力度]），禁止裸写说明行",
+        );
+    }
+    if let Some(issues) = issues {
+        user.push_str(&format!(
+            "\n\n【格式问题（逐条修正后重新输出完整包）】\n{}",
+            issues.iter().map(|i| format!("- {}", i)).collect::<Vec<_>>().join("\n")
+        ));
+    }
+    let (base_url, api_key, model) = resolve_api(req, PipelineRole::Auditor);
+    llm::call_llm_silent(
+        &base_url, &api_key, &model,
+        vec![json!({"role":"system","content":system}), json!({"role":"user","content":user})],
+        3000,
+        req.thinking,
+    )
+    .await
+}
+
+// ---------------------------------------------------------------------------
+// 工具
+// ---------------------------------------------------------------------------
+
+/// 剥 markdown 围栏
+fn strip_json_fence(t: &str) -> String {
+    let t = t.trim();
+    let s = t.find('{');
+    let e = t.rfind('}');
+    match (s, e) {
+        (Some(a), Some(b)) if b > a => t[a..=b].to_string(),
+        _ => t.to_string(),
+    }
+}
+
+/// 把主持人汇总输出切分为（纯方案, 下轮任务段）。
+/// 末尾出现「【任务分发】」等标记时切分；未命中或切出空方案（畸形：标记在最前）视为无任务段，全文当方案。
+fn split_tasks(text: &str) -> (String, String) {
+    for marker in ["【任务分发】", "【下轮任务】", "【任务】"] {
+        if let Some(pos) = text.find(marker) {
+            let plan = text[..pos].trim();
+            let tasks = text[pos + marker.len()..].trim();
+            if !plan.is_empty() && !tasks.is_empty() {
+                return (plan.to_string(), tasks.to_string());
+            }
+        }
+    }
+    (text.trim().to_string(), String::new())
+}
+
+/// 从完整方案文本提取 Style Prompt 行（兼容 "**Style Prompt**:" 前缀）
+fn extract_style_prompt_line(text: &str) -> String {
+    for line in text.lines() {
+        let l = line.trim().trim_start_matches('*').trim();
+        if (l.starts_with("Style") && l.len() > 8) || (l.starts_with("风格") && l.len() > 8) {
+            return l.to_string();
+        }
+    }
+    String::new()
+}
+
+/// 从 Style Prompt 提取 BPM 数值（如 "60BPM" "120 bpm"）
+fn extract_bpm(text: &str) -> Option<u32> {
+    let lower = text.to_lowercase();
+    for part in lower.split(|c: char| !c.is_ascii_digit()) {
+        if let Ok(n) = part.parse::<u32>() {
+            if n >= 40 && n <= 220 {
+                return Some(n);
+            }
+        }
+    }
+    None
+}
+
+
+/// 从最终文本收集硬校验问题。
+/// 全模式启用（P2 修复）：mode_c 的 lyric_fill 已过滤包装行 + 去空白计数，
+/// 对标准提示词包可安全执行字数对齐校验，不再跳过。
+fn collect_hard_issues(mode: &Mode, final_text: &str, extra: Option<&str>) -> Vec<String> {
+    let mut issues = Vec::new();
+    let v = validator::validate_for_mode(mode.to_str_name(), final_text, extra);
+    issues.extend(v.issues);
+    let style_prompt = extract_style_prompt_line(final_text);
+    if !style_prompt.is_empty() {
+        issues.extend(validator::check_style_prompt_blocks(&style_prompt));
+        // BPM 模式感知检查（对齐原指令：仅 mode_d 要求 BPM>=90）
+        if let Some(bpm) = extract_bpm(&style_prompt) {
+            if let Some(msg) = validator::check_bpm_range(mode.to_str_name(), bpm) {
+                issues.push(msg);
+            }
+        }
+    }
+    issues
+}
+
+// ---------------------------------------------------------------------------
+// 主流程
+// ---------------------------------------------------------------------------
+
+/// 讨论轮数上限（阶段 1：首轮审改 + 最多 2 轮修订讨论）
+const MAX_DISCUSSION_ROUNDS: u32 = 3;
+
+/// 主流程：跑圆桌流水线。
+/// 隔离层：tokio::task::spawn 执行（内部 panic 不杀 worker 线程，转为错误返回）+ 整体超时
+/// （挂死/异常兜底，防前端永久"生成中"）。任何失败统一发 Failed 事件。
+pub async fn run_pipeline<R: Runtime>(app: AppHandle<R>, request: PipelineRequest) -> Result<String, String> {
+    /// 流水线整体超时（防静默挂死兜底：所有模式正常 10 分钟内完成）
+    const PIPELINE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+    let app2 = app.clone();
+    let handle = tokio::task::spawn(run_pipeline_inner(app2, request));
+    let result = tokio::time::timeout(PIPELINE_TIMEOUT, handle).await;
+    let inner = match result {
+        Ok(Ok(inner)) => inner,
+        Ok(Err(join_err)) => {
+            // spawn 的 future panic（如字符边界切片越界）：不杀 worker，转错误返回
+            let msg = format!("流水线内部异常: {}", join_err);
+            eprintln!("[pipeline] {}", msg);
+            let _ = app.emit("pipeline", PipelineEvent::Failed { error: msg.clone() });
+            return Err(msg);
+        }
+        Err(_elapsed) => {
+            let msg = format!("流水线超时（{} 分钟）未完成，已中止", 15);
+            let _ = app.emit("pipeline", PipelineEvent::Failed { error: msg.clone() });
+            return Err(msg);
+        }
+    };
+    if let Err(e) = &inner {
+        let _ = app.emit("pipeline", PipelineEvent::Failed { error: e.clone() });
+    }
+    inner
+}
+
+/// 主流程内层：三阶段（主持人统领 → 角色审改+校验员审查讨论 → 校验员格式化）
+async fn run_pipeline_inner<R: Runtime>(app: AppHandle<R>, request: PipelineRequest) -> Result<String, String> {
+    let mode = &request.mode;
+    let roles: Vec<PipelineRole> = steps_for_mode(mode).iter().map(|s| s.role).collect();
+
+    // ---- 阶段 0：主持人统领（原模式完整指令，产出方案初稿）----
+    let mut current_plan = run_host_initial(&app, &request).await?;
+    // 主持人上轮任务分发（第一轮无任务）
+    let mut next_tasks = String::new();
+
+    // ---- 阶段 1：讨论轮（≤3 轮；动态角色 + 校验员全部无异议提前收敛）----
+    let mut revisions_log: Vec<(String, String)> = Vec::new(); // (角色名, 修订摘要)
+    for round in 1..=MAX_DISCUSSION_ROUNDS {
+        let mut all_agree = true;
+        let mut round_changes: Vec<(PipelineRole, Vec<ReviewChange>)> = Vec::new();
+        // 本轮开始前的修订快照（上一轮及更早；本轮角色修订经 round_changes 传递，避免 auditor 双写）
+        let prev_revisions = revisions_log.clone();
+        // ① 动态角色逐个审改
+        for role in &roles {
+            let result = execute_review(&app, *role, &current_plan, &revisions_log, &next_tasks, &request).await?;
+            // 仅收录有具体修订的异议（agree=false 但提不出修订 = 视为无异议，避免空条目）
+            if !result.agree && !result.changes.is_empty() {
+                all_agree = false;
+                round_changes.push((*role, result.changes.clone()));
+                revisions_log.push((role.name().to_string(), humanize_review(*role, &result)));
+            }
+        }
+        // ② 校验员审查（当前方案 + 本轮修订 + 上轮修订 + 任务分发核验 → 观点返回主持人）
+        let auditor_result = execute_audit_review(
+            &app, &current_plan, &round_changes, &prev_revisions, &next_tasks, &request,
+        )
+        .await?;
+        if !auditor_result.agree && !auditor_result.changes.is_empty() {
+            all_agree = false;
+            round_changes.push((PipelineRole::Auditor, auditor_result.changes.clone()));
+            revisions_log.push((
+                PipelineRole::Auditor.name().to_string(),
+                humanize_review(PipelineRole::Auditor, &auditor_result),
+            ));
+        }
+        if all_agree {
+            break; // 动态角色 + 校验员全部无异议 → 收敛
+        }
+        // ③ 主持人汇总修订 + 校验员观点 → 新版完整方案 + 下轮任务分发
+        let (new_plan, tasks) = run_host_summarize(&app, &current_plan, &round_changes, &request).await?;
+        current_plan = new_plan;
+        next_tasks = tasks;
+        let _ = app.emit("pipeline", PipelineEvent::DiscussionRound {
+            round,
+            roles: round_changes.iter().map(|(r, _)| *r).collect(),
+            reason: round_changes
+                .iter()
+                .flat_map(|(_, cs)| cs.iter().map(|c| c.reason.clone()))
+                .collect::<Vec<_>>()
+                .join("；"),
+        });
+    }
+
+    // ---- 阶段 2：校验员按标准格式输出最终提示词包（硬校验失败打回重格式化 ≤2 次）----
+    let mut final_text = run_audit_format(&app, &current_plan, None, &request).await?;
+    let mut issues = Vec::new();
+    for _ in 0..2 {
+        issues = collect_hard_issues(mode, &final_text, request.extra.as_deref());
+        if issues.is_empty() {
+            break;
+        }
+        let _ = app.emit("pipeline", PipelineEvent::Retry {
+            role: PipelineRole::Auditor,
+            reason: issues.join("；"),
+        });
+        final_text = run_audit_format(&app, &current_plan, Some(&issues), &request).await?;
+    }
+    // 最终校验：最后一次重格式化（如有）的输出必须重新校验——
+    // 此前 issues 停留在上一次 collect，最后一次格式化的结果从未被校验（真 bug）
+    if !issues.is_empty() {
+        issues = collect_hard_issues(mode, &final_text, request.extra.as_deref());
+    }
+    let _ = app.emit("pipeline", PipelineEvent::AuditResult {
+        pass: issues.is_empty(),
+        findings: issues.clone(),
+    });
+    if !issues.is_empty() {
+        // 降级输出（对齐"永远有产出"原则）：打回耗尽仍返回最后一次方案，
+        // 格式问题已通过 AuditResult(pass=false) 事件显式告知前端（不空手报错）
+        eprintln!(
+            "[pipeline] 硬校验打回耗尽（{} 个问题），降级返回最后一次方案：{}",
+            issues.len(),
+            issues.join("；")
+        );
+    }
+
+    Ok(final_text)
+}
+
+/// 优化/重跑：全流程重跑 + 反馈注入
+pub async fn run_pipeline_refine(app: AppHandle, request: PipelineRequest, feedback: &str) -> Result<String, String> {
+    let mut req = request;
+    req.user_input = format!("{}\n\n（优化反馈：{}）", req.user_input, feedback);
+    run_pipeline(app, req).await
+}
+
+// ---------------------------------------------------------------------------
+// Tauri 命令（前端 invoke 入口）
+// ---------------------------------------------------------------------------
+
+/// 圆桌生成（前端调用）
+#[tauri::command]
+pub async fn pipeline_generate(app: AppHandle, request: PipelineRequest) -> Result<String, String> {
+    run_pipeline(app, request).await
+}
+
+/// 圆桌优化（前端调用，带反馈）
+#[tauri::command]
+pub async fn pipeline_refine(
+    app: AppHandle,
+    request: PipelineRequest,
+    feedback: String,
+) -> Result<String, String> {
+    run_pipeline_refine(app, request, &feedback).await
+}
+
+// ---------------------------------------------------------------------------
+// 单元测试
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn steps_for_mode_b_includes_lyricist() {
+        let steps = steps_for_mode(&Mode::ModeB);
+        assert_eq!(steps.len(), 3);
+        assert!(steps.iter().any(|s| s.role == PipelineRole::Lyricist));
+        assert!(!steps.iter().any(|s| s.role == PipelineRole::Host));
+        assert!(!steps.iter().any(|s| s.role == PipelineRole::Auditor));
+        assert!(steps.last().unwrap().role == PipelineRole::Producer);
+    }
+
+    #[test]
+    fn steps_for_mode_a_skips_lyricist() {
+        let steps = steps_for_mode(&Mode::ModeA);
+        assert!(!steps.iter().any(|s| s.role == PipelineRole::Lyricist));
+        assert_eq!(steps.len(), 2);
+    }
+
+    #[test]
+    fn steps_for_mode_c_starts_with_reviser() {
+        let steps = steps_for_mode(&Mode::ModeC);
+        assert!(steps.first().unwrap().role == PipelineRole::Reviser);
+        assert_eq!(steps.len(), 2);
+    }
+
+    #[test]
+    fn steps_for_mode_d_has_style_analyst() {
+        let steps = steps_for_mode(&Mode::ModeD);
+        assert!(steps.iter().any(|s| s.role == PipelineRole::StyleAnalyst));
+        assert_eq!(steps.len(), 4);
+    }
+
+    #[test]
+    fn prompt_for_mode_returns_original_instructions() {
+        for m in [Mode::ModeA, Mode::ModeB, Mode::ModeC, Mode::ModeD] {
+            let p = prompt_for_mode(&m);
+            assert!(p.len() > 500, "模式 {:?} 指令过短（{}）", m, p.len());
+        }
+    }
+
+    #[test]
+    fn parse_review_agree() {
+        let r = parse_review(r#"{"agree": true}"#);
+        assert!(r.agree);
+        assert!(r.changes.is_empty());
+    }
+
+    #[test]
+    fn parse_review_with_changes() {
+        let r = parse_review(r#"{"agree": false, "changes": [{"target": "lyrics", "content": "新歌词段", "reason": "套话"}], "reason": "整体"}"#);
+        assert!(!r.agree);
+        assert_eq!(r.changes.len(), 1);
+        assert_eq!(r.changes[0].target, "lyrics");
+        assert_eq!(r.changes[0].reason, "套话");
+    }
+
+    #[test]
+    fn parse_review_garbage_is_agree() {
+        // 解析失败按"无异议"处理（不阻塞流程）
+        let r = parse_review("不是 JSON");
+        assert!(r.agree);
+    }
+
+    #[test]
+    fn parse_review_drops_empty_content_and_normalizes_target() {
+        // P8：空 content 修订丢弃；非法 target 归一为 other
+        let r = parse_review(r#"{"agree": false, "changes": [
+            {"target": "lyrics", "content": "有效修订", "reason": "r1"},
+            {"target": "style_prompt", "content": "   ", "reason": "空内容丢弃"},
+            {"target": "weirdness_滑块", "content": "内容还在", "reason": "非法target归一"}
+        ]}"#);
+        assert!(!r.agree);
+        assert_eq!(r.changes.len(), 2, "空 content 修订应被丢弃");
+        assert_eq!(r.changes[0].target, "lyrics");
+        assert_eq!(r.changes[1].target, "other", "非法 target 应归一为 other");
+        assert_eq!(r.changes[1].content, "内容还在");
+    }
+
+    #[test]
+    fn humanize_review_readable() {
+        // 无异议最低门槛：checked 清单应展示
+        let ok = humanize_review(PipelineRole::Emotion, &ReviewResult {
+            agree: true,
+            changes: vec![],
+            reason: String::new(),
+            checked: vec!["情绪内核".into(), "能量差≥3级".into(), "弧线匹配".into()],
+        });
+        assert!(ok.contains("无异议"), "got: {}", ok);
+        assert!(ok.contains("已核查"), "无异议必须展示核查清单: {}", ok);
+        assert!(ok.contains("情绪内核"), "got: {}", ok);
+        // 无 checked 时保持原样（兼容）
+        let ok2 = humanize_review(PipelineRole::Emotion, &ReviewResult {
+            agree: true,
+            changes: vec![],
+            reason: String::new(),
+            checked: vec![],
+        });
+        assert!(ok2.contains("无异议") && !ok2.contains("已核查"), "got: {}", ok2);
+        let fix = humanize_review(PipelineRole::Producer, &ReviewResult {
+            agree: false,
+            changes: vec![ReviewChange {
+                target: "lyrics".into(),
+                content: "[失真吉他+强放, 空间爆满, 能量:9]".into(),
+                reason: "Chorus 配器太弱".into(),
+            }],
+            reason: String::new(),
+            checked: vec![],
+        });
+        assert!(fix.contains("提出 1 处修订"), "got: {}", fix);
+        assert!(fix.contains("Chorus 配器太弱"), "got: {}", fix);
+    }
+
+    #[test]
+    fn humanize_review_auditor() {
+        let r = ReviewResult {
+            agree: false,
+            changes: vec![ReviewChange {
+                target: "params".into(),
+                content: "Weirdness=30".into(),
+                reason: "参数越界".into(),
+            }],
+            reason: "总体：参数区间超标".into(),
+            checked: vec![],
+        };
+        let s = humanize_review(PipelineRole::Auditor, &r);
+        assert!(s.contains("校验员：提出 1 处修订"), "got: {}", s);
+        assert!(s.contains("参数越界"), "got: {}", s);
+        assert!(s.contains("总体：参数区间超标"), "got: {}", s);
+    }
+
+    /// 无异议最低门槛：parse_review 解析 checked 清单
+    #[test]
+    fn parse_review_extracts_checked_list() {
+        let r = parse_review(r#"{"agree": true, "checked": ["情绪内核", "能量差≥3级", "参数区间"], "reason": "全部合规"}"#);
+        assert!(r.agree);
+        assert_eq!(r.checked, vec!["情绪内核", "能量差≥3级", "参数区间"]);
+        // 无 checked 字段时为空数组（宽容兼容）
+        let r2 = parse_review(r#"{"agree": true}"#);
+        assert!(r2.agree);
+        assert!(r2.checked.is_empty());
+    }
+
+    #[test]
+    fn split_tasks_with_marker() {
+        let (plan, tasks) = split_tasks("方案内容第一行\n第二行\n【任务分发】\n- 情感分析师：调整能量\n- 制作人：改配器");
+        assert!(plan.contains("方案内容第一行"));
+        assert!(!plan.contains("任务分发"), "方案不应含任务段: {}", plan);
+        assert!(tasks.contains("情感分析师"));
+        assert!(tasks.contains("制作人"));
+    }
+
+    #[test]
+    fn split_tasks_no_marker_keeps_whole() {
+        let (plan, tasks) = split_tasks("只有方案没有任务");
+        assert_eq!(plan, "只有方案没有任务");
+        assert!(tasks.is_empty());
+    }
+
+    #[test]
+    fn split_tasks_marker_at_start_keeps_all_as_plan() {
+        // 畸形：标记在最前、无方案 → 全文当方案，避免空方案传给下一轮
+        let (plan, tasks) = split_tasks("【任务分发】\n只有任务没有方案");
+        assert_eq!(plan, "【任务分发】\n只有任务没有方案");
+        assert!(tasks.is_empty());
+    }
+
+    #[test]
+    fn split_tasks_alternate_markers() {
+        let (plan, tasks) = split_tasks("方案\n【下轮任务】\n任务A");
+        assert!(plan.contains("方案"));
+        assert!(tasks.contains("任务A"));
+        let (plan2, tasks2) = split_tasks("方案2\n【任务】\n任务B");
+        assert!(plan2.contains("方案2"));
+        assert!(tasks2.contains("任务B"));
+    }
+
+    #[test]
+    fn extract_style_prompt_line_handles_stars() {
+        let text = "**Style Prompt**: 深夜民谣, 68 BPM\n[Verse 1]";
+        assert_eq!(extract_style_prompt_line(text), "Style Prompt**: 深夜民谣, 68 BPM");
+    }
+
+    #[test]
+    fn extract_style_prompt_line_none() {
+        assert_eq!(extract_style_prompt_line("[Verse 1]\n歌词"), "");
+    }
+
+    #[test]
+    fn resolve_api_no_overrides_uses_global() {
+        let req = make_request(None);
+        let (url, key, model) = resolve_api(&req, PipelineRole::Emotion);
+        assert_eq!(url, "https://global.example.com/v1");
+        assert_eq!(key, "global-key");
+        assert_eq!(model, "global-model");
+    }
+
+    #[test]
+    fn resolve_api_partial_override_falls_back_per_field() {
+        let mut map = std::collections::HashMap::new();
+        map.insert(PipelineRole::Auditor, crate::models::RoleApiOverride {
+            model: Some("auditor-strong".into()),
+            api_key: None,
+            base_url: None,
+        });
+        let req = make_request(Some(map));
+        let (url, key, model) = resolve_api(&req, PipelineRole::Auditor);
+        assert_eq!(url, "https://global.example.com/v1");
+        assert_eq!(key, "global-key");
+        assert_eq!(model, "auditor-strong");
+        let (_, _, m2) = resolve_api(&req, PipelineRole::Emotion);
+        assert_eq!(m2, "global-model");
+    }
+
+    #[test]
+    fn resolve_api_full_override_uses_override() {
+        let mut map = std::collections::HashMap::new();
+        map.insert(PipelineRole::Host, crate::models::RoleApiOverride {
+            model: Some("host-model".into()),
+            api_key: Some("host-key".into()),
+            base_url: Some("https://host.example.com/v1".into()),
+        });
+        let req = make_request(Some(map));
+        let (url, key, model) = resolve_api(&req, PipelineRole::Host);
+        assert_eq!(url, "https://host.example.com/v1");
+        assert_eq!(key, "host-key");
+        assert_eq!(model, "host-model");
+    }
+
+    #[test]
+    fn matching_keywords_hits_and_misses() {
+        let hits = matching_keywords("方案里提到孤独与愤怒", &["孤独".into(), "温柔".into()]);
+        assert_eq!(hits, vec!["孤独"]);
+        let none = matching_keywords("没有情绪词", &["孤独".into(), "愤怒".into()]);
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn plan_energy_range_extracts() {
+        assert_eq!(plan_energy_range("能量:3 到 能量:8"), Some((3, 8)));
+        assert_eq!(plan_energy_range("没有能量标注"), None);
+    }
+
+    #[test]
+    fn inject_knowledge_filters_by_keywords() {
+        let kb = crate::knowledge::KnowledgeBase::load_embedded().unwrap();
+        // 制作人绑定表注入：方案含流派与能量 → style_genre 命中、instruments 按能量
+        let out = inject_knowledge(&kb, &[("style_genre", &[], &[]), ("instruments", &[], &[]), ("suno_rules", &[], &[])], "深夜室内民谣 能量:3 Chorus 能量:8");
+        assert!(out.contains("按需命中"), "style_genre 应命中: {}", &out[..out.len().min(200)]);
+        assert!(out.contains("suno_rules 知识库"), "suno_rules 应全量注入");
+        // 情感分析师注入：方案无情绪词 → 兜底标注
+        let out2 = inject_knowledge(&kb, &[("emotions", &[], &[])], "纯粹描述画面没有情绪词");
+        assert!(out2.contains("未命中关键词"), "emotions 应兜底: {}", &out2[..out2.len().min(200)]);
+        // 方案含情绪词 → 命中
+        let out3 = inject_knowledge(&kb, &[("emotions", &[], &[])], "这首歌的情绪是孤独与自嘲");
+        assert!(out3.contains("按需命中"), "emotions 应命中: {}", &out3[..out3.len().min(200)]);
+    }
+
+    /// 微观②：少而准——愤怒（高能量）只注入高能乐器，悲伤（低能量）只注入低能乐器，且 ≤15 件
+    #[test]
+    fn instruments_injected_selectively_by_energy() {
+        let kb = crate::knowledge::KnowledgeBase::load_embedded().unwrap();
+        // 愤怒主题（能量 7-10）：命中摇滚/金属类高能乐器
+        let out = inject_knowledge(&kb, &[("instruments", &[], &[])], "愤怒爆发 能量:7 到 能量:10");
+        assert!(out.contains("按能量区间 7~10 命中"), "got: {}", &out[..out.len().min(150)]);
+        assert!(out.contains("distorted guitar"), "愤怒应含失真吉他");
+        assert!(out.contains("electric guitar"), "愤怒应含电吉他");
+        assert!(!out.contains("felt piano"), "愤怒不应含低能钢琴（或超出 15 件上限被截断）");
+        // 悲伤主题（能量 1-4）：命中民谣/抒情低能乐器
+        let out2 = inject_knowledge(&kb, &[("instruments", &[], &[])], "悲伤低回 能量:1 到 能量:4");
+        assert!(out2.contains("按能量区间 1~4 命中"), "got: {}", &out2[..out2.len().min(150)]);
+        assert!(out2.contains("felt piano"), "悲伤应含 felt piano");
+        assert!(out2.contains("fingerpicked"), "悲伤应含指弹吉他");
+        assert!(!out2.contains("distorted guitar"), "悲伤不应含失真吉他");
+        // 命中条数 ≤15
+        let hit_lines = out2.lines().filter(|l| l.starts_with("| ") && l.contains("|")).count();
+        assert!(hit_lines <= 17, "注入行数超限: {}", hit_lines); // 表头+分隔+≤15
+    }
+
+    /// 注入量规范：每个角色用"最坏情况方案"（命中所有关键词表 + 全能量区间）注入，
+    /// 断言单表条数 ≤ 上限、单角色总字数 ≤ 封顶。常量 INJECT_MAX_* 的测试锁。
+    #[test]
+    fn role_injection_budget_under_limits() {
+        let kb = crate::knowledge::KnowledgeBase::load_embedded().unwrap();
+        // 最坏情况方案：同时命中情绪/套话/钩子/流派全部候选 + 全能量区间 0-10
+        let plan = "愤怒 孤独 温柔 遗憾 梦想 星空 自嘲 魔性循环 反差金句 空耳式 深夜室内民谣 抒情流行 爵士 重金属 能量:0 到 能量:10";
+        let roles = [
+            roles::role_for(PipelineRole::Emotion),
+            roles::role_for(PipelineRole::Lyricist),
+            roles::role_for(PipelineRole::Reviser),
+            roles::role_for(PipelineRole::Producer),
+            roles::role_for(PipelineRole::StyleAnalyst),
+            roles::role_for(PipelineRole::Auditor),
+        ];
+        for r in roles {
+            let out = inject_knowledge(&kb, r.knowledge_tables, plan);
+            let chars = out.chars().count();
+            // 按 "## 表名 知识库" 切段，每段独立统计数据行（| 开头且不是表头/分隔）
+            for (table_name, _, _) in r.knowledge_tables {
+                let marker = format!("## {} 知识库", table_name);
+                let segment = match out.find(&marker) {
+                    Some(i) => {
+                        let rest = &out[i..];
+                        match rest.find("\n## ") {
+                            Some(j) => &rest[..j],
+                            None => rest,
+                        }
+                    }
+                    None => {
+                        panic!("{} 注入中找不到表 {} 的段", r.name, table_name);
+                    }
+                };
+                let data_lines = segment
+                    .lines()
+                    .filter(|l| l.starts_with("| ") && !l.contains("| ---"))
+                    .count();
+                let limit = match *table_name {
+                    "style_genre" => INJECT_MAX_STYLE_GENRE_ROWS + 2,
+                    "instruments" => INJECT_MAX_INSTRUMENTS_ROWS + 2,
+                    "suno_rules" => INJECT_MAX_FULL_ROWS + 2,
+                    _ => INJECT_MAX_KEYWORD_ROWS + 2,
+                };
+                assert!(
+                    data_lines <= limit,
+                    "{} 注入 {} 表数据行 {} 超上限 {}",
+                    r.name,
+                    table_name,
+                    data_lines,
+                    limit
+                );
+            }
+            eprintln!("[budget] {} 注入 {} 字（封顶 {}）", r.name, chars, INJECT_MAX_TOTAL_CHARS);
+            assert!(
+                chars <= INJECT_MAX_TOTAL_CHARS,
+                "{} 注入 {} 字超过封顶 {}",
+                r.name,
+                chars,
+                INJECT_MAX_TOTAL_CHARS
+            );
+        }
+    }
+
+    fn make_request(overrides: Option<std::collections::HashMap<PipelineRole, crate::models::RoleApiOverride>>) -> PipelineRequest {
+        PipelineRequest {
+            mode: Mode::ModeB,
+            user_input: "雨天".into(),
+            model: "global-model".into(),
+            api_key: "global-key".into(),
+            base_url: "https://global.example.com/v1".into(),
+            extra: None,
+            role_overrides: overrides,
+            thinking: false,
+        }
+    }
+}

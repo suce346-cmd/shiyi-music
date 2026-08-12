@@ -1,0 +1,91 @@
+instrument,family,role_verb,character,energy_min,energy_max,style_tags,region,note,timbre,technique,arrangement_role,priority
+fingerpicked guitar,string,strums,暖 木质 叙事,1,6,indie folk ballad intimate,global,叙事底色首选,颗粒感 温润,指弹分解 勾弦打板,旋律与和声兼用,lead
+felt piano,keyboard,cushions,闷 暖 内收,1,6,ballad lo-fi intimate,global,情绪底色,闷 绒 暖,制音踏板 弱奏,铺底与色彩,lead
+acoustic guitar,string,strums,自然 亲切,2,7,folk pop country,global,木吉他扫弦分解,自然 通透 木感,扫弦 分解和弦,和声支撑与律动,lead
+upright bass,string,pulses,松 沉,2,7,folk jazz,global,倍大提琴拨奏,松 厚 木质,拨奏 拉奏,低频根基,support
+electric guitar,string,riffs,锐 躁 有棱角,4,9,rock alternative,global,失真音色,锐 亮 电感,推弦 滑棒 闷音,旋律riff与色彩,lead
+distorted guitar,string,screams,裂 炸 压迫,6,10,alternative rock hardcore,global,失真吉他墙,撕裂 轰鸣,失真强力和弦 扫弦墙,力量层与riff,lead
+live drums,percussion,drives,肉感 现场,4,9,rock pop live,global,现场鼓组,肉 震 现场,鼓棒击打 滚奏,节奏骨架,lead
+brushed snare,percussion,ticks,细 碎 温柔,1,5,ballad folk,global,鼓刷军鼓,沙 细 柔,鼓刷扫击,柔和节奏点缀,support
+warm bass,bass,locks,暖 稳 底托,2,8,R&B neo-soul ballad,global,温暖贝斯,暖 圆 深,指弹根音 滑音,低频与和声根基,support
+808 bass,bass,slams,重 闷 沉,6,10,hiphop trap,global,抖音必备低频,重 闷 长延音,滑音 长音 正弦波,低频律动核心,support
+synth bass,bass,pushes,电 弹 推,4,9,EDM synthwave,global,合成贝斯,电 弹 通透,锯齿波 包络调制,电子律动低音,support
+hi-hats,percussion,ticks,亮 脆 密,3,9,trap hiphop,global,踩镲十六分,亮 金属 脆,开合击 十六分滚奏,律动细节层,support
+pluck lead,synth,sparkles,亮 弹 抓耳,5,9,EDM synthwave,global,拨奏主音,亮 弹 锯齿,快速琶音 断奏,旋律主奏,lead
+Rhodes,keyboard,warms,丝 滑 复古,2,7,neo-soul jazz,global,电钢琴Rhodes,丝 暖 电铃,锤击金属片 颤音,和声铺底与独奏,lead
+cello,string,bows,暗 深 倾诉,2,8,ballad classical,global,大提琴长弓,暗 深 松香,长弓连奏 揉弦,旋律与抒情铺底,lead
+string ensemble,string,swells,厚 广 电影感,3,9,cinematic classical,global,弦乐群,厚 广 明亮,齐奏 渐强,宏大铺底,support
+suona,brass,blasts,炸 亮 传统,7,10,guochao,东亚,记忆钉,炸 亮 金属,循环换气 高音冲击,民族色彩主奏,lead
+guzheng,string,plucks,清 透 古意,3,8,guochao 国风,东亚,五声音阶,清 透 金属,摇指 刮奏 泛音,民族旋律与色彩,lead
+pipa,string,plucks,急 密 珠玉,4,9,guochao 国风,东亚,琵琶轮指,珠 脆 急,轮指 扫弦 煞音,民族旋律主奏,lead
+erhu,string,bows,悲 咽 哭腔,3,8,国风 民乐,东亚,二胡揉弦,悲 柔 琴弦,揉弦 滑音 颤弓,民族抒情主奏,lead
+dizi,bamboo,blows,亮 清 山野,3,7,国风 民乐,东亚,笛子吐音,亮 清 竹气,吐音 花舌 气震,民族旋律点缀,lead
+taiko,percussion,slams,震 厚 仪式,6,10,和风 国风,东亚,太鼓,震 厚 低频,大槌击打 滚奏,仪式节奏核心,lead
+sitar,string,plucks,缠 异域 冥想,2,8,南亚 融合,南亚,西塔琴,缠 嗡 金属,滑棒 持续低音弦,异域旋律与氛围,lead
+tabla,percussion,patterns,脆 密 律动,2,8,南亚 融合,南亚,塔布拉鼓,脆 密 手击,手指击打 滚奏,印度节奏核心,lead
+ud,string,plucks,暖 异域 叙事,2,7,中东 融合,中东,乌德琴,暖 圆 木香,拨奏 装饰音,中东旋律主奏,lead
+ney,bamboo,blows,空 远 苍凉,1,7,中东 融合,中东,奈伊笛,空 气 苍凉,气声 滑音,中东氛围旋律,lead
+kora,string,plucks,亮 圆 部落,2,8,西非 融合,西非,科拉琴,亮 圆 竖琴感,轮指琶音,非洲旋律与节奏,lead
+djembe,percussion,drives,热 活 聚落,4,9,西非 融合,西非,金贝鼓,热 活 皮膜,掌击 开放音 低音,非洲节奏核心,lead
+bandoneon,keyboard,breathes,旧 暖 思念,2,7,拉丁 探戈,拉丁,班多钮,旧 暖 簧片,风箱开合 揉簧,探戈旋律主奏,lead
+cajon,percussion,knocks,木 稳 步行,3,8,拉丁 民谣,拉丁,卡宏鼓,木 稳 箱体,掌击 刷奏,节奏骨架,lead
+tin whistle,wind,whistles,亮 民谣 单纯,2,7,凯尔特,凯尔特,哨笛,亮 纯 哨音,滑音 装饰音,凯尔特旋律点缀,lead
+violin,string,soars,亮 长 情感,3,8,凯尔特 古典,凯尔特,小提琴,亮 长 弦鸣,长弓 揉弦 跳弓,旋律主奏与抒情,lead
+bodhran,percussion,patterns,圆 低 推进,3,7,凯尔特,凯尔特,宝思兰鼓,圆 低 皮膜,短棒击打 滚奏,凯尔特节奏核心,lead
+synth pad,pad,sustains,铺 广 氛围,1,8,ambient cinematic,global,合成垫,铺 广 柔,持续音 滤波扫动,氛围铺底,support
+delay guitar,string,echoes,空 迷 深海,2,7,shoegaze ambient,global,延迟吉他,空 迷 回声,延迟踏板 泛音,氛围色彩层,support
+vibraphone,percussion,shimmers,亮 冷 晶,2,8,jazz lounge,拉丁,金属光泽垫底,亮 冷 晶,琴槌击打 颤音马达,色彩点缀,lead
+accordion,keyboard,breaths,旧 暖 市井,2,8,法式 民谣 香颂,凯尔特,手风琴风箱,旧 暖 簧片,风箱推拉 揉音,法式民谣旋律,lead
+harmonica,wind,whistles,黄 旧 公路,2,7,blues country,全球,口琴叙事,黄 旧 气,压音 颤音 滑奏,布鲁斯旋律,lead
+glockenspiel,percussion,tingles,亮 脆 童话,1,6,pop cinematic,全球,星星般的点缀,亮 脆 金属,琴槌击打,高音点缀,color
+organ,keyboard,sustains,厚 圣 教堂,2,9,gospel soul,全球,管风琴长音,厚 圣 泛音,持续长音 音栓,教堂氛围铺底,support
+harp,string,plucks,清 贵 梦幻,1,7,classical fantasy,全球,竖琴琶音,清 贵 泛音,琶音 刮奏 泛音,梦幻色彩,lead
+flute,wind,floats,亮 清 灵,2,8,classical folk,全球,长笛漂浮,亮 清 气息,连奏 颤音,旋律与氛围,lead
+saxophone,brass,breaths,醇 暖 蓝调,3,8,jazz blues,全球,萨克斯缠绵,醇 暖 气息,滑音 颤音 气声,爵士旋律主奏,lead
+trumpet,brass,blasts,亮 雄 号角,4,9,jazz latin,全球,小号宣言,亮 雄 金属,吐音 弱音器,号角旋律,lead
+trombone,brass,glides,沉 滑 铜管,3,8,jazz big band,拉丁,长号滑音,沉 滑 铜,滑管滑音,铜管低音与滑奏,lead
+koto,string,plucks,冷 清 和风,2,7,和风 国风,东亚,十三弦筝,冷 清 弦鸣,指爪拨奏 滑音,和风旋律,lead
+shakuhachi,bamboo,blows,空 寂 禅,1,6,和风 禅意,东亚,尺八苍凉,空 寂 竹气,气声 滑音 吹奏,禅意氛围旋律,lead
+shamisen,string,strums,韧 弹 市井,3,8,和风 祭典,东亚,三味线,韧 弹 皮膜,拨子扫弦,市井祭典旋律,lead
+mandolin,string,strums,亮 弹 跳跃,3,8,folk bluegrass,凯尔特,曼陀林跳音,亮 弹 脆,双弦颤音 跳弓,民谣跳音旋律,lead
+cajon box,percussion,knocks,木 稳 步行,3,8,拉丁 民谣,拉丁,箱鼓,木 稳 箱体,掌击 刷奏,节奏骨架,lead
+steel drum,percussion,tinkles,亮 岛 假日,4,9,加勒比 阳光,拉丁,钢鼓,亮 岛 金属,鼓槌击打 滑音,加勒比旋律,lead
+sheng,bamboo,blows,亮 密 传统,2,7,国风 民乐,东亚,笙,亮 密 簧片,持续和音 颤音,民乐和声垫,lead
+drum machine,electronic,drives,冷 硬 程序感,4,9,electronic hiphop,global,鼓机loop,冷 硬 电子,编程节奏 采样触发,电子节奏核心,lead
+vinyl crackle,effect,noises,旧 暖 模拟,1,4,lo-fi 复古,global,黑胶底噪,旧 暖 沙,采样底噪,复古氛围层,color
+rain field recording,effect,ambiences,湿 静 环境,1,5,ambient cinematic,global,雨声采样,湿 静 环境,环境录音,氛围环境层,color
+grand piano,keyboard,sings,亮 宽 全频,1,8,classical ballad cinematic,global,三角钢琴,亮 宽 全频,踏板延音 强奏对比,旋律与和声主干,lead
+banjo,string,twangs,亮 弹 乡村,3,8,country bluegrass folk,北美,班卓五弦滚奏,亮 弹 金属,五弦滚奏 分解,乡村旋律与律动,lead
+fiddle,string,dances,亮 欢 民舞,3,9,country celtic bluegrass,北美,乡村小提琴跳弓,亮 欢 弦鸣,跳弓 双音 滑奏,民舞旋律主奏,lead
+ukulele,string,strums,轻 甜 度假,2,7,pop hawaiian folk,太平洋,尤克四弦扫弦,轻 甜 尼龙,四弦扫弦 分解,轻快和声与律动,lead
+kalimba,keyboard,tingles,空 灵 童真,1,5,ambient folk pop,非洲,拇指琴,空 灵 金属,拇指拨片 延音,梦幻色彩点缀,lead
+celesta,keyboard,twinkles,亮 脆 梦幻,1,6,classical fantasy cinematic,全球,钢片琴童话音色,亮 脆 玻璃感,琴槌击打金属片,童话色彩点缀,color
+oboe,woodwind,wails,哀 亮 牧歌,2,7,classical folk 巴洛克,全球,双簧管牧歌,哀 亮 簧片,连奏 花舌,牧歌旋律,lead
+clarinet,woodwind,croons,暖 醇 爵士,2,7,jazz classical swing,全球,单簧管低音区醇厚,暖 醇 木管,滑音 颤音,爵士旋律,lead
+french horn,brass,calls,远 圆 号角,2,8,classical cinematic 交响,全球,圆号远方感,远 圆 铜,圆号吹奏 弱音,远方氛围与和声,lead
+bassoon,woodwind,grumbles,沉 木 幽默,1,6,classical 交响 卡通,全球,巴松低音区,沉 木 幽默,低音区连奏 断奏,低音旋律与幽默点缀,support
+shaker,percussion,shakes,细 沙 节奏,2,7,latin pop folk,拉丁,沙锤轻律动,细 沙 颗粒,摇奏 均匀律动,节奏细节层,color
+tambourine,percussion,jingles,亮 摇 庆典,3,8,pop folk latin,全球,铃鼓摇响,亮 摇 铃片,摇奏 击打,庆典节奏点缀,support
+castanets,percussion,clicks,脆 舞 西班牙,3,8,flamenco latin,拉丁,响板弗拉门戈,脆 木 点击,手指击响板,弗拉门戈节奏核心,color
+hang drum,percussion,hums,空 悠 冥想,1,5,ambient 冥想 world,全球,手碟泛音,空 悠 金属泛音,手部轻击 泛音延音,冥想氛围旋律,lead
+didgeridoo,bamboo,drones,厚 震 部落,2,7,原住民 世界音乐 氛围,澳洲,迪吉里杜持续低音,厚 震 木管,循环呼吸 持续低音,部落氛围低音,lead
+electric bass,bass,locks,弹 冲 律动,3,9,rock pop funk,全球,电贝斯根音律动,弹 亮 中频,指弹 拨片 滑音,低频与律动核心,support
+clavinet,keyboard,stabs,电 刺 放克,4,9,funk 放克 soul,全球,电翼琴放克剁音,电 刺 塑料感,剁音 切分,放克旋律与节奏,support
+cowbell,percussion,clacks,亮 金属 节奏,3,8,funk latin pop,拉丁,牛铃点缀,亮 金属 短促,击打 开合,节奏点缀,color
+Wurlitzer,keyboard,warms,暖 电 复古,2,7,neo-soul R&B jazz,全球,电钢琴Wurlitzer,暖 电 振动,颤音 揉弦,和声铺底,support
+congas,percussion,patterns,热 弹 拉丁,4,9,latin salsa 世界,拉丁,康加鼓手击,热 皮膜 弹,掌击 开放音,拉丁节奏核心,lead
+bongos,percussion,patterns,脆 快 手击,3,8,latin 拉丁 世界,拉丁,邦戈鼓小手鼓,脆 亮 皮膜,手指击打 滚奏,拉丁节奏点缀,lead
+timbales,percussion,patterns,亮 硬 舞曲,4,9,latin salsa 舞曲,拉丁,蒂姆巴尔鼓,亮 硬 金属,鼓棒击打 金属边击,拉丁节奏骨架,lead
+maracas,percussion,shakes,沙 脆 节奏,2,7,latin pop folk,拉丁,沙球,沙 脆 颗粒,摇奏,节奏细节层,color
+timpani,percussion,rolls,震 厚 史诗,3,9,orchestral cinematic,全球,定音鼓,震 厚 低频,鼓槌滚奏 强击,史诗节奏与低音,lead
+marimba,percussion,dances,暖 木 跳跃,2,7,cinematic pop jazz,全球,马林巴,暖 木 圆润,琴槌击打 滚奏,旋律与色彩,lead
+xylophone,percussion,clicks,亮 木 清脆,3,8,cartoon cinematic pop,全球,木琴,亮 脆 木,琴槌击打,高音点缀,lead
+tuba,brass,rumbles,沉 厚 低音,2,7,orchestral jazz 铜管,全球,大号,沉 厚 圆,低音连奏 顿音,铜管低音根基,support
+piccolo,woodwind,pierces,亮 尖 清脆,3,8,orchestral 军乐,全球,短笛,亮 尖 气息,连奏 吐音,高音点缀,color
+vocal choir,pad,swells,厚 圣 人声,2,8,cinematic gospel epic,全球,人声合唱垫,厚 暖 人声,齐唱 渐强,史诗铺底,support
+pedal steel,string,cries,柔 滑 乡村,2,7,country americana,北美,踏板钢棒吉他,柔 滑 金属,滑棒 踏板弯音,乡村旋律与滑音,lead
+morin khuur,string,soars,苍 亮 草原,2,7,蒙古 世界 国风,东亚,马头琴,苍 亮 双弦,长弓 滑音 泛音,草原旋律主奏,lead
+dombra,string,plucks,弹 亮 中亚,3,7,中亚 世界 融合,中亚,冬不拉,弹 亮 短促,拨奏 轮指,中亚旋律与节奏,lead
+hulusi,bamboo,floats,柔 甜 葫芦,2,6,云南 国风 民乐,东亚,葫芦丝,柔 甜 竹气,吐音 气震,云南旋律与色彩,lead
+yangqin,string,ripples,亮 密 流水,2,7,国风 民乐,东亚,扬琴,亮 密 金属,琴竹击打 滚奏,国风旋律与和声,lead
+synth arp,synth,ripples,电 密 律动,3,9,electronic synthwave,全球,琶音器,电 密 明亮,十六分琶音 滤波扫动,电子律动层,lead

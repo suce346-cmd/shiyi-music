@@ -1,0 +1,41 @@
+rule,scenario,value_min,value_max,unit,description
+weirdness,all,10,35,,随机度：值越低生成越保守贴合 Style 描述；10-25 稳定可控适合画面明确的歌；26-35 自由适合探索性创作；超过 35 可能失控偏离主题
+style_influence,all,70,95,,Style 引导度：越高 Style Prompt 权重越大越贴合描述；70-85 平衡推荐档；86-95 强引导（风格明确时用）；低于 70 风格描述会被弱化
+audio_influence,无参考音频,0,0,,无参考音频时必须为 0：否则 Suno 会尝试匹配不存在的音频导致生成漂移
+style_prompt_max_chars,all,0,350,字符,Style Prompt 上限 350 字符（含空格）：超过会被截断，信息块写完后必须自查长度
+min_energy_gap,创作,3,10,级,最弱段与最强段能量差至少 3 级（0-10 标尺）：差太小全曲平淡无对比；差太大段落割裂
+min_instrument_gap,all,2,9,件,最弱段与最强段配器件数差至少 2 件：保证编曲层次变化，避免整曲同一配器密度
+instrument_max,all,3,7,件,全曲核心乐器上限 7 件：超过听感拥挤 Suno 容易糊成一团；弱段 3 件起
+min_instrument_weak,all,2,,件,最弱段至少 2 件：仅 1 件完全单薄听感空洞
+min_instrument_strong,all,5,,件,最强段至少 5 件：少于 5 件撑不起高潮密度
+hook_min_count,抖音,2,,次,D 模式至少 2 个 Hook：抖音传播需要多点记忆
+verse_max_lines,抖音,0,4,行,抖音 Verse 上限 4 行：前奏短进副歌快
+line_max_chars,抖音,0,10,字,抖音每行不超过 10 字：短行易跟唱卡点清晰
+line_chars_verse,中文,6,13,字,普通模式 Verse 每行 6-13 字：太短信息量不足，太长难唱
+line_chars_chorus,中文,4,9,字,Chorus 4-9 字更短更易记：副歌短句加重复等于记忆点
+style_arc_dry,叙事,78,83,,标准叙事型 Style 引导度：配合 Weirdness 22-28 给足引导但留创作空间
+style_arc_high,high,85,90,,全程高能型引导度：最高档确保风格全程不跑偏
+style_arc_highlow,高开低走,70,80,,高开低走型引导度：中档让后段有自由变化空间
+style_arc_flat,平摊,80,90,,平摊氛围型引导度：偏高档氛围稳定不散
+style_arc_drama,起伏,75,82,,起伏戏剧型引导度：中高档保证戏剧转折不失控
+style_arc_stair,阶梯上升,78,88,,阶梯上升型引导度：每轮副歌递增结尾最强，引导中高保证递进不跑偏
+style_arc_buildup,渐进爆发,80,90,,渐进爆发型引导度：单次长 Build 后一击拉满，前段蓄力后段放开
+style_arc_u,U型,70,82,,U 型引导度：开头宣示中段沉底结尾崛起，中低档给低谷自由空间
+style_arc_singlepeak,单峰,75,85,,单峰型引导度：一次大起落峰后即收，中档平衡蓄力与峰值
+style_arc_loop,回环,78,85,,回环型引导度：首尾呼应回到原点，中高档保持动机统一
+hook_first,抖音,1,,,前 3 秒必须出现 Hook 或强钩子：抖音 3 秒完播率生死线
+stop_mark,抖音,1,,次,结尾骤停标记（骤停/all instruments cut）：抖音结尾留白制造循环播放冲动
+desc_line_max,抖音,0,80,字符,说明行不超过 80 字符：括号说明行超长会喧宾夺主
+no_full_band,all,0,,,禁 full band/all instruments 笼统写法：Suno 无法理解必须具体列乐器
+tag_list,all,1,,,结构标签用英文方括号（Verse/Chorus/Hook/Drop）：Suno 按标签识别段落结构
+line_break_rule,all,1,,,单空格等于弱停顿 换行等于强停顿：控制演唱呼吸点
+no_slash,all,0,,,歌词禁 / 与 、：Suno 不识别这些符号会唱坏
+mark_system,all,1,,,人声标记体系：*假声* ~滑音 …拖长 [spoken] (ooh~)：Suno 可识别的人声表现标记
+verse2_new,创作,1,,,Verse2 必须新增信息不重复：信息增量方向（后果/距离/新选择/时间推移/视角切换）
+imagery_unity,创作,1,,,意象家族统一：一个贯穿全曲的意象系统不混用多个
+anti_cliche,创作,1,,,套话必须具体化：参考金句库替代写法禁懒惰组合
+hook_protect,抖音,1,,,Hook 段强度不稀释：副歌出现后其他段落不能抢强度
+turn_point,创作,1,,,转折点位置与情绪级差明确：全曲弧线的杠杆点
+bpm_match,抖音,90,170,,抖音模式 BPM 90-170：对齐指令"BPM≥90"（90-109 可走叙事型结构），高速律动适配短视频节奏；低于 90 不够冲，高于 170 难以跟唱
+era_words,all,1,,,年代词增强风格识别（90s 2000s retro vintage）：Suno 对年代词敏感复古风格必加
+repeat_mark,all,1,,,括号重复标记 (x4)：Suno 支持括号数字重复钩子洗脑段用 (x2) 到 (x4)
