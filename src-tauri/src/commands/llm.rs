@@ -104,20 +104,30 @@ fn apply_thinking(body: &mut Value, model: &str, max_tokens: u32) {
     body["max_tokens"] = max_tokens.max(THINKING_MAX_TOKENS).into();
 }
 
-/// 从非流式响应中提取正文 content（纯函数，可测）。
-/// 缺失或空字符串都算"无正文"（思考模式下思维链吃满 max_tokens 时 content 可能为空）
-fn content_from_json(json: &Value) -> Option<String> {
-    let c = json["choices"][0]["message"]["content"].as_str()?;
-    if c.trim().is_empty() { None } else { Some(c.to_string()) }
+/// B4：截断判定——finish_reason == "length" 表示输出被 max_tokens 截断
+pub(crate) fn is_truncated(finish_reason: &Option<String>) -> bool {
+    finish_reason.as_deref() == Some("length")
 }
 
-/// 发送请求并解析正文 content；无正文返回 Err（供思考模式降级重试判断）
+/// 从非流式响应中提取（正文 content, finish_reason）（纯函数，可测）。
+/// content 缺失或空字符串都算"无正文"（思考模式下思维链吃满 max_tokens 时 content 可能为空）。
+/// B4：finish_reason 一并返回——"length"（截断）由调用方分级处置，不再静默丢弃。
+fn extract_message(json: &Value) -> Option<(String, Option<String>)> {
+    let c = json["choices"][0]["message"]["content"].as_str()?;
+    if c.trim().is_empty() { return None; }
+    Some((
+        c.to_string(),
+        json["choices"][0]["finish_reason"].as_str().map(String::from),
+    ))
+}
+
+/// 发送请求并解析正文；无正文返回 Err（供思考模式降级重试判断）
 async fn send_and_extract(
     client: &Client,
     url: &str,
     api_key: &str,
     body: &Value,
-) -> Result<String, String> {
+) -> Result<LLMResponse, String> {
     let resp = send_with_retry(
         client
             .post(url)
@@ -138,10 +148,13 @@ async fn send_and_extract(
         .json()
         .await
         .map_err(|e| format!("API response parse failed: {}", e))?;
-    content_from_json(&json).ok_or_else(|| "API response missing content".to_string())
+    let (raw, finish_reason) = extract_message(&json)
+        .ok_or_else(|| "API response missing content".to_string())?;
+    Ok(LLMResponse { raw, finish_reason })
 }
 
 /// 无流式的单次 LLM 调用（流水线步骤用，小 max_tokens）。
+/// 返回 LLMResponse（B4：含 finish_reason，供调用方做截断分级处置）。
 /// 思考模式下若响应无正文（思维链偶发吃满预算），自动降级为无思考重试一次，保证流水线不中断。
 pub(crate) async fn call_llm_silent(
     base_url: &str,
@@ -150,7 +163,7 @@ pub(crate) async fn call_llm_silent(
     messages: Vec<Value>,
     max_tokens: u32,
     thinking: bool,
-) -> Result<String, String> {
+) -> Result<LLMResponse, String> {
     let client = build_client(if thinking { 300 } else { 120 })?;
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let mut body = serde_json::json!({
@@ -164,7 +177,7 @@ pub(crate) async fn call_llm_silent(
         apply_thinking(&mut body, model, max_tokens);
     }
     match send_and_extract(&client, &url, &api_key, &body).await {
-        Ok(content) => Ok(content),
+        Ok(resp) => Ok(resp),
         Err(e) if thinking && e.contains("missing content") => {
             // 降级：去掉思考参数重试一次（同一 prompt 无思考直接输出，必有正文）
             eprintln!("[llm] 思考模式响应无正文，降级为无思考重试一次");
@@ -464,20 +477,35 @@ mod tests {
         assert_eq!(body2["max_tokens"], 20000);
     }
 
-    /// 正文提取：正常 content / 缺失 / 空字符串（思考模式思维链吃满预算）都要正确判定
+    /// B4：正文与 finish_reason 联合提取——正常 / 缺失 / 空字符串（思考模式思维链吃满预算）都要正确判定
     #[test]
-    fn content_from_json_handles_missing_and_empty() {
-        // 正常
-        let ok = serde_json::json!({"choices": [{"message": {"content": "方案内容"}}]});
-        assert_eq!(content_from_json(&ok).as_deref(), Some("方案内容"));
+    fn extract_message_handles_missing_and_empty() {
+        // 正常：content + finish_reason 一起返回
+        let ok = serde_json::json!({"choices": [{"message": {"content": "方案内容"}, "finish_reason": "stop"}]});
+        let (c, fr) = extract_message(&ok).unwrap();
+        assert_eq!(c, "方案内容");
+        assert_eq!(fr.as_deref(), Some("stop"));
+        // finish_reason 缺省也要容忍（部分网关不返回）
+        let no_fr = serde_json::json!({"choices": [{"message": {"content": "方案内容"}}]});
+        let (_, fr2) = extract_message(&no_fr).unwrap();
+        assert_eq!(fr2, None);
         // 缺失 content（思维链吃满预算时网关可能不返回 content）
         let missing = serde_json::json!({"choices": [{"message": {"reasoning_content": "思考..."}}]});
-        assert_eq!(content_from_json(&missing), None);
+        assert_eq!(extract_message(&missing), None);
         // content 为空字符串也算无正文
         let empty = serde_json::json!({"choices": [{"message": {"content": ""}}]});
-        assert_eq!(content_from_json(&empty), None);
+        assert_eq!(extract_message(&empty), None);
         let blank = serde_json::json!({"choices": [{"message": {"content": "   "}}]});
-        assert_eq!(content_from_json(&blank), None);
+        assert_eq!(extract_message(&blank), None);
+    }
+
+    /// B4：截断判定——只有 finish_reason == "length" 算截断（stop/缺失/其他值都不算）
+    #[test]
+    fn is_truncated_only_for_length() {
+        assert!(is_truncated(&Some("length".to_string())));
+        assert!(!is_truncated(&Some("stop".to_string())));
+        assert!(!is_truncated(&None));
+        assert!(!is_truncated(&Some("tool_calls".to_string())));
     }
 }
 

@@ -227,6 +227,10 @@ pub const INJECT_MAX_INSTRUMENTS_ROWS: usize = 15;
 pub const INJECT_MAX_FULL_ROWS: usize = 50;
 /// 单角色一次注入总字数封顶（超过告警；最坏情况 = 制作人三表全命中含 22 条规则子集 ≈ 4300 字）
 pub const INJECT_MAX_TOTAL_CHARS: usize = 4500;
+/// B4：审改/汇总输出被截断（finish_reason=length）时的提额重试上限——3000 太紧，6000 覆盖绝大多数修订 JSON
+const REVIEW_RETRY_MAX_TOKENS: u32 = 6000;
+/// B4：格式输出截断时注入打回循环的 issue 文案（走 AuditResult 事件，用户可见）
+const TRUNCATION_ISSUE: &str = "输出被截断（finish_reason=length），请精简内容后重新输出完整提示词包";
 
 /// 微观②：按需检索注入——按角色绑定表 + 列投影 + 当前方案关键词过滤，只注入命中条目。
 /// - emotions/cliches/hooks/style_genre：候选词（emotion/cliche/hook_type/genre 列值）命中 → 过滤注入
@@ -347,14 +351,44 @@ async fn execute_review<R: Runtime>(
 
     let (base_url, api_key, model) = resolve_api(req, role);
     let _ = app.emit("pipeline", PipelineEvent::StepStart { role });
-    let raw = llm::call_llm_silent(
+    let messages = vec![
+        json!({"role":"system","content":system}),
+        json!({"role":"user","content":user}),
+    ];
+    let mut resp = llm::call_llm_silent(
         &base_url, &api_key, &model,
-        vec![json!({"role":"system","content":system}), json!({"role":"user","content":user})],
+        messages.clone(),
         3000,
         req.thinking,
     )
     .await?;
-    let result = parse_review(&raw);
+    // B4：截断 → max_tokens 提额重试一次（多数截断是 3000 太紧，不是模型能力不足）
+    if llm::is_truncated(&resp.finish_reason) {
+        eprintln!("[pipeline] {} 审改输出被截断（finish_reason=length），max_tokens 提额重试", role.name());
+        resp = llm::call_llm_silent(
+            &base_url, &api_key, &model,
+            messages.clone(),
+            REVIEW_RETRY_MAX_TOKENS,
+            req.thinking,
+        )
+        .await?;
+    }
+    let mut result = parse_review(&resp.raw);
+    // B4：解析失败 → 同参数重试一次（LLM 输出有随机性，重试常能修复）；仍失败走 B10 降级警示
+    if result.degraded {
+        eprintln!("[pipeline] {} 审改输出无法解析，重试一次", role.name());
+        let resp2 = llm::call_llm_silent(
+            &base_url, &api_key, &model,
+            messages.clone(),
+            3000,
+            req.thinking,
+        )
+        .await?;
+        let result2 = parse_review(&resp2.raw);
+        if !result2.degraded {
+            result = result2;
+        }
+    }
     let _ = app.emit("pipeline", PipelineEvent::StepDone {
         role,
         summary: humanize_review(role, &result),
@@ -439,14 +473,44 @@ async fn execute_audit_review<R: Runtime>(
 
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Auditor);
     let _ = app.emit("pipeline", PipelineEvent::StepStart { role: PipelineRole::Auditor });
-    let raw = llm::call_llm_silent(
+    let messages = vec![
+        json!({"role":"system","content":system}),
+        json!({"role":"user","content":user}),
+    ];
+    let mut resp = llm::call_llm_silent(
         &base_url, &api_key, &model,
-        vec![json!({"role":"system","content":system}), json!({"role":"user","content":user})],
+        messages.clone(),
         3000,
         req.thinking,
     )
     .await?;
-    let result = parse_review(&raw);
+    // B4：截断 → 提额重试一次
+    if llm::is_truncated(&resp.finish_reason) {
+        eprintln!("[pipeline] 校验员审查输出被截断（finish_reason=length），max_tokens 提额重试");
+        resp = llm::call_llm_silent(
+            &base_url, &api_key, &model,
+            messages.clone(),
+            REVIEW_RETRY_MAX_TOKENS,
+            req.thinking,
+        )
+        .await?;
+    }
+    let mut result = parse_review(&resp.raw);
+    // B4：解析失败 → 重试一次；仍失败走 B10 降级警示
+    if result.degraded {
+        eprintln!("[pipeline] 校验员审查输出无法解析，重试一次");
+        let resp2 = llm::call_llm_silent(
+            &base_url, &api_key, &model,
+            messages.clone(),
+            3000,
+            req.thinking,
+        )
+        .await?;
+        let result2 = parse_review(&resp2.raw);
+        if !result2.degraded {
+            result = result2;
+        }
+    }
     let _ = app.emit("pipeline", PipelineEvent::StepDone {
         role: PipelineRole::Auditor,
         summary: humanize_review(PipelineRole::Auditor, &result),
@@ -474,6 +538,11 @@ async fn run_host_initial<R: Runtime>(app: &AppHandle<R>, req: &PipelineRequest)
         req.thinking,
     )
     .await?;
+    // B4：流式截断直接报错——半截方案绝不允许进入讨论轮（用户可见明确错误，可简化输入后重试）
+    if llm::is_truncated(&resp.finish_reason) {
+        eprintln!("[pipeline] 方案初稿输出被截断（finish_reason=length）");
+        return Err("方案初稿输出被截断（输出上限 8192 tokens），请简化输入后重试".to_string());
+    }
     let _ = app.emit("pipeline", PipelineEvent::HostDone { stage: HostStage::Initial });
     Ok(resp.raw)
 }
@@ -512,28 +581,47 @@ async fn run_host_summarize<R: Runtime>(
     let user = build_summarize_user_prompt(current_plan, round_changes);
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Host);
     let _ = app.emit("pipeline", PipelineEvent::HostStart { stage: HostStage::Summarize });
-    let raw = llm::call_llm_silent(
+    let messages = vec![
+        json!({"role":"system","content":host.system_prompt}),
+        json!({"role":"user","content":user}),
+    ];
+    let mut resp = llm::call_llm_silent(
         &base_url, &api_key, &model,
-        vec![json!({"role":"system","content":host.system_prompt}), json!({"role":"user","content":user})],
+        messages.clone(),
         3000,
         req.thinking,
     )
     .await?;
+    // B4：汇总截断 → 提额重试一次；仍截断则沿用（split_tasks 对无标记文本全文当方案，行为兼容）
+    if llm::is_truncated(&resp.finish_reason) {
+        eprintln!("[pipeline] 主持人汇总输出被截断（finish_reason=length），max_tokens 提额重试");
+        resp = llm::call_llm_silent(
+            &base_url, &api_key, &model,
+            messages.clone(),
+            REVIEW_RETRY_MAX_TOKENS,
+            req.thinking,
+        )
+        .await?;
+        if llm::is_truncated(&resp.finish_reason) {
+            eprintln!("[pipeline] 主持人汇总重试后仍被截断，按现状继续（下轮讨论可修正）");
+        }
+    }
     let _ = app.emit("pipeline", PipelineEvent::HostDone { stage: HostStage::Summarize });
-    Ok(split_tasks(&raw))
+    Ok(split_tasks(&resp.raw))
 }
 
 // ---------------------------------------------------------------------------
 // 校验员（阶段 2：最终格式输出端口）
 // ---------------------------------------------------------------------------
 
-/// 阶段 2：校验员按标准格式输出最终提示词包（硬校验失败打回重格式化）
+/// 阶段 2：校验员按标准格式输出最终提示词包（硬校验失败打回重格式化）。
+/// 返回（文本, 是否截断）——B4：截断由调用方注入打回 issue，不在本函数内重试（复用打回循环的次数上限）。
 async fn run_audit_format<R: Runtime>(
     app: &AppHandle<R>,
     current_plan: &str,
     issues: Option<&[String]>,
     req: &PipelineRequest,
-) -> Result<String, String> {
+) -> Result<(String, bool), String> {
     let _ = app.emit("pipeline", PipelineEvent::AuditStart);
     let auditor = roles::auditor();
     let kb = load_knowledge()?;
@@ -570,13 +658,14 @@ async fn run_audit_format<R: Runtime>(
         ));
     }
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Auditor);
-    llm::call_llm_silent(
+    let resp = llm::call_llm_silent(
         &base_url, &api_key, &model,
         vec![json!({"role":"system","content":system}), json!({"role":"user","content":user})],
         3000,
         req.thinking,
     )
-    .await
+    .await?;
+    Ok((resp.raw, llm::is_truncated(&resp.finish_reason)))
 }
 
 // ---------------------------------------------------------------------------
@@ -808,10 +897,14 @@ async fn run_pipeline_inner<R: Runtime>(app: AppHandle<R>, request: PipelineRequ
     }
 
     // ---- 阶段 2：校验员按标准格式输出最终提示词包（硬校验失败打回重格式化 ≤2 次）----
-    let mut final_text = run_audit_format(&app, &current_plan, None, &request).await?;
+    let (mut final_text, mut truncated) = run_audit_format(&app, &current_plan, None, &request).await?;
     let mut issues = Vec::new();
     for _ in 0..2 {
         issues = collect_hard_issues(mode, &final_text, request.extra.as_deref());
+        // B4：截断与格式问题同一打回通道——截断 issue 置顶，校验员按"精简后重输"处置
+        if truncated {
+            issues.insert(0, TRUNCATION_ISSUE.to_string());
+        }
         if issues.is_empty() {
             break;
         }
@@ -819,12 +912,18 @@ async fn run_pipeline_inner<R: Runtime>(app: AppHandle<R>, request: PipelineRequ
             role: PipelineRole::Auditor,
             reason: issues.join("；"),
         });
-        final_text = run_audit_format(&app, &current_plan, Some(&issues), &request).await?;
+        let (text, t) = run_audit_format(&app, &current_plan, Some(&issues), &request).await?;
+        final_text = text;
+        truncated = t;
     }
     // 最终校验：最后一次重格式化（如有）的输出必须重新校验——
     // 此前 issues 停留在上一次 collect，最后一次格式化的结果从未被校验（真 bug）
     if !issues.is_empty() {
         issues = collect_hard_issues(mode, &final_text, request.extra.as_deref());
+        // B4：末次输出的截断标志同样参与最终裁决
+        if truncated {
+            issues.insert(0, TRUNCATION_ISSUE.to_string());
+        }
     }
     let _ = app.emit("pipeline", PipelineEvent::AuditResult {
         pass: issues.is_empty(),
