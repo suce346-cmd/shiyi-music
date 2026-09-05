@@ -1,5 +1,8 @@
 import { useState } from "react";
-import { IconX, IconTrash, IconHistory, IconFileText, IconBrandTiktok, IconEdit, IconStars } from "@tabler/icons-react";
+import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
+import { writeTextFile } from "@tauri-apps/plugin-fs";
+import { IconX, IconTrash, IconHistory, IconFileText, IconBrandTiktok, IconEdit, IconStars, IconDownload } from "@tabler/icons-react";
 import type { HistoryEntry, Mode } from "../types";
 import { MODE_LABELS } from "../types";
 
@@ -12,6 +15,18 @@ interface Props {
   onClear: () => void;
   onSelect: (entry: HistoryEntry) => void;
   onClose: () => void;
+}
+
+/** F3：导出单条记录（后端拼文本 → dialog 选路径 → 写文件） */
+async function exportEntry(id: string, format: "txt" | "md"): Promise<string | null> {
+  const text = await invoke<string>("history_export_text", { id, format });
+  const filePath = await save({
+    defaultPath: `shiyi-${id.slice(0, 8)}.${format}`,
+    filters: [{ name: format === "md" ? "Markdown" : "Text", extensions: [format] }],
+  });
+  if (!filePath) return null; // 用户取消
+  await writeTextFile(filePath, text);
+  return filePath;
 }
 
 const modeIcon: Record<Mode, typeof IconFileText> = { mode_a: IconFileText, mode_b: IconStars, mode_c: IconEdit, mode_d: IconBrandTiktok };
@@ -31,6 +46,26 @@ function outputSummary(entry: HistoryEntry): string {
 
 export default function HistoryPanel({ entries, allEntriesCount, filter, onFilterChange, onDelete, onClear, onSelect, onClose }: Props) {
   const [confirmClear, setConfirmClear] = useState(false);
+  /** F3：导出中 id（按钮 loading 态）/ 导出结果提示 */
+  const [exportingId, setExportingId] = useState<string | null>(null);
+  const [exportMsg, setExportMsg] = useState("");
+
+  const handleExport = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    if (exportingId) return;
+    setExportingId(id);
+    setExportMsg("");
+    try {
+      // 默认导出 md（对话结构保留最好）；用户要 txt 可二次保存时改后缀
+      const p = await exportEntry(id, "md");
+      setExportMsg(p ? `已导出：${p}` : "");
+    } catch (err) {
+      setExportMsg(`导出失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setExportingId(null);
+      setTimeout(() => setExportMsg(""), 4000);
+    }
+  };
 
   return (
     <div className="fixed inset-0 oklch(0.50 0.02 55 / 0.35) backdrop-blur-md z-50 flex items-start justify-center pt-20
@@ -70,6 +105,12 @@ export default function HistoryPanel({ entries, allEntriesCount, filter, onFilte
             </button>
           ))}
         </div>
+        {/* F3：导出结果提示 */}
+        {exportMsg && (
+          <div className="px-4 py-1.5 border-b border-border/50 text-[10px] text-text-muted truncate">
+            {exportMsg}
+          </div>
+        )}
 
         <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
           {entries.length === 0 && (
@@ -101,11 +142,19 @@ export default function HistoryPanel({ entries, allEntriesCount, filter, onFilte
                     <p className="text-[11px] text-text-muted truncate">{outputSummary(entry)}</p>
                   )}
                 </div>
-                <button onClick={(e) => { e.stopPropagation(); onDelete(entry.id); }}
-                  className="p-1 rounded-md text-text-muted opacity-0 group-hover:opacity-100
-                             hover:text-danger hover:bg-danger/8 transition-all duration-150">
-                  <IconX size={13} />
-                </button>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button onClick={(e) => handleExport(e, entry.id)}
+                    title="导出为 Markdown 文件"
+                    className="p-1 rounded-md text-text-muted opacity-0 group-hover:opacity-100
+                               hover:text-brand-400 hover:bg-brand-500/10 transition-all duration-150 disabled:opacity-50">
+                    <IconDownload size={13} className={exportingId === entry.id ? "animate-pulse" : ""} />
+                  </button>
+                  <button onClick={(e) => { e.stopPropagation(); onDelete(entry.id); }}
+                    className="p-1 rounded-md text-text-muted opacity-0 group-hover:opacity-100
+                               hover:text-danger hover:bg-danger/8 transition-all duration-150">
+                    <IconX size={13} />
+                  </button>
+                </div>
               </div>
             );
           })}

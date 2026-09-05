@@ -25,26 +25,12 @@ const ROLE_EMOJIS: Record<PipelineRoleKey, string> = {
 };
 
 const HISTORY_KEY = "suno-prompt-history";
+/** F3：历史迁移标记（localStorage → 文件一次性迁移） */
+const HISTORY_MIGRATED_KEY = "suno-prompt-history-migrated";
 
-function loadHistory(): HistoryEntry[] {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
-    // 损坏数据防御：非数组（旧版写入 {}/null）直接丢弃，防渲染白屏
-    return Array.isArray(parsed) ? parsed : [];
-  } catch { return []; }
-}
-function saveHistory(entries: HistoryEntry[]) {
-  // M9：配额超限时降级（丢弃 conversation 只存输入/输出），失败不阻断生成流程
-  try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(entries));
-  } catch {
-    try {
-      const slim = entries.map(({ conversation: _c, ...rest }) => rest);
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(slim));
-    } catch {
-      // 持久化失败：静默放弃（生成流程不受影响）
-    }
-  }
+/** F3：文件持久化写回（防抖由调用方控制；失败透出由调用方展示，不阻断生成） */
+async function saveHistoryFile(entries: HistoryEntry[]): Promise<void> {
+  await invoke("history_save", { entries });
 }
 function newId() {
   // 低版本 WebKitGTK 可能缺失 randomUUID（低危修复）
@@ -59,9 +45,19 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState("");
   const [lastUserInput, setLastUserInput] = useState("");
   const [conversation, setConversation] = useState<ChatTurn[]>([]);
-  const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>(loadHistory);
+  // F3：历史改走文件存储——初始空，启动 useEffect 从 history_load 回填 + 迁移旧 localStorage
+  const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>([]);
   const historyRef = useRef(historyEntries);
   historyRef.current = historyEntries;
+  /** F3：写入防抖 timer（500ms 合并连续写入） */
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** F3：计划持久化（防抖写文件；失败静默，生成流程不受影响） */
+  const scheduleSave = useCallback((entries: HistoryEntry[]) => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      saveHistoryFile(entries).catch(() => { /* 持久化失败静默（与旧 M9 语义一致） */ });
+    }, 500);
+  }, []);
   const chatHistoryRef = useRef<ChatMessage[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [historyView, setHistoryView] = useState<HistoryEntry | null>(null);
@@ -132,6 +128,39 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
+  // F3：启动回填 + 一次性迁移（localStorage → 文件）
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      let migrated: HistoryEntry[] | null = null;
+      // 1. 迁移：旧 localStorage 有非空历史且未迁移过 → 先写文件
+      try {
+        if (!localStorage.getItem(HISTORY_MIGRATED_KEY)) {
+          const raw = localStorage.getItem(HISTORY_KEY);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              await invoke("history_save", { entries: parsed });
+            }
+          }
+          try { localStorage.removeItem(HISTORY_KEY); } catch { /* 忽略 */ }
+          try { localStorage.setItem(HISTORY_MIGRATED_KEY, "1"); } catch { /* 忽略 */ }
+        }
+      } catch { /* 迁移失败不阻断（下次启动 localStorage 已清则跳过） */ }
+      // 2. 回填：文件 → 内存（损坏数据防御保留：非数组直接丢弃）
+      try {
+        const entries = await invoke<HistoryEntry[]>("history_load", {});
+        if (!cancelled && Array.isArray(entries)) {
+          migrated = entries;
+        }
+      } catch { /* 读取失败保持空 */ }
+      if (!cancelled && migrated) {
+        setHistoryEntries(migrated);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   /** 全局测试连接：走 Rust 命令（绕过 WebView CORS，前端 fetch 跨域会被拦） */
   const handleTestApi = useCallback(async () => {
     setTestingApi(true); setTestResult(null);
@@ -189,14 +218,14 @@ export default function App() {
   const saveToHistory = useCallback((input: string, output: string, conv: ChatTurn[], currentMode: Mode, usage?: { prompt_tokens: number; completion_tokens: number }) => {
     const entry: HistoryEntry = { id: newId(), mode: currentMode, input, output, conversation: conv, usage, timestamp: Date.now() };
     const updated = [entry, ...historyRef.current];
-    setHistoryEntries(updated); saveHistory(updated);
+    setHistoryEntries(updated); scheduleSave(updated);
   }, []);
 
   const updateHistoryEntry = useCallback((id: string, output: string, conv: ChatTurn[], usage?: { prompt_tokens: number; completion_tokens: number }) => {
     const updated = historyRef.current.map(e =>
       e.id === id ? { ...e, output, conversation: conv, usage: usage ?? e.usage, timestamp: Date.now() } : e
     );
-    setHistoryEntries(updated); saveHistory(updated);
+    setHistoryEntries(updated); scheduleSave(updated);
   }, []);
 
   const handleGenerate = useCallback(async (userInput: string, extra?: { originalLyrics: string }) => {
@@ -247,7 +276,7 @@ export default function App() {
       const entry: HistoryEntry = { id: newId(), mode, input: displayInput, output: raw, conversation: allTurns, usage: { ...pipeline.usage }, timestamp: Date.now() };
       setCurrentHistoryId(entry.id);
       const updated = [entry, ...historyRef.current];
-      setHistoryEntries(updated); saveHistory(updated);
+      setHistoryEntries(updated); scheduleSave(updated);
     } catch (e) {
       if (token !== runTokenRef.current) return; // 过期 run 的错误丢弃（H4）
       setStatus("error"); setErrorMessage(errText(e));
@@ -337,8 +366,8 @@ export default function App() {
     }
   }, [status, lastFeedback, lastUserInput, handleRefine, handleGenerate, mode]);
 
-  const deleteHistory = (id: string) => { const u = historyEntries.filter(e => e.id !== id); setHistoryEntries(u); saveHistory(u); };
-  const clearHistory = () => { setHistoryEntries([]); saveHistory([]); };
+  const deleteHistory = (id: string) => { const u = historyEntries.filter(e => e.id !== id); setHistoryEntries(u); scheduleSave(u); };
+  const clearHistory = () => { setHistoryEntries([]); scheduleSave([]); };
   const selectHistory = (entry: HistoryEntry) => { setHistoryView(entry); setShowHistory(false); };
 
   const filteredHistory = historyFilter === "all" ? historyEntries : historyEntries.filter(e => e.mode === historyFilter);
