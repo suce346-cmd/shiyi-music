@@ -5,3 +5,4 @@ pub mod orchestrator;
 pub mod validator;
 pub mod cancel;
 pub mod keychain;
+pub mod history;
