@@ -3,6 +3,8 @@ name: Build and Release
 on:
   push:
     branches: [main]
+    # F6一步：v* tag 推送触发 Release 构建（与 main 分支构建共用 test 门禁 + build 矩阵）
+    tags: ["v*"]
   workflow_dispatch:
 
 jobs:
@@ -101,3 +103,26 @@ jobs:
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/
             src-tauri/target/release/bundle/
+
+  # F6一步：tag 推送时把三平台产物汇总发布到 GitHub Release（draft 由维护者手动发布）
+  # F6决策（2026-09-06）：不买 Apple 账号（无签名/notarization）、Windows EV 后置、
+  # 先验证 Release 流程本身。updater 运行时（需签名密钥）暂不接入。
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: ./artifacts
+          merge-multiple: true
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: ./artifacts/**/*
