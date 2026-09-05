@@ -272,6 +272,19 @@ export default function App() {
     }
   }, []);
 
+  /** A10：配置目录按钮文案（同日志按钮模式） */
+  const [configDirMsg, setConfigDirMsg] = useState("");
+  const handleOpenConfigDir = useCallback(async () => {
+    try {
+      const dir = await invoke<string>("open_config_dir", {});
+      setConfigDirMsg(`已打开：${dir}`);
+    } catch (e) {
+      setConfigDirMsg(`打开失败：${errText(e)}`);
+    } finally {
+      setTimeout(() => setConfigDirMsg(""), 4000);
+    }
+  }, []);
+
   // 配置变更后旧测试徽标失效（✓/✗ 与当前配置不符）——settings 任何字段变化都重置
   useEffect(() => {
     setRoleTestStates({});
@@ -648,6 +661,13 @@ export default function App() {
                        bg-surface-2/60 hover:bg-surface-3/80 border border-border/40
                        transition-all duration-150 active:scale-[0.98]">
             {logDirMsg || t(settings.language, "settings.logdir")}
+          </button>
+          {/* A10：打开配置目录（prompt/知识库覆盖文件投放处） */}
+          <button onClick={handleOpenConfigDir}
+            className="w-full py-1.5 rounded-lg text-[11px] text-text-muted hover:text-text-2
+                       bg-surface-2/60 hover:bg-surface-3/80 border border-border/40
+                       transition-all duration-150 active:scale-[0.98]">
+            {configDirMsg || t(settings.language, "settings.configdir")}
           </button>
 
           {/* 角色级 API 覆盖（可选）：不配置 = 所有角色共用全局；配置了生效单独 */}
