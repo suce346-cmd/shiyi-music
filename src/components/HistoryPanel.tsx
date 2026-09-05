@@ -3,8 +3,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { IconX, IconTrash, IconHistory, IconFileText, IconBrandTiktok, IconEdit, IconStars, IconDownload } from "@tabler/icons-react";
-import type { HistoryEntry, Mode } from "../types";
+import type { HistoryEntry, Mode, Locale } from "../types";
 import { MODE_LABELS } from "../types";
+import { t } from "../i18n";
 
 interface Props {
   entries: HistoryEntry[];
@@ -15,6 +16,8 @@ interface Props {
   onClear: () => void;
   onSelect: (entry: HistoryEntry) => void;
   onClose: () => void;
+  /** F8：界面语言（缺省中文） */
+  locale?: Locale;
 }
 
 /** F3：导出单条记录（后端拼文本 → dialog 选路径 → 写文件） */
@@ -45,7 +48,7 @@ export function outputSummary(entry: HistoryEntry): string {
   return text.length > 60 ? text.slice(0, 60) + "..." : text;
 }
 
-export default function HistoryPanel({ entries, allEntriesCount, filter, onFilterChange, onDelete, onClear, onSelect, onClose }: Props) {
+export default function HistoryPanel({ entries, allEntriesCount, filter, onFilterChange, onDelete, onClear, onSelect, onClose, locale }: Props) {
   const [confirmClear, setConfirmClear] = useState(false);
   /** F3：导出中 id（按钮 loading 态）/ 导出结果提示 */
   const [exportingId, setExportingId] = useState<string | null>(null);
@@ -76,7 +79,7 @@ export default function HistoryPanel({ entries, allEntriesCount, filter, onFilte
         <div className="flex items-center justify-between px-4 py-3 border-b border-border/50">
           <div className="flex items-center gap-2">
             <IconHistory size={16} className="text-brand-400" />
-            <h2 className="text-[13px] font-semibold text-text-1">历史记录</h2>
+            <h2 className="text-[13px] font-semibold text-text-1">{t(locale, "history.title")}</h2>
             <span className="text-[11px] text-text-muted">({allEntriesCount})</span>
           </div>
           <div className="flex items-center gap-1">
@@ -85,7 +88,7 @@ export default function HistoryPanel({ entries, allEntriesCount, filter, onFilte
                 className="text-[11px] text-text-muted hover:text-danger px-2 py-1 rounded-lg
                            hover:bg-danger/8 transition-colors duration-150">
                 <IconTrash size={13} className="inline mr-0.5" />
-                {confirmClear ? "确认?" : "清空"}
+                {confirmClear ? t(locale, "history.confirm") : t(locale, "history.clear")}
               </button>
             )}
             <button onClick={onClose}
@@ -117,7 +120,7 @@ export default function HistoryPanel({ entries, allEntriesCount, filter, onFilte
           {entries.length === 0 && (
             <div className="flex flex-col items-center justify-center py-10 text-text-muted">
               <IconHistory size={28} className="opacity-30 mb-2" />
-              <p className="text-[12px]">{filter === "all" ? "暂无记录" : "该模式下暂无记录"}</p>
+              <p className="text-[12px]">{t(locale, "history.empty")}</p>
             </div>
           )}
           {entries.map((entry) => {

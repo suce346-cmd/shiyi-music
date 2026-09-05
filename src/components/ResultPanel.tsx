@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { IconCopy, IconCheck, IconRefresh, IconChevronDown } from "@tabler/icons-react";
-import type { ChatTurn, LLMStatus, Mode } from "../types";
+import type { ChatTurn, LLMStatus, Mode, Locale } from "../types";
+import { t } from "../i18n";
 import { estimateRefineTargets, REFINE_TARGET_NAMES } from "../utils/refineTargets";
 
 interface Props {
@@ -12,6 +13,8 @@ interface Props {
   readOnly?: boolean;
   /** F1：预估展示用（当前模式；缺省不展示预估） */
   mode?: Mode;
+  /** F8：界面语言（缺省中文） */
+  locale?: Locale;
 }
 
 interface EnergySection {
@@ -79,7 +82,7 @@ function EnergyBars({ sections }: { sections: EnergySection[] }) {
   );
 }
 
-export default function ResultPanel({ conversation, streamText, status, onRefine, readOnly, mode }: Props) {
+export default function ResultPanel({ conversation, streamText, status, onRefine, readOnly, mode, locale }: Props) {
   const [copied, setCopied] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [showRefine, setShowRefine] = useState(false);
@@ -180,13 +183,13 @@ export default function ResultPanel({ conversation, streamText, status, onRefine
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] text-text-2
               bg-surface-2/60 hover:bg-surface-3/80 border border-border/30 transition-all duration-150 active:scale-95">
             {copied ? <IconCheck size={13} className="text-success" /> : <IconCopy size={13} />}
-            {copied ? "已复制" : "复制"}
+            {copied ? t(locale, "result.copied") : t(locale, "result.copy")}
           </button>
           <button onClick={() => setShowRefine(!showRefine)}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] text-text-2
               bg-surface-2/60 hover:bg-surface-3/80 border border-border/30 transition-all duration-150 active:scale-95">
             <IconRefresh size={13} />
-            优化
+            {t(locale, "result.refine")}
             <IconChevronDown size={12} className={`transition-transform duration-150 ${showRefine ? "rotate-180" : ""}`} />
           </button>
         </div>
@@ -198,7 +201,7 @@ export default function ResultPanel({ conversation, streamText, status, onRefine
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] text-text-2
               bg-surface-2/60 hover:bg-surface-3/80 border border-border/30 transition-all duration-150 active:scale-95">
             {copied ? <IconCheck size={13} className="text-success" /> : <IconCopy size={13} />}
-            {copied ? "已复制" : "复制"}
+            {copied ? t(locale, "result.copied") : t(locale, "result.copy")}
           </button>
         </div>
       )}
@@ -219,7 +222,7 @@ export default function ResultPanel({ conversation, streamText, status, onRefine
                     ? "bg-brand-500/15 border-brand-500/40 text-brand-400"
                     : "bg-surface-2/60 border-border/40 text-text-muted hover:text-text-2"
                 }`}>
-                {m === "fast" ? "快速优化" : "深度重做"}
+                {m === "fast" ? t(locale, "result.refine.fast") : t(locale, "result.refine.full")}
               </button>
             ))}
           </div>
@@ -237,7 +240,7 @@ export default function ResultPanel({ conversation, streamText, status, onRefine
               disabled:opacity-40 disabled:cursor-not-allowed
               transition-all duration-150 active:scale-[0.98]">
             <IconRefresh size={14} className="inline mr-1.5 -mt-0.5" />
-            {refineMode === "fast" ? "快速优化" : "重新生成"}
+            {refineMode === "fast" ? t(locale, "result.refine.fast") : t(locale, "result.refine.send")}
           </button>
         </div>
       )}

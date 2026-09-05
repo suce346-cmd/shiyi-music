@@ -1,7 +1,11 @@
 import { Component, type ReactNode } from "react";
+import type { Locale } from "../types";
+import { t } from "../i18n";
 
 interface Props {
   children: ReactNode;
+  /** F8：界面语言（缺省中文；类组件经 props 透传） */
+  locale?: Locale;
 }
 
 interface State {
@@ -26,7 +30,7 @@ export default class ErrorBoundary extends Component<Props, State> {
     if (this.state.hasError) {
       return (
         <div className="h-screen flex flex-col items-center justify-center gap-3 bg-surface-0 text-text-1">
-          <div className="text-[15px] font-medium">界面渲染出错了</div>
+          <div className="text-[15px] font-medium">{t(this.props.locale, "error.title")}</div>
           <div className="text-[12px] text-text-muted max-w-md text-center break-all px-6">
             {this.state.message}
           </div>
@@ -34,7 +38,7 @@ export default class ErrorBoundary extends Component<Props, State> {
             onClick={this.handleReload}
             className="mt-1 px-4 py-2 rounded-lg text-[12px] bg-surface-2 hover:bg-surface-3 border border-border/50 text-text-2 transition-colors"
           >
-            重新加载
+            {t(this.props.locale, "error.reload")}
           </button>
         </div>
       );

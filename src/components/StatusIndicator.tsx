@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { IconLoader, IconCheck, IconAlertTriangle, IconRefresh, IconMessagePlus } from "@tabler/icons-react";
-import type { LLMStatus } from "../types";
+import type { LLMStatus, Locale } from "../types";
 import { errText } from "../types";
+import { t } from "../i18n";
 
 interface Props {
   status: LLMStatus;
@@ -12,17 +13,28 @@ interface Props {
   onCancel?: () => void;
   /** A9：当前 run_id 读取（插话命令定向用） */
   getRunId?: () => string;
+  /** F8：界面语言（缺省中文） */
+  locale?: Locale;
 }
 
-const config: Record<LLMStatus, { text: string; icon: typeof IconLoader; color: string; bg: string }> = {
-  idle: { text: "", icon: IconLoader, color: "", bg: "" },
-  loading: { text: "连接中...", icon: IconLoader, color: "text-brand-400", bg: "bg-brand-500/8" },
-  streaming: { text: "接收中...", icon: IconLoader, color: "text-brand-400", bg: "bg-brand-500/8" },
-  done: { text: "完成", icon: IconCheck, color: "text-success", bg: "bg-success/8" },
-  error: { text: "出错", icon: IconAlertTriangle, color: "text-danger", bg: "bg-danger/8" },
+/** F8：状态文案 key（locale 运行时解析） */
+const STATUS_TEXT_KEY: Record<LLMStatus, string> = {
+  idle: "",
+  loading: "status.connecting",
+  streaming: "status.streaming",
+  done: "status.done",
+  error: "status.error",
 };
 
-export default function StatusIndicator({ status, errorMessage, onRetry, onCancel, getRunId }: Props) {
+const config: Record<LLMStatus, { icon: typeof IconLoader; color: string; bg: string }> = {
+  idle: { icon: IconLoader, color: "", bg: "" },
+  loading: { icon: IconLoader, color: "text-brand-400", bg: "bg-brand-500/8" },
+  streaming: { icon: IconLoader, color: "text-brand-400", bg: "bg-brand-500/8" },
+  done: { icon: IconCheck, color: "text-success", bg: "bg-success/8" },
+  error: { icon: IconAlertTriangle, color: "text-danger", bg: "bg-danger/8" },
+};
+
+export default function StatusIndicator({ status, errorMessage, onRetry, onCancel, getRunId, locale }: Props) {
   /** F10：插话输入展开态 + 发送中 + 结果提示 */
   const [showInterject, setShowInterject] = useState(false);
   const [note, setNote] = useState("");
@@ -42,9 +54,9 @@ export default function StatusIndicator({ status, errorMessage, onRetry, onCance
       await invoke("interject_feedback", { runId: getRunId?.() ?? "", note: text });
       setNote("");
       setShowInterject(false);
-      setMsg("已送达，将在下一轮讨论中纳入");
+      setMsg(t(locale, "interject.sent"));
     } catch (e) {
-      setMsg(`发送失败：${errText(e)}`);
+      setMsg(`${t(locale, "interject.fail")}${errText(e)}`);
     } finally {
       setSending(false);
       setTimeout(() => setMsg(""), 4000);
@@ -57,7 +69,7 @@ export default function StatusIndicator({ status, errorMessage, onRetry, onCance
     <div className={`mx-4 mt-3 px-3 py-2 rounded-xl glass-panel border border-border/30 ${c.bg} ${c.color} text-[13px]`}>
       <div className="flex items-center gap-2">
         <Icon size={14} className={running ? "animate-spin" : ""} />
-        <span className="font-medium">{c.text}</span>
+        <span className="font-medium">{STATUS_TEXT_KEY[status] ? t(locale, STATUS_TEXT_KEY[status]) : ""}</span>
         {status === "error" && errorMessage && (
           <span className="text-[11px] opacity-70 truncate flex-1">{errorMessage}</span>
         )}
@@ -67,7 +79,7 @@ export default function StatusIndicator({ status, errorMessage, onRetry, onCance
                        bg-danger/10 hover:bg-danger/20 border border-danger/20
                        transition-all duration-150 active:scale-95 shrink-0">
             <IconRefresh size={12} />
-            重试
+            {t(locale, "status.retry")}
           </button>
         )}
         {onCancel && running && (
@@ -75,7 +87,7 @@ export default function StatusIndicator({ status, errorMessage, onRetry, onCance
             className="flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-medium
                        bg-surface-3 hover:bg-border border border-border/50 text-text-2
                        transition-all duration-150 active:scale-95 shrink-0">
-            停止
+            {t(locale, "status.stop")}
           </button>
         )}
         {/* F10：运行中插入意见（非阻塞，轮边界消费） */}
@@ -85,7 +97,7 @@ export default function StatusIndicator({ status, errorMessage, onRetry, onCance
                        bg-brand-500/10 hover:bg-brand-500/20 border border-brand-500/30 text-brand-400
                        transition-all duration-150 active:scale-95 shrink-0">
             <IconMessagePlus size={12} />
-            插话
+            {t(locale, "status.interject")}
           </button>
         )}
         {running && (
@@ -100,7 +112,7 @@ export default function StatusIndicator({ status, errorMessage, onRetry, onCance
         <div className="mt-2 flex gap-1.5">
           <input value={note} onChange={e => setNote(e.target.value)}
             onKeyDown={e => { if (e.key === "Enter" && !e.nativeEvent.isComposing) sendInterject(); }}
-            placeholder="比如：副歌再炸一点…（下一轮讨论纳入，不中断当前）"
+            placeholder={t(locale, "interject.ph")}
             disabled={sending}
             className="flex-1 bg-surface-0 border border-border/60 rounded-lg px-2.5 py-1.5 text-[12px]
                        text-text-1 placeholder:text-text-muted/30 focus:outline-none
@@ -108,7 +120,7 @@ export default function StatusIndicator({ status, errorMessage, onRetry, onCance
           <button onClick={sendInterject} disabled={!note.trim() || sending}
             className="px-2.5 py-1.5 rounded-lg text-[12px] font-medium brand-gradient-btn text-white
                        disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-150 active:scale-95 shrink-0">
-            {sending ? <IconLoader size={12} className="animate-spin" /> : "发送"}
+            {sending ? <IconLoader size={12} className="animate-spin" /> : t(locale, "interject.send")}
           </button>
         </div>
       )}

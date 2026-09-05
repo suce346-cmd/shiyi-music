@@ -2,20 +2,23 @@ import { useState, useRef, useEffect } from "react";
 import { IconSend, IconSparkles, IconEdit } from "@tabler/icons-react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { readTextFile } from "@tauri-apps/plugin-fs";
-import type { Mode, AppSettings } from "../types";
+import type { Mode, AppSettings, Locale } from "../types";
+import { t } from "../i18n";
 import { isSubmitHotkey, isImportableFile } from "../utils/hotkeys";
 
 interface Props {
   mode: Mode;
   disabled: boolean;
   settings: AppSettings;
+  /** F8：界面语言（缺省中文） */
+  locale?: Locale;
   /** F12：mode_c 时附带原歌词独立字段（不再拼字符串） */
   onGenerate: (userInput: string, extra?: { originalLyrics: string }) => void;
   /** F14：Cmd/Ctrl+K 聚焦时由 App 层调用 */
   inputRef?: React.RefObject<HTMLTextAreaElement | null>;
 }
 
-export default function InputPanel({ mode, disabled, settings, onGenerate, inputRef }: Props) {
+export default function InputPanel({ mode, disabled, settings, onGenerate, inputRef, locale }: Props) {
   const [lyrics, setLyrics] = useState("");
   const [inspiration, setInspiration] = useState("");
   const [originalLyrics, setOriginalLyrics] = useState("");
@@ -81,14 +84,14 @@ export default function InputPanel({ mode, disabled, settings, onGenerate, input
       if (path && isImportableFile(path)) {
         fillMain(await readTextFile(path));
       } else if (path) {
-        setDropMsg("仅支持 .txt / .lrc 文件");
+        setDropMsg(t(locale, "input.drop.only"));
       } else if (isImportableFile(f.name)) {
         fillMain(await f.text());
       } else {
-        setDropMsg("仅支持 .txt / .lrc 文件");
+        setDropMsg(t(locale, "input.drop.only"));
       }
     } catch {
-      setDropMsg("文件读取失败");
+      setDropMsg(t(locale, "input.drop.fail"));
     } finally {
       setTimeout(() => setDropMsg(""), 3000);
     }
@@ -114,7 +117,7 @@ export default function InputPanel({ mode, disabled, settings, onGenerate, input
               .then(fillMain)
               .catch(() => setDropMsg("文件读取失败"));
           } else {
-            setDropMsg("仅支持 .txt / .lrc 文件");
+            setDropMsg(t(locale, "input.drop.only"));
             setTimeout(() => setDropMsg(""), 3000);
           }
         }
@@ -132,37 +135,37 @@ export default function InputPanel({ mode, disabled, settings, onGenerate, input
     <div className="space-y-3" onDrop={handleDrop} onDragOver={(e) => e.preventDefault()}>
       {mode === "mode_a" && (
         <div>
-          <label className={labelClass}><IconSparkles size={13} /> 歌词</label>
+          <label className={labelClass}><IconSparkles size={13} /> {t(locale, "input.lyrics")}</label>
           <textarea ref={mainRef} value={lyrics} onChange={e => setLyrics(e.target.value)}
             onKeyDown={handleKeyDown}
-            className={`${inputClass} h-32`} placeholder="粘贴歌词文本...（⌘/Ctrl+Enter 提交，可拖入 .txt/.lrc）" disabled={disabled} />
+            className={`${inputClass} h-32`} placeholder={`${t(locale, "input.ph.lyrics")}${t(locale, "input.ph.suffix.submit")}，${t(locale, "input.ph.suffix.drop")}`} disabled={disabled} />
         </div>
       )}
 
       {mode === "mode_c" && (
         <>
           <div>
-            <label className={labelClass}><IconEdit size={13} /> 原歌词</label>
+            <label className={labelClass}><IconEdit size={13} /> {t(locale, "input.original")}</label>
             <textarea value={originalLyrics} onChange={e => setOriginalLyrics(e.target.value)}
               onKeyDown={handleKeyDown}
-              className={`${inputClass} h-24`} placeholder="粘贴原歌词...（可拖入 .txt/.lrc）" disabled={disabled} />
+              className={`${inputClass} h-24`} placeholder={`${t(locale, "input.ph.original")}（${t(locale, "input.ph.suffix.drop")}`} disabled={disabled} />
           </div>
           <div>
-            <label className={labelClass}><IconSparkles size={13} /> 新主题 / 故事</label>
+            <label className={labelClass}><IconSparkles size={13} /> {t(locale, "input.theme")}</label>
             <textarea ref={mainRef} value={newTheme} onChange={e => setNewTheme(e.target.value)}
               onKeyDown={handleKeyDown}
-              className={`${inputClass} h-20`} placeholder="比如：北漂青年过年回家的故事...（⌘/Ctrl+Enter 提交）" disabled={disabled} />
+              className={`${inputClass} h-20`} placeholder={`${t(locale, "input.ph.theme")}${t(locale, "input.ph.suffix.submit")}）`} disabled={disabled} />
           </div>
         </>
       )}
 
       {(mode === "mode_b" || mode === "mode_d") && (
         <div>
-          <label className={labelClass}><IconSparkles size={13} /> {mode === "mode_b" ? "灵感 / 话题 / 情绪 / 故事" : "灵感 / 话题 / 梗"}</label>
+          <label className={labelClass}><IconSparkles size={13} /> {mode === "mode_b" ? t(locale, "input.inspiration.b") : t(locale, "input.inspiration.d")}</label>
           <textarea ref={mainRef} value={inspiration} onChange={e => setInspiration(e.target.value)}
             onKeyDown={handleKeyDown}
             className={`${inputClass} h-24`} disabled={disabled}
-            placeholder={mode === "mode_b" ? "比如：异乡过年，看烟花想起故乡...（⌘/Ctrl+Enter 提交，可拖入 .txt/.lrc）" : "比如：踩到香蕉皮摔倒的尴尬瞬间...（⌘/Ctrl+Enter 提交，可拖入 .txt/.lrc）"} />
+            placeholder={mode === "mode_b" ? `${t(locale, "input.ph.inspiration.b")}${t(locale, "input.ph.suffix.submit")}，${t(locale, "input.ph.suffix.drop")}` : `${t(locale, "input.ph.inspiration.d")}${t(locale, "input.ph.suffix.submit")}，${t(locale, "input.ph.suffix.drop")}`} />
         </div>
       )}
 
@@ -176,7 +179,7 @@ export default function InputPanel({ mode, disabled, settings, onGenerate, input
                    disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none
                    transition-all duration-150">
         <IconSend size={15} />
-        {disabled ? "生成中..." : "生成"}
+        {disabled ? t(locale, "input.generating") : t(locale, "input.generate")}
       </button>
     </div>
   );

@@ -1,22 +1,25 @@
 import { IconFileText, IconBrandTiktok, IconEdit, IconStars } from "@tabler/icons-react";
-import type { Mode } from "../types";
+import type { Mode, Locale } from "../types";
+import { t } from "../i18n";
 
 interface Props {
   mode: Mode;
   onChange: (mode: Mode) => void;
+  /** F8：界面语言（缺省中文） */
+  locale?: Locale;
 }
 
-const modes: { value: Mode; label: string; desc: string; icon: typeof IconFileText }[] = [
-  { value: "mode_a", label: "完整方案", desc: "歌词 → 编曲", icon: IconFileText },
-  { value: "mode_b", label: "经典创作", desc: "灵感 → 歌曲", icon: IconStars },
-  { value: "mode_c", label: "重新填词", desc: "原词 → 重填", icon: IconEdit },
-  { value: "mode_d", label: "抖音爆款", desc: "灵感 → 神曲", icon: IconBrandTiktok },
+const MODES: { value: Mode; labelKey: string; descKey: string; icon: typeof IconFileText }[] = [
+  { value: "mode_a", labelKey: "mode.a", descKey: "mode.a.desc", icon: IconFileText },
+  { value: "mode_b", labelKey: "mode.b", descKey: "mode.b.desc", icon: IconStars },
+  { value: "mode_c", labelKey: "mode.c", descKey: "mode.c.desc", icon: IconEdit },
+  { value: "mode_d", labelKey: "mode.d", descKey: "mode.d.desc", icon: IconBrandTiktok },
 ];
 
-export default function ModeSelector({ mode, onChange }: Props) {
+export default function ModeSelector({ mode, onChange, locale }: Props) {
   return (
     <div className="flex gap-1.5 w-full">
-      {modes.map((m) => {
+      {MODES.map((m) => {
         const active = mode === m.value;
         const Icon = m.icon;
         return (
@@ -35,9 +38,9 @@ export default function ModeSelector({ mode, onChange }: Props) {
               <Icon size={15} />
             </span>
             <span className={`text-[11px] font-medium leading-tight ${active ? "text-text-1" : "text-text-2"}`}>
-              {m.label}
+              {t(locale, m.labelKey)}
             </span>
-            <span className="text-[9px] text-text-muted leading-tight">{m.desc}</span>
+            <span className="text-[9px] text-text-muted leading-tight">{t(locale, m.descKey)}</span>
           </button>
         );
       })}

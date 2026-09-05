@@ -14,6 +14,7 @@ import QueuePanel from "./components/QueuePanel";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import type { Mode, ChatMessage, ChatTurn, HistoryEntry, LLMStatus, ExpertCard, PipelineRoleKey } from "./types";
 import { MODE_LABELS, errText } from "./types";
+import { t } from "./i18n";
 
 const HISTORY_KEY = "suno-prompt-history";
 /** F3：历史迁移标记（localStorage → 文件一次性迁移） */
@@ -182,6 +183,21 @@ export default function App() {
       flashSettingsMsg(`导入失败：${errText(e)}`);
     }
   }, [updateSettings, flashSettingsMsg]);
+
+  // F7：主题应用（system 跟随媒体查询；light/dark 强制）
+  useEffect(() => {
+    const apply = () => {
+      const theme = settings.theme ?? "system";
+      const dark = theme === "dark"
+        || (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+      document.documentElement.classList.toggle("dark", dark);
+    };
+    apply();
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => { if ((settings.theme ?? "system") === "system") apply(); };
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, [settings.theme]);
 
   // 模式切换时重置圆桌状态（围坐角色跟随当前模式阵容）
   useEffect(() => {
@@ -525,10 +541,10 @@ export default function App() {
           <button onClick={() => { setShowHistory(true); setHistoryView(null); }}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] text-text-2
                        bg-surface-2/60 hover:bg-surface-3/80 border border-border/40 transition-all duration-150 active:scale-95">
-            <IconHistory size={14} /> 历史
+            <IconHistory size={14} /> {t(settings.language, "app.history")}
           </button>
           <button onClick={() => { setShowSettings(!showSettings); setTestResult(null); }}
-            aria-label="API 设置"
+            aria-label={t(settings.language, "app.settings")}
             className="flex items-center justify-center w-8 h-8 rounded-lg text-text-2
                        bg-surface-2/60 hover:bg-surface-3/80 border border-border/40 transition-all duration-150 active:scale-95">
             <IconSettings size={15} />
@@ -540,10 +556,10 @@ export default function App() {
       {showSettings && (
         <div className="absolute right-4 top-14 z-40 w-80 p-3.5 glass-panel rounded-2xl border border-border/40
                         animate-[fade_200ms_ease] space-y-3">
-          <h3 className="text-[13px] font-medium text-text-1">API 设置</h3>
+          <h3 className="text-[13px] font-medium text-text-1">{t(settings.language, "settings.title")}</h3>
           <div>
             <div className="flex items-center justify-between mb-1">
-              <label className="text-[11px] text-text-muted">API Key</label>
+              <label className="text-[11px] text-text-muted">{t(settings.language, "settings.apikey")}</label>
               <button onClick={() => setShowApiKey(!showApiKey)}
                 aria-label={showApiKey ? "隐藏 API Key" : "显示 API Key"}
                 className="text-text-muted hover:text-text-2 transition-colors">
@@ -560,14 +576,14 @@ export default function App() {
           </div>
           <div className="flex gap-2">
             <div className="flex-1">
-              <label className="text-[11px] text-text-muted block mb-1">模型</label>
+              <label className="text-[11px] text-text-muted block mb-1">{t(settings.language, "settings.model")}</label>
               <input value={settings.model} onChange={e => { updateSettings({ model: e.target.value }); setTestResult(null); }}
                 className="w-full bg-surface-0 border border-border/60 rounded-lg px-3 py-2 text-[13px]
                            text-text-1 focus:outline-none focus:border-brand-500/40 focus:ring-1 focus:ring-brand-500/20
                            transition-all duration-150" />
             </div>
             <div className="flex-1">
-              <label className="text-[11px] text-text-muted block mb-1">API 地址</label>
+              <label className="text-[11px] text-text-muted block mb-1">{t(settings.language, "settings.baseurl")}</label>
               <input value={settings.baseUrl} onChange={e => { updateSettings({ baseUrl: e.target.value }); setTestResult(null); }}
                 className="w-full bg-surface-0 border border-border/60 rounded-lg px-3 py-2 text-[13px]
                            text-text-1 focus:outline-none focus:border-brand-500/40 focus:ring-1 focus:ring-brand-500/20
@@ -577,8 +593,8 @@ export default function App() {
           {/* 思考模式：后端按模型能力路由表自动注入厂商思考参数（DeepSeek/讯飞 → thinking；o 系/gpt-5 → reasoning_effort；未登记模型自动忽略） */}
           <div className="flex items-center justify-between gap-2 rounded-lg border border-border/40 bg-surface-0/40 px-3 py-2">
             <label htmlFor="thinking-mode" className="text-[11px] text-text-2 cursor-pointer select-none">
-              思考模式
-              <span className="block text-[10px] text-text-muted font-normal">先推理再回答，质量更稳但更慢；自动适配模型能力</span>
+              {t(settings.language, "settings.thinking")}
+              <span className="block text-[10px] text-text-muted font-normal">{t(settings.language, "settings.thinking.desc")}</span>
             </label>
             <input id="thinking-mode" type="checkbox" checked={settings.thinking}
               onChange={e => { updateSettings({ thinking: e.target.checked }); setTestResult(null); }}
@@ -588,8 +604,8 @@ export default function App() {
           <div className="rounded-lg border border-border/40 bg-surface-0/40 px-3 py-2 space-y-2">
             <div className="flex items-center justify-between gap-2">
               <label htmlFor="gen-temperature" className="text-[11px] text-text-2 cursor-pointer select-none">
-                温度
-                <span className="block text-[10px] text-text-muted font-normal">低=稳定，高=发散（默认 0.6/0.7）</span>
+                {t(settings.language, "settings.advanced.temp")}
+                <span className="block text-[10px] text-text-muted font-normal">{t(settings.language, "settings.advanced.temp.desc")}</span>
               </label>
               <input id="gen-temperature" type="number" min={0} max={2} step={0.1}
                 value={settings.generation?.temperature ?? ""}
@@ -603,8 +619,8 @@ export default function App() {
             </div>
             <div className="flex items-center justify-between gap-2">
               <label htmlFor="gen-max-tokens" className="text-[11px] text-text-2 cursor-pointer select-none">
-                输出上限
-                <span className="block text-[10px] text-text-muted font-normal">单次最大 tokens（默认 30000）</span>
+                {t(settings.language, "settings.advanced.maxtokens")}
+                <span className="block text-[10px] text-text-muted font-normal">{t(settings.language, "settings.advanced.maxtokens.desc")}</span>
               </label>
               <input id="gen-max-tokens" type="number" min={1000} max={32000} step={1000}
                 value={settings.generation?.max_tokens ?? ""}
@@ -622,23 +638,23 @@ export default function App() {
                        bg-surface-2 hover:bg-surface-3 border border-border/50 text-text-2
                        disabled:opacity-50 transition-all duration-150 active:scale-[0.98]">
             {testingApi ? <IconLoader size={13} className="animate-spin" /> : <IconPlug size={13} />}
-            {testResult === "ok" && "连接成功"}
-            {testResult === "fail" && "连接失败，请检查"}
-            {testResult === null && (testingApi ? "测试中..." : "测试连接")}
+            {testResult === "ok" && t(settings.language, "settings.ok")}
+            {testResult === "fail" && t(settings.language, "settings.fail")}
+            {testResult === null && (testingApi ? t(settings.language, "settings.testing") : t(settings.language, "settings.test"))}
           </button>
           {/* A6：打开日志目录（诊断用，失败提示路径） */}
           <button onClick={handleOpenLogDir}
             className="w-full py-1.5 rounded-lg text-[11px] text-text-muted hover:text-text-2
                        bg-surface-2/60 hover:bg-surface-3/80 border border-border/40
                        transition-all duration-150 active:scale-[0.98]">
-            {logDirMsg || "打开日志目录"}
+            {logDirMsg || t(settings.language, "settings.logdir")}
           </button>
 
           {/* 角色级 API 覆盖（可选）：不配置 = 所有角色共用全局；配置了生效单独 */}
           <div className="border-t border-border/40 pt-3">
             <button onClick={() => setShowRoleApi(!showRoleApi)}
               className="w-full flex items-center justify-between text-[11px] text-text-2 hover:text-text-1 transition-colors">
-              <span>角色级 API（可选）</span>
+              <span>{t(settings.language, "settings.roles")}</span>
               <span className="text-[10px] text-text-muted">{showRoleApi ? "收起 ▲" : "展开 ▼"}</span>
             </button>
             {showRoleApi && (
@@ -701,11 +717,11 @@ export default function App() {
             <div className="flex gap-2">
               <button onClick={handleExportSettings}
                 className="flex-1 py-1.5 rounded-lg text-[11px] text-text-2 bg-surface-2 hover:bg-surface-3 border border-border/50 transition-all duration-150 active:scale-[0.98]">
-                导出配置
+                {t(settings.language, "settings.export")}
               </button>
               <button onClick={handleImportSettings}
                 className="flex-1 py-1.5 rounded-lg text-[11px] text-text-2 bg-surface-2 hover:bg-surface-3 border border-border/50 transition-all duration-150 active:scale-[0.98]">
-                导入配置
+                {t(settings.language, "settings.import")}
               </button>
             </div>
             {settingsMsg && (
@@ -714,6 +730,40 @@ export default function App() {
             <p className="text-[9px] text-text-muted mt-1 leading-relaxed">
               导出不含密钥（需重新输入）；导入经格式清洗后生效
             </p>
+          </div>
+
+          {/* F7/F8：主题 + 语言 */}
+          <div className="border-t border-border/40 pt-3 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] text-text-2">{t(settings.language, "settings.theme")}</span>
+              <div className="flex gap-1">
+                {(["system", "light", "dark"] as const).map((v) => (
+                  <button key={v} onClick={() => updateSettings({ theme: v })}
+                    className={`px-2 py-1 rounded-lg text-[10px] font-medium border transition-all duration-150 ${
+                      (settings.theme ?? "system") === v
+                        ? "bg-brand-500/15 border-brand-500/40 text-brand-400"
+                        : "text-text-muted hover:text-text-2 border-border/40"
+                    }`}>
+                    {t(settings.language, `settings.theme.${v}`)}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] text-text-2">{t(settings.language, "settings.language")}</span>
+              <div className="flex gap-1">
+                {(["zh", "en"] as const).map((v) => (
+                  <button key={v} onClick={() => updateSettings({ language: v })}
+                    className={`px-2 py-1 rounded-lg text-[10px] font-medium border transition-all duration-150 ${
+                      (settings.language ?? "zh") === v
+                        ? "bg-brand-500/15 border-brand-500/40 text-brand-400"
+                        : "text-text-muted hover:text-text-2 border-border/40"
+                    }`}>
+                    {v === "zh" ? "中文" : "EN"}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -724,7 +774,7 @@ export default function App() {
         <div className="shrink-0 px-4 pt-3 pb-2 border-b border-border/40">
           <div className="flex items-center gap-3">
             <div className="flex-1 max-w-[720px]">
-              <ModeSelector mode={mode} onChange={(m) => {
+              <ModeSelector mode={mode} locale={settings.language} onChange={(m) => {
                 runTokenRef.current++; // 作废在途 run（H4）
                 if (llmUnlistenRef.current) { llmUnlistenRef.current(); llmUnlistenRef.current = null; }
                 setMode(m); setStatus("idle"); setStreamText(""); setErrorMessage("");
@@ -751,6 +801,7 @@ export default function App() {
                 currentStage={pipeline.currentStage}
                 doneStages={pipeline.doneStages}
                 usage={pipeline.usage}
+                locale={settings.language}
               />
             </div>
 
@@ -760,16 +811,16 @@ export default function App() {
                   <span className="text-[12px] font-semibold text-text-1">
                     {detailExpert.emoji} {detailExpert.name}
                   </span>
-                  <button onClick={() => setDetailExpert(null)} className="text-text-muted hover:text-text-2 text-[11px]">关闭</button>
+                  <button onClick={() => setDetailExpert(null)} className="text-text-muted hover:text-text-2 text-[11px]">{t(settings.language, "detail.close")}</button>
                 </div>
                 <p className="text-[11px] text-text-2 leading-relaxed">
-                  知识库：📚 {detailExpert.knowledge.length > 0 ? detailExpert.knowledge.join(", ") + ".csv" : "（无，凭专业判断）"}
+                  {t(settings.language, "detail.knowledge")}📚 {detailExpert.knowledge.length > 0 ? detailExpert.knowledge.join(", ") + ".csv" : t(settings.language, "detail.none")}
                 </p>
                 <p className="text-[10px] text-text-muted mt-1">
-                  {detailExpert.status === "working" && "当前正在分析…"}
-                  {detailExpert.status === "done" && `已产出：${detailExpert.note || "（摘要见讨论区）"}`}
-                  {detailExpert.status === "error" && `出错：${detailExpert.note || "（详见信息）"}`}
-                  {detailExpert.status === "idle" && "等待分配任务…"}
+                  {detailExpert.status === "working" && t(settings.language, "detail.working")}
+                  {detailExpert.status === "done" && `${t(settings.language, "detail.done")}${detailExpert.note || t(settings.language, "detail.done.empty")}`}
+                  {detailExpert.status === "error" && `${t(settings.language, "detail.error")}${detailExpert.note || errText(detailExpert.note)}`}
+                  {detailExpert.status === "idle" && t(settings.language, "detail.idle")}
                 </p>
               </div>
             )}
@@ -779,10 +830,11 @@ export default function App() {
           <div className="flex-1 flex flex-col overflow-hidden">
             {status !== "idle" && (
               <div className="shrink-0">
-                <StatusIndicator status={status} errorMessage={errorMessage} onRetry={handleRetry} onCancel={handleCancelCurrent} getRunId={pipeline.getRunId} />
+                <StatusIndicator status={status} errorMessage={errorMessage} onRetry={handleRetry} onCancel={handleCancelCurrent} getRunId={pipeline.getRunId} locale={settings.language} />
                 {/* F9：生成队列面板（等待项列表；完成项点击查看） */}
                 <QueuePanel
                   queue={queue.queue}
+                  locale={settings.language}
                   runningId={runningQueueId}
                   onRemove={(id) => queue.remove(id)}
                   onClear={() => queue.clearWaiting()}
@@ -798,18 +850,18 @@ export default function App() {
                   { role: "assistant", content: historyView.output, timestamp: historyView.timestamp }
                 ]} streamText="" status="done" onRefine={() => {}} readOnly />
               ) : (conversation.length > 0 || streamText) ? (
-                <ResultPanel conversation={conversation} streamText={streamText} status={status} onRefine={handleRefine} mode={mode} />
+                <ResultPanel conversation={conversation} streamText={streamText} status={status} onRefine={handleRefine} mode={mode} locale={settings.language} />
               ) : (
                 <div className="h-full flex flex-col items-center justify-center text-text-muted px-8">
                   <div className="w-16 h-16 rounded-2xl glass-panel flex items-center justify-center mb-3">
                     <IconSparkles size={28} className="text-brand-400/50" />
                   </div>
-                  <p className="text-[13px] mb-4">输入内容开始生成，专家接力协作后出方案</p>
+                  <p className="text-[13px] mb-4">{t(settings.language, "empty.hint")}</p>
                   <div className="w-full max-w-[420px] glass-panel rounded-xl border border-border/40 p-4 space-y-2 text-[11px] leading-relaxed">
-                    <p className="text-text-2 font-medium">🪑 流水线流程</p>
-                    <p className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-brand-400" /> 主持人全局统领产出方案（各模式完整指令）</p>
-                    <p className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-brand-400" /> 专业角色审改 → 校验员把关 → 主持人汇总分发，讨论收敛</p>
-                    <p className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-brand-400" /> 校验员按标准格式输出最终提示词包</p>
+                    <p className="text-text-2 font-medium">{t(settings.language, "empty.flow")}</p>
+                    <p className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-brand-400" /> {t(settings.language, "empty.s1")}</p>
+                    <p className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-brand-400" /> {t(settings.language, "empty.s2")}</p>
+                    <p className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-brand-400" /> {t(settings.language, "empty.s3")}</p>
                   </div>
                 </div>
               )}
@@ -827,7 +879,7 @@ export default function App() {
                 </div>
               )}
               <InputPanel key={mode} mode={mode} disabled={status === "loading" || status === "streaming"}
-                settings={settings} onGenerate={handleGenerate} inputRef={inputRef} />
+                settings={settings} onGenerate={handleGenerate} inputRef={inputRef}  locale={settings.language} />
             </div>
           </div>
         </div>
@@ -837,7 +889,7 @@ export default function App() {
         <HistoryPanel entries={filteredHistory} allEntriesCount={historyEntries.length}
           filter={historyFilter} onFilterChange={setHistoryFilter}
           onDelete={deleteHistory} onClear={clearHistory}
-          onSelect={selectHistory} onClose={() => setShowHistory(false)} />
+          onSelect={selectHistory} onClose={() => setShowHistory(false)} locale={settings.language} />
       )}
     </div>
   );

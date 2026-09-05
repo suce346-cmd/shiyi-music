@@ -1,5 +1,7 @@
 import { IconX, IconTrash, IconList } from "@tabler/icons-react";
 import { MODE_LABELS } from "../types";
+import type { Locale } from "../types";
+import { t } from "../i18n";
 import type { QueueItem } from "../hooks/useQueue";
 
 interface Props {
@@ -9,18 +11,21 @@ interface Props {
   onRemove: (id: string) => void;
   onClear: () => void;
   onSelect: (id: string) => void;
+  /** F8：界面语言（缺省中文） */
+  locale?: Locale;
 }
 
-const STATUS_TEXT: Record<QueueItem["status"], string> = {
-  queued: "等待",
-  running: "生成中",
-  done: "完成",
-  error: "失败",
-  cancelled: "已取消",
+/** F8：状态文案 key（locale 运行时解析） */
+const STATUS_KEY: Record<QueueItem["status"], string> = {
+  queued: "queue.st.queued",
+  running: "queue.st.running",
+  done: "queue.st.done",
+  error: "queue.st.error",
+  cancelled: "queue.st.cancelled",
 };
 
 /** F9：生成队列面板（等待项列表；当前运行项高亮；完成/失败项点击查看对应历史） */
-export default function QueuePanel({ queue, runningId, onRemove, onClear, onSelect }: Props) {
+export default function QueuePanel({ queue, runningId, onRemove, onClear, onSelect, locale }: Props) {
   const waiting = queue.filter((q) => q.status === "queued" || q.status === "running");
   if (queue.length === 0) return null;
   return (
@@ -28,13 +33,13 @@ export default function QueuePanel({ queue, runningId, onRemove, onClear, onSele
       <div className="flex items-center justify-between mb-1.5">
         <span className="flex items-center gap-1.5 text-[12px] font-medium text-text-1">
           <IconList size={13} className="text-brand-400" />
-          生成队列
-          <span className="text-[10px] text-text-muted">({waiting.length} 等待中)</span>
+          {t(locale, "queue.title")}
+          <span className="text-[10px] text-text-muted">({waiting.length} {t(locale, "queue.waiting")})</span>
         </span>
         {waiting.length > 0 && (
           <button onClick={onClear}
             className="flex items-center gap-0.5 text-[10px] text-text-muted hover:text-danger transition-colors">
-            <IconTrash size={11} /> 清空等待
+            <IconTrash size={11} /> {t(locale, "queue.clear")}
           </button>
         )}
       </div>
@@ -58,7 +63,7 @@ export default function QueuePanel({ queue, runningId, onRemove, onClear, onSele
             }`} />
             <span className="text-[10px] text-brand-400 shrink-0">{MODE_LABELS[q.mode]}</span>
             <span className="flex-1 min-w-0 truncate text-text-2">{q.label}</span>
-            <span className="text-[10px] text-text-muted shrink-0">{STATUS_TEXT[q.status]}</span>
+            <span className="text-[10px] text-text-muted shrink-0">{t(locale, STATUS_KEY[q.status])}</span>
             {(q.status === "queued" || q.status === "done" || q.status === "error" || q.status === "cancelled") && (
               <button onClick={(e) => { e.stopPropagation(); onRemove(q.id); }}
                 className="p-0.5 rounded text-text-muted hover:text-danger transition-colors shrink-0">

@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import QAvatar from "./QAvatar";
-import type { ExpertCard } from "../types";
+import type { ExpertCard, Locale } from "../types";
+import { t } from "../i18n";
 
 interface Props {
   experts: ExpertCard[];
@@ -14,6 +15,8 @@ interface Props {
   doneStages?: string[];
   /** F4：本轮累计 token 用量（无用量时不显示） */
   usage?: { prompt_tokens: number; completion_tokens: number } | null;
+  /** F8：界面语言（缺省中文） */
+  locale?: Locale;
 }
 
 /**
@@ -46,12 +49,14 @@ function Seat({
   total,
   phase,
   onOpenDetail,
+  locale,
 }: {
   expert: ExpertCard;
   index: number;
   total: number;
   phase: Props["phase"];
   onOpenDetail: (e: ExpertCard) => void;
+  locale?: Locale;
 }) {
   const pos = seatPosition(index, total);
   const talking = expert.status === "working";
@@ -71,11 +76,11 @@ function Seat({
 
   // 说话气泡内容
   const bubble = talking
-    ? "思考中…"
+    ? t(locale, "round.bubble.thinking")
     : done
-      ? (expert.note || "完成 ✓")
+      ? (expert.note || t(locale, "round.bubble.done"))
       : error
-        ? "出错了"
+        ? t(locale, "round.bubble.error")
         : null;
 
   return (
@@ -166,17 +171,18 @@ export default function RoundtablePanel({
   currentStage = null,
   doneStages = [],
   usage = null,
+  locale,
 }: Props) {
   const total = experts.length || 5;
 
   const phaseLabel = useMemo(() => {
     switch (phase) {
-      case "discussing": return "专家协作中";
-      case "synthesizing": return "主持人收口中";
-      case "validating": return "校验审查中";
-      case "done": return "生成完成";
+      case "discussing": return t(locale, "round.phase.discussing");
+      case "synthesizing": return t(locale, "round.phase.synthesizing");
+      case "validating": return t(locale, "round.phase.validating");
+      case "done": return t(locale, "round.phase.done");
     }
-  }, [phase]);
+  }, [locale, phase]);
 
   const progressPct =
     phase === "discussing" ? 33 : phase === "synthesizing" ? 66 : phase === "validating" ? 88 : 100;
@@ -253,7 +259,7 @@ export default function RoundtablePanel({
 
         {/* 角色围坐（常态可见，idle 也坐着） */}
         {experts.map((e, i) => (
-          <Seat key={e.id} expert={e} index={i} total={total} phase={phase} onOpenDetail={onOpenDetail} />
+          <Seat key={e.id} expert={e} index={i} total={total} phase={phase} onOpenDetail={onOpenDetail} locale={locale} />
         ))}
 
         {/* 无专家时的引导 */}
@@ -268,8 +274,8 @@ export default function RoundtablePanel({
       <div className="px-4 py-2 border-t border-border/40 shrink-0 flex items-center justify-between gap-2">
         <span className="text-[9px] text-text-muted">
           {active
-            ? "进行中：点击角色查看详情"
-            : "就绪：输入内容点击「生成」，专家接力协作"}
+            ? t(locale, "round.tip.running")
+            : t(locale, "round.tip.idle")}
         </span>
         {/* F4：本轮累计 token 用量（有计数时显示，只计数不估算金额） */}
         {usage && (usage.prompt_tokens > 0 || usage.completion_tokens > 0) && (
@@ -295,8 +301,8 @@ export default function RoundtablePanel({
                 : "border-warning/40 bg-warning/5 text-warning"
             }`}>
               {validation.passed
-                ? "✅ 代码校验通过"
-                : `⚠️ 校验发现 ${validation.issues.length} 个问题：`}
+                ? t(locale, "round.valid.ok")
+                : `${t(locale, "round.valid.fail")} ${validation.issues.length}`}
               {!validation.passed && validation.issues.length > 0 && (
                 <ul className="mt-1 space-y-0.5 text-[10px]">
                   {validation.issues.map((i, idx) => <li key={idx}>· {i}</li>)}
