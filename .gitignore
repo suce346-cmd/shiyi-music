@@ -24,3 +24,6 @@ dist-ssr
 *.sw?
 nsis/
 app-icon.svg
+
+# Local tool artifacts
+.mimosa
