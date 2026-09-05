@@ -9,6 +9,8 @@ import HistoryPanel from "./components/HistoryPanel";
 import RoundtablePanel from "./components/RoundtablePanel";
 import { useSettingsWithSecrets } from "./hooks/useSettings";
 import { usePipeline, ROLE_NAMES, ROLE_EMOJIS } from "./hooks/usePipeline";
+import { useQueue, queueLabel, dequeueNext } from "./hooks/useQueue";
+import QueuePanel from "./components/QueuePanel";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import type { Mode, ChatMessage, ChatTurn, HistoryEntry, LLMStatus, ExpertCard, PipelineRoleKey } from "./types";
 import { MODE_LABELS, errText } from "./types";
@@ -60,6 +62,10 @@ export default function App() {
   const [expandedRole, setExpandedRole] = useState<PipelineRoleKey | null>(null);
   const { settings, updateSettings, showSettings, setShowSettings, secretsReady } = useSettingsWithSecrets();
   const pipeline = usePipeline();
+  /** F9：生成队列（提交分流 + 顺序执行；后端零改动，纯前端调度） */
+  const queue = useQueue();
+  /** F9：当前运行队列项 id（高亮 + 取消归属；直接生成时为 null） */
+  const [runningQueueId, setRunningQueueId] = useState<string | null>(null);
   const [detailExpert, setDetailExpert] = useState<ExpertCard | null>(null);
   /** F14：Cmd/Ctrl+K 聚焦目标输入框 */
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -297,11 +303,17 @@ export default function App() {
     setHistoryEntries(updated); scheduleSave(updated);
   }, []);
 
-  const handleGenerate = useCallback(async (userInput: string, extra?: { originalLyrics: string }) => {
+  /** F9：实际执行一次生成（直接提交与队列调度共用；queueId 非空时归属队列项） */
+  const runGenerateNow = useCallback(async (
+    runId: string,
+    runMode: Mode,
+    userInput: string,
+    extra?: { originalLyrics: string },
+  ) => {
     const token = ++runTokenRef.current; // 作废旧 run（H4）
     setStatus("loading"); setStreamText(""); setErrorMessage("");
     // F12：mode_c 的 userInput 即新主题（原歌词走独立字段）；历史展示用拼接文本保留上下文
-    const displayInput = mode === "mode_c" && extra
+    const displayInput = runMode === "mode_c" && extra
       ? `原歌词：\n${extra.originalLyrics}\n\n新主题：\n${userInput}`
       : userInput;
     setLastUserInput(displayInput);
@@ -315,9 +327,9 @@ export default function App() {
     try {
       await ensureLlmListener(); // H5：失败抛错进 catch，不再卡死
       // F12：原歌词独立字段直传（旧字符串拼接+正则拆分+P6 补丁整条退役）
-      const originalLyrics = mode === "mode_c" ? extra?.originalLyrics : undefined;
+      const originalLyrics = runMode === "mode_c" ? extra?.originalLyrics : undefined;
       const raw = await pipeline.run({
-        mode,
+        mode: runMode,
         userInput,
         settings,
         extra: undefined,
@@ -342,15 +354,48 @@ export default function App() {
         { role: "user", content: displayInput },
         { role: "assistant", content: raw },
       ];
-      const entry: HistoryEntry = { id: newId(), mode, input: displayInput, output: raw, conversation: allTurns, usage: { ...pipeline.usage }, timestamp: Date.now() };
+      const entry: HistoryEntry = { id: newId(), mode: runMode, input: displayInput, output: raw, conversation: allTurns, usage: { ...pipeline.usage }, timestamp: Date.now() };
       setCurrentHistoryId(entry.id);
       const updated = [entry, ...historyRef.current];
       setHistoryEntries(updated); scheduleSave(updated);
+      // F9：队列项完成归档（queueId 命中时标记 done + 关联 history id）
+      if (queue.peek().some((q) => q.id === runId)) {
+        queue.mark(runId, "done");
+      }
     } catch (e) {
       if (token !== runTokenRef.current) return; // 过期 run 的错误丢弃（H4）
       setStatus("error"); setErrorMessage(errText(e));
+      // F9：队列项失败标记（用户可从队列点击查看错误态，点击删除清理）
+      if (queue.peek().some((q) => q.id === runId)) {
+        queue.mark(runId, "error");
+      }
+    } finally {
+      // F9：完成链——无论成败，取队首继续（取消走 cancel 流程同样经此处继续）
+      setRunningQueueId(null);
+      const next = dequeueNext(queue.peek());
+      if (next) {
+        setRunningQueueId(next.id);
+        queue.mark(next.id, "running");
+        // 注意：不 await，后台顺序执行
+        void runGenerateNow(next.id, next.mode, next.userInput, next.extra);
+      }
     }
-  }, [mode, settings, ensureLlmListener, pipeline]);
+  }, [settings, ensureLlmListener, pipeline]);
+
+  const handleGenerate = useCallback(async (userInput: string, extra?: { originalLyrics: string }) => {
+    // F9：忙时入队（当前有运行项）——排队顺序执行，不作废在途任务
+    if (pipeline.active) {
+      queue.push({
+        id: newId(),
+        label: queueLabel(userInput),
+        mode,
+        userInput,
+        extra,
+      });
+      return;
+    }
+    await runGenerateNow(newId(), mode, userInput, extra);
+  }, [mode, settings, ensureLlmListener, pipeline, queue]);
 
   const handleRefine = useCallback(async (feedback: string, refineMode: "fast" | "full" = "fast") => {
     if (!feedback.trim()) return;
@@ -443,6 +488,26 @@ export default function App() {
   const deleteHistory = (id: string) => { const u = historyEntries.filter(e => e.id !== id); setHistoryEntries(u); scheduleSave(u); };
   const clearHistory = () => { setHistoryEntries([]); scheduleSave([]); };
   const selectHistory = (entry: HistoryEntry) => { setHistoryView(entry); setShowHistory(false); };
+
+  /** F9：队列查看——完成/失败项点击查看对应历史（按 input 匹配最新一条） */
+  const selectQueueItem = useCallback((id: string) => {
+    const item = queue.peek().find((q) => q.id === id);
+    if (!item) return;
+    const entry = historyRef.current.find((e) => e.input.includes(item.userInput.slice(0, 20)));
+    if (entry) {
+      setHistoryView(entry);
+      setShowHistory(false);
+    }
+  }, [queue]);
+
+  /** F9：队列取消当前——只杀当前运行项（A9 run_id 定向），队列继续 */
+  const handleCancelCurrent = useCallback(async () => {
+    if (runningQueueId) {
+      queue.mark(runningQueueId, "cancelled");
+    }
+    await pipeline.cancel();
+    // 完成链由 runGenerateNow.finally 驱动（取消同样走 finally 继续队首）
+  }, [pipeline, queue, runningQueueId]);
 
   const filteredHistory = historyFilter === "all" ? historyEntries : historyEntries.filter(e => e.mode === historyFilter);
 
@@ -714,7 +779,15 @@ export default function App() {
           <div className="flex-1 flex flex-col overflow-hidden">
             {status !== "idle" && (
               <div className="shrink-0">
-                <StatusIndicator status={status} errorMessage={errorMessage} onRetry={handleRetry} onCancel={pipeline.cancel} getRunId={pipeline.getRunId} />
+                <StatusIndicator status={status} errorMessage={errorMessage} onRetry={handleRetry} onCancel={handleCancelCurrent} getRunId={pipeline.getRunId} />
+                {/* F9：生成队列面板（等待项列表；完成项点击查看） */}
+                <QueuePanel
+                  queue={queue.queue}
+                  runningId={runningQueueId}
+                  onRemove={(id) => queue.remove(id)}
+                  onClear={() => queue.clearWaiting()}
+                  onSelect={selectQueueItem}
+                />
               </div>
             )}
 
