@@ -323,7 +323,7 @@ async fn execute_review<R: Runtime>(
 
     let mut user = format!("【主持人当前方案】\n{}\n\n", current_plan);
     // Mode C：原歌词全链路传递——审改员逐行字数/韵脚对齐的依据（P2 硬校验前置）
-    if let Some(original) = &req.extra {
+    if let Some(original) = req.original_lyrics_text() {
         user.push_str(&format!("【原歌词（改写需逐行对齐）】\n{}\n\n", original));
     }
     if !revisions_log.is_empty() {
@@ -396,7 +396,7 @@ fn build_audit_review_user_prompt(
 ) -> String {
     let mut user = format!("【主持人当前方案】\n{}\n\n", current_plan);
     // Mode C：原歌词全链路传递——校验员核对逐行对齐（P2 硬校验前置）
-    if let Some(original) = &req.extra {
+    if let Some(original) = req.original_lyrics_text() {
         user.push_str(&format!("【原歌词（逐行字数对齐依据）】\n{}\n\n", original));
         if req.mode == Mode::ModeC {
             user.push_str("【Mode C 专项：必须核对新歌词与原歌词逐行对齐（行数一致、每行字数一致），发现漂移必须提出修订】\n\n");
@@ -518,7 +518,7 @@ async fn run_host_initial<R: Runtime>(
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Host);
     let mut user = format!("用户输入：\n{}\n\n请按上述方法论直接输出完整方案。", req.user_input);
     // Mode C：原歌词在 extra，指令期望"原歌词 + 新主题"
-    if let Some(original) = &req.extra {
+    if let Some(original) = req.original_lyrics_text() {
         user = format!("原歌词：\n{}\n\n新主题/故事：\n{}\n\n请按上述方法论直接输出完整改词方案。", original, req.user_input);
     }
     let resp = llm::call_llm_stream(
@@ -622,7 +622,7 @@ async fn run_audit_format<R: Runtime>(
     }
     let mut user = format!("请按标准格式输出最终提示词包：\n\n{}", current_plan);
     // Mode C：原歌词全链路传递——格式输出逐行字数对齐的依据（P2 硬校验前置）
-    if let Some(original) = &req.extra {
+    if let Some(original) = req.original_lyrics_text() {
         user.push_str(&format!("\n\n【原歌词（逐行字数对齐依据，改词必须逐行等字数输出）】\n{}", original));
     }
     // Mode C 专项：auditor 通用规范不含"改词"约束，必须显式声明（P2 硬校验前置）
@@ -912,7 +912,7 @@ async fn run_pipeline_inner<R: Runtime>(
     let (mut final_text, mut truncated) = run_audit_format(&app, &current_plan, None, &request, &budget).await?;
     let mut issues = Vec::new();
     for _ in 0..2 {
-        issues = collect_hard_issues(mode, &final_text, request.extra.as_deref());
+        issues = collect_hard_issues(mode, &final_text, request.original_lyrics_text());
         // B4：截断与格式问题同一打回通道——截断 issue 置顶，校验员按"精简后重输"处置
         if truncated {
             issues.insert(0, TRUNCATION_ISSUE.to_string());
@@ -931,7 +931,7 @@ async fn run_pipeline_inner<R: Runtime>(
     // 最终校验：最后一次重格式化（如有）的输出必须重新校验——
     // 此前 issues 停留在上一次 collect，最后一次格式化的结果从未被校验（真 bug）
     if !issues.is_empty() {
-        issues = collect_hard_issues(mode, &final_text, request.extra.as_deref());
+        issues = collect_hard_issues(mode, &final_text, request.original_lyrics_text());
         // B4：末次输出的截断标志同样参与最终裁决
         if truncated {
             issues.insert(0, TRUNCATION_ISSUE.to_string());
@@ -955,6 +955,7 @@ async fn run_pipeline_inner<R: Runtime>(
 }
 
 /// 优化/重跑：全流程重跑 + 反馈注入
+/// F13：feedback 长度校验在 command 入口（pipeline_refine）做，此处只拼装
 pub async fn run_pipeline_refine(app: AppHandle, request: PipelineRequest, feedback: &str) -> Result<String, AppError> {
     let mut req = request;
     req.user_input = format!("{}\n\n（优化反馈：{}）", req.user_input, feedback);
@@ -966,8 +967,10 @@ pub async fn run_pipeline_refine(app: AppHandle, request: PipelineRequest, feedb
 // ---------------------------------------------------------------------------
 
 /// 圆桌生成（前端调用）
+/// F13：入口准入校验——非法输入在第一个 LLM 调用前拦截（Validation kind，前端 errText 展示）
 #[tauri::command]
 pub async fn pipeline_generate(app: AppHandle, request: PipelineRequest) -> Result<String, AppError> {
+    crate::models::validate_request(&request, None)?;
     run_pipeline(app, request).await
 }
 
@@ -978,6 +981,7 @@ pub async fn pipeline_refine(
     request: PipelineRequest,
     feedback: String,
 ) -> Result<String, AppError> {
+    crate::models::validate_request(&request, Some(&feedback))?;
     run_pipeline_refine(app, request, &feedback).await
 }
 
@@ -1108,6 +1112,27 @@ mod tests {
         assert!(user.contains("原歌词第一行"), "Mode C 原歌词传递不得回退: {}", user);
         assert!(user.contains("Mode C 专项"), "got: {}", user);
         assert!(user.contains("任务"), "got: {}", user);
+    }
+
+    /// F12：original_lyrics 统一入口——新字段优先、旧 extra 回退、双空 None；旧请求兼容
+    /// （旧请求模拟：序列化后删除新字段再解析，全程无凭据字面量）
+    #[test]
+    fn original_lyrics_prefers_new_field_falls_back_extra() {
+        let mut req = make_request(None);
+        assert!(req.original_lyrics_text().is_none());
+        req.extra = Some("旧原歌词".to_string());
+        assert_eq!(req.original_lyrics_text(), Some("旧原歌词"));
+        req.original_lyrics = Some("新原歌词".to_string());
+        assert_eq!(req.original_lyrics_text(), Some("新原歌词"));
+        // 空白新字段不遮挡旧值
+        req.original_lyrics = Some("   ".to_string());
+        assert_eq!(req.original_lyrics_text(), Some("旧原歌词"));
+        // 旧前端请求（无 original_lyrics 字段）兼容解析
+        let mut v = serde_json::to_value(make_request(None)).unwrap();
+        v.as_object_mut().unwrap().remove("original_lyrics");
+        let old: PipelineRequest = serde_json::from_value(v).unwrap();
+        assert!(old.original_lyrics.is_none());
+        assert!(old.original_lyrics_text().is_none());
     }
 
     #[test]
@@ -1455,6 +1480,7 @@ mod tests {
             api_key: "global-key".into(),
             base_url: "https://global.example.com/v1".into(),
             extra: None,
+            original_lyrics: None,
             role_overrides: overrides,
             thinking: false,
         }

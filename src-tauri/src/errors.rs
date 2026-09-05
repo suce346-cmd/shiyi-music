@@ -4,10 +4,8 @@
 
 use serde::Serialize;
 
-/// F13 预留：输入校验错误（后端零校验修复时归类至此）
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-#[allow(dead_code)] // Validation 为 F13（输入校验）预留，落地前允许未构造
 pub enum ErrorKind {
     Network,
     Auth,

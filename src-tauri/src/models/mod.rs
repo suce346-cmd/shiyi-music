@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use crate::errors::{AppError, ErrorKind};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -170,6 +171,55 @@ mod tests {
         assert!(back.thinking);
     }
 
+    /// F13：准入校验——空/超长/非法 URL/缺配置一律 Validation（构造请求用 struct 直写，无凭据字面量 JSON）
+    #[test]
+    fn validate_request_rejects_bad_input() {
+        fn good() -> PipelineRequest {
+            PipelineRequest {
+                mode: Mode::ModeB,
+                user_input: "雨天".into(),
+                model: "m".into(),
+                api_key: "k".into(),
+                base_url: "https://api.example.com/v1".into(),
+                extra: None,
+                original_lyrics: None,
+                role_overrides: None,
+                thinking: false,
+            }
+        }
+        use crate::errors::ErrorKind;
+        // 合法通过
+        assert!(validate_request(&good(), None).is_ok());
+        // 空输入
+        let mut r = good();
+        r.user_input = "   ".into();
+        let e = validate_request(&r, None).unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Validation);
+        // 超长输入
+        r = good();
+        r.user_input = "啊".repeat(20001);
+        assert_eq!(validate_request(&r, None).unwrap_err().kind, ErrorKind::Validation);
+        // 边界 20000 通过
+        r = good();
+        r.user_input = "啊".repeat(20000);
+        assert!(validate_request(&r, None).is_ok());
+        // 非法 base_url
+        r = good();
+        r.base_url = "ftp://x".into();
+        assert_eq!(validate_request(&r, None).unwrap_err().kind, ErrorKind::Validation);
+        // 空 model/key
+        r = good();
+        r.model = " ".into();
+        assert_eq!(validate_request(&r, None).unwrap_err().kind, ErrorKind::Validation);
+        // feedback 超长/空
+        assert_eq!(validate_request(&good(), Some(&"啊".repeat(2001))).unwrap_err().kind, ErrorKind::Validation);
+        assert_eq!(validate_request(&good(), Some("  ")).unwrap_err().kind, ErrorKind::Validation);
+        // 原歌词超长
+        r = good();
+        r.original_lyrics = Some("啊".repeat(20001));
+        assert_eq!(validate_request(&r, None).unwrap_err().kind, ErrorKind::Validation);
+    }
+
     #[test]
     fn pipeline_request_parses_role_overrides() {
         let json = r#"{
@@ -273,14 +323,81 @@ pub struct PipelineRequest {
     pub model: String,
     pub api_key: String,
     pub base_url: String,
-    /// 额外上下文（Mode C 原歌词）
+    /// 额外上下文（Mode C 原歌词）。
+    /// F12：deprecated——保留解析兼容一个版本（旧请求 extra 仍生效），新请求走 original_lyrics。
     pub extra: Option<String>,
+    /// F12：Mode C 原歌词独立字段（替代 extra 的字符串拼接协议）。
+    /// 旧前端无此字段 → None（serde default），后端回退读 extra。
+    #[serde(default)]
+    pub original_lyrics: Option<String>,
     /// 角色级 API 覆盖：某角色配了就用配的，没配的字段 fallback 全局
     #[serde(default)]
     pub role_overrides: Option<HashMap<PipelineRole, RoleApiOverride>>,
     /// 思考模式：开启后按模型能力路由表注入厂商思考参数（旧前端无此字段 → 默认关闭）
     #[serde(default)]
     pub thinking: bool,
+}
+
+impl PipelineRequest {
+    /// F12：取 Mode C 原歌词统一入口——新字段优先，旧 extra 回退（兼容旧前端/旧请求）。
+    pub fn original_lyrics_text(&self) -> Option<&str> {
+        self.original_lyrics
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| self.extra.as_deref().filter(|s| !s.trim().is_empty()))
+    }
+}
+
+/// F13：请求准入校验（后端兜底——前端 InputPanel 保留快速反馈，后端为准入闸门）。
+/// 限额：user_input ≤20000 字符、原歌词 ≤20000、feedback ≤2000；
+/// base_url 必须 http(s)；model/api_key 去空白后非空。
+/// 失败返回 Validation kind（A5 预留正式启用），前端 errText 原样展示。
+pub fn validate_request(req: &PipelineRequest, feedback: Option<&str>) -> Result<(), AppError> {
+    /// 字符数超限报错
+    fn too_long(field: &str, len: usize, max: usize) -> AppError {
+        AppError::new(
+            ErrorKind::Validation,
+            format!("{}过长（{} 字符，上限 {}），请精简后重试", field, len, max),
+        )
+    }
+    const MAX_INPUT: usize = 20000;
+    const MAX_FEEDBACK: usize = 2000;
+    let input_len = req.user_input.chars().count();
+    if req.user_input.trim().is_empty() {
+        return Err(AppError::new(ErrorKind::Validation, "输入为空，请输入内容后重试"));
+    }
+    if input_len > MAX_INPUT {
+        return Err(too_long("输入", input_len, MAX_INPUT));
+    }
+    if let Some(lyrics) = req.original_lyrics_text() {
+        let n = lyrics.chars().count();
+        if n > MAX_INPUT {
+            return Err(too_long("原歌词", n, MAX_INPUT));
+        }
+    }
+    if let Some(fb) = feedback {
+        let n = fb.chars().count();
+        if n > MAX_FEEDBACK {
+            return Err(too_long("优化反馈", n, MAX_FEEDBACK));
+        }
+        if fb.trim().is_empty() {
+            return Err(AppError::new(ErrorKind::Validation, "优化反馈为空"));
+        }
+    }
+    if req.model.trim().is_empty() {
+        return Err(AppError::new(ErrorKind::Validation, "模型未配置，请在设置中填写"));
+    }
+    if req.api_key.trim().is_empty() {
+        return Err(AppError::new(ErrorKind::Validation, "API Key 未配置，请在设置中填写"));
+    }
+    let url = req.base_url.trim();
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(AppError::new(
+            ErrorKind::Validation,
+            "API 地址非法（必须 http(s) 开头），请在设置中检查",
+        ));
+    }
+    Ok(())
 }
 
 /// 主持人阶段（阶段 0 统领初稿 / 阶段 1 汇总分发），供前端区分文案
