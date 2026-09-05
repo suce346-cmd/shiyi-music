@@ -185,6 +185,7 @@ mod tests {
                 original_lyrics: None,
                 role_overrides: None,
                 thinking: false,
+                refine_targets: None,
             }
         }
         use crate::errors::ErrorKind;
@@ -336,6 +337,10 @@ pub struct PipelineRequest {
     /// 思考模式：开启后按模型能力路由表注入厂商思考参数（旧前端无此字段 → 默认关闭）
     #[serde(default)]
     pub thinking: bool,
+    /// F1：增量优化目标角色（None = 全量，旧行为；Some(空) 也视为全量，防前端误传）。
+    /// 旧前端无此字段 → None（serde default）。
+    #[serde(default)]
+    pub refine_targets: Option<Vec<PipelineRole>>,
 }
 
 impl PipelineRequest {

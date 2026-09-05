@@ -38,6 +38,45 @@ pub fn steps_for_mode(mode: &Mode) -> Vec<PipelineStep> {
     .collect()
 }
 
+/// F1：按优化反馈关键词路由重跑角色（纯函数，可测）。
+/// 规则：歌词类→作词/改词；编曲类→制作；情绪类→情感；抖音类→流行风格；参数类→制作+情感。
+/// 无命中 → 空（调用方回落全量，安全默认不猜）；ModeC 的歌词类映射 Reviser 而非 Lyricist。
+/// 注：前端有 TS 镜像仅做预估展示，真源在此（双源同步，两端同 commit）。
+pub fn roles_for_feedback(feedback: &str, mode: &Mode) -> Vec<PipelineRole> {
+    use PipelineRole::*;
+    let mut out: Vec<PipelineRole> = Vec::new();
+    let mut push = |r: PipelineRole| {
+        if !out.contains(&r) {
+            out.push(r);
+        }
+    };
+    // 歌词类
+    if ["歌词", "词", "句", "韵", "唱", "hook", "副歌", "主歌", "金句"].iter().any(|k| feedback.contains(k)) {
+        push(if *mode == Mode::ModeC { Reviser } else { Lyricist });
+    }
+    // 编曲类
+    if ["编曲", "配器", "乐器", "伴奏", "BPM", "bpm", "人声", "音色", "混音", "鼓", "吉他", "钢琴", "唢呐"]
+        .iter()
+        .any(|k| feedback.contains(k))
+    {
+        push(Producer);
+    }
+    // 情绪类
+    if ["情绪", "能量", "感觉", "氛围", "情感", "炸", "软", "嗨"].iter().any(|k| feedback.contains(k)) {
+        push(Emotion);
+    }
+    // 抖音传播类（仅 ModeD 有 StyleAnalyst；其他模式回落 Producer）
+    if ["抖音", "传播", "钩子", "洗脑", "爆", "魔性", "循环", "骤停"].iter().any(|k| feedback.contains(k)) {
+        push(if *mode == Mode::ModeD { StyleAnalyst } else { Producer });
+    }
+    // 参数类
+    if ["参数", "怪异度", "影响度", "Weirdness", "Influence"].iter().any(|k| feedback.contains(k)) {
+        push(Producer);
+        push(Emotion);
+    }
+    out
+}
+
 /// 加载知识库
 fn load_knowledge() -> Result<KnowledgeBase, String> {
     KnowledgeBase::load_embedded()
@@ -699,6 +738,19 @@ fn split_tasks(text: &str) -> (String, String) {
     (text.trim().to_string(), String::new())
 }
 
+/// F1：从 refine 输入提取【上一版方案】段（P1 格式：`{输入}\n\n【上一版方案】\n{上一版}`）。
+/// 取最后一个标记之后全文（与 P6 同理：上一版方案内可能含标记字样）；缺失/空白返回 None。
+fn extract_previous_plan(user_input: &str) -> Option<String> {
+    let marker = "【上一版方案】";
+    let pos = user_input.rfind(marker)?;
+    let plan = user_input[pos + marker.len()..].trim();
+    if plan.is_empty() {
+        None
+    } else {
+        Some(plan.to_string())
+    }
+}
+
 /// 从最终文本收集硬校验问题。
 /// 全模式启用（P2 修复）：mode_c 的 lyric_fill 已过滤包装行 + 去空白计数，
 /// 对标准提示词包可安全执行字数对齐校验，不再跳过。
@@ -815,6 +867,8 @@ pub(crate) async fn run_pipeline_with_timeout<R: Runtime>(
 
 /// 主流程内层：三阶段（主持人统领 → 角色审改+校验员审查讨论 → 校验员格式化）
 /// A1：budget 为共享预算（Arc），调用链逐层透传
+/// F1：增量模式（request.refine_targets.is_some()）时阶段 0 跳过——以上一版方案为起步，
+/// 讨论轮只跑 targets 角色（Auditor 恒在：最终格式端口 + 讨论轮审查）。
 async fn run_pipeline_inner<R: Runtime>(
     app: AppHandle<R>,
     request: PipelineRequest,
@@ -829,16 +883,43 @@ async fn run_pipeline_inner<R: Runtime>(
             Ok(())
         }
     };
-    let roles: Vec<PipelineRole> = steps_for_mode(mode).iter().map(|s| s.role).collect();
+    // F1：增量模式只跑 targets（空视为全量，防前端误传）；全量模式走模式阵容
+    let incremental = request
+        .refine_targets
+        .as_ref()
+        .map(|t| !t.is_empty())
+        .unwrap_or(false);
+    let roles: Vec<PipelineRole> = if incremental {
+        // 只保留模式阵容内的 targets（防非法角色），顺序按模式阵容
+        let all: Vec<PipelineRole> = steps_for_mode(mode).iter().map(|s| s.role).collect();
+        let targets = request.refine_targets.clone().unwrap_or_default();
+        all.into_iter().filter(|r| targets.contains(r)).collect()
+    } else {
+        steps_for_mode(mode).iter().map(|s| s.role).collect()
+    };
 
-    // ---- 阶段 0：主持人统领（原模式完整指令，产出方案初稿）----
+    // ---- 阶段 0：主持人统领（增量模式跳过——上一版方案即起步，P1 格式已注入 user_input）----
     checkpoint()?;
-    let mut current_plan = run_host_initial(&app, &request, &budget).await?;
+    let mut current_plan = if incremental {
+        // 增量起步：从 user_input 的【上一版方案】段提取；缺失则回落全量阶段 0（不静默用空方案）
+        match extract_previous_plan(&request.user_input) {
+            Some(plan) => plan,
+            None => run_host_initial(&app, &request, &budget).await?,
+        }
+    } else {
+        run_host_initial(&app, &request, &budget).await?
+    };
     // 主持人上轮任务分发（第一轮无任务）
     let mut next_tasks = String::new();
-
-    // ---- 阶段 1：讨论轮（≤3 轮；动态角色 + 校验员全部无异议提前收敛）----
+    // F1：增量模式首条 log 声明参跑阵容（auditor 可见完整上下文）
     let mut revisions_log: Vec<(String, String)> = Vec::new(); // (角色名, 修订摘要)
+    if incremental {
+        let names: Vec<&str> = roles.iter().map(|r| r.name()).collect();
+        revisions_log.push((
+            "主持人".to_string(),
+            format!("增量优化：本轮只跑 {}（上一版其他角色意见保留）", names.join("、")),
+        ));
+    }
     for round in 1..=MAX_DISCUSSION_ROUNDS {
         let mut all_agree = true;
         // B10：三元组 =（角色, 修订片段, 角色总体意见）——异议必达，无具体修订的意见也要汇总
@@ -956,9 +1037,17 @@ async fn run_pipeline_inner<R: Runtime>(
 
 /// 优化/重跑：全流程重跑 + 反馈注入
 /// F13：feedback 长度校验在 command 入口（pipeline_refine）做，此处只拼装
+/// F1：前端未传 targets（None）时按反馈关键词自动路由；显式传（含空数组→全量）则尊重前端
 pub async fn run_pipeline_refine(app: AppHandle, request: PipelineRequest, feedback: &str) -> Result<String, AppError> {
     let mut req = request;
     req.user_input = format!("{}\n\n（优化反馈：{}）", req.user_input, feedback);
+    if req.refine_targets.is_none() {
+        let routed = roles_for_feedback(feedback, &req.mode);
+        if !routed.is_empty() {
+            req.refine_targets = Some(routed);
+        }
+        // 无命中 → None 保持全量（安全默认，不猜）
+    }
     run_pipeline(app, req).await
 }
 
@@ -1112,6 +1201,37 @@ mod tests {
         assert!(user.contains("原歌词第一行"), "Mode C 原歌词传递不得回退: {}", user);
         assert!(user.contains("Mode C 专项"), "got: {}", user);
         assert!(user.contains("任务"), "got: {}", user);
+    }
+
+    /// F1：反馈关键词路由——歌词/编曲/情绪/抖音/参数五类 + 无命中空 + ModeC 映射 + 去重保序
+    /// （反馈文本均为中文描述，无凭据字面量）
+    #[test]
+    fn roles_for_feedback_routes_by_keywords() {
+        use PipelineRole::*;
+        assert_eq!(roles_for_feedback("副歌歌词太直白", &Mode::ModeB), vec![Lyricist]);
+        assert_eq!(roles_for_feedback("副歌歌词太直白", &Mode::ModeC), vec![Reviser]);
+        assert_eq!(roles_for_feedback("唢呐不够炸，配器太薄", &Mode::ModeD), vec![Producer, Emotion]); // "炸"兼命中情绪类，多命中去重保序
+        assert_eq!(roles_for_feedback("能量起不来，感觉太平", &Mode::ModeB), vec![Emotion]);
+        assert_eq!(roles_for_feedback("不够洗脑，不魔性", &Mode::ModeD), vec![StyleAnalyst]);
+        assert_eq!(roles_for_feedback("不够洗脑", &Mode::ModeB), vec![Producer]);
+        assert_eq!(
+            roles_for_feedback("Weirdness 太高", &Mode::ModeB),
+            vec![Producer, Emotion]
+        );
+        assert_eq!(
+            roles_for_feedback("歌词太直白，唢呐不够炸", &Mode::ModeD),
+            vec![Lyricist, Producer, Emotion]
+        ); // "炸"兼命中情绪类
+        assert!(roles_for_feedback("随便改改", &Mode::ModeB).is_empty());
+    }
+
+    /// F1：上一版方案提取——取最后标记之后；缺失/空白返回 None
+    #[test]
+    fn extract_previous_plan_takes_last_marker() {
+        let input = "新主题\n\n【上一版方案】\n方案A\n【上一版方案】\n方案B";
+        assert_eq!(extract_previous_plan(input).as_deref(), Some("方案B"));
+        assert!(extract_previous_plan("没有标记").is_none());
+        assert!(extract_previous_plan("【上一版方案】\n   ").is_none());
     }
 
     /// F12：original_lyrics 统一入口——新字段优先、旧 extra 回退、双空 None；旧请求兼容
@@ -1483,6 +1603,7 @@ mod tests {
             original_lyrics: None,
             role_overrides: overrides,
             thinking: false,
+            refine_targets: None,
         }
     }
 
