@@ -109,8 +109,9 @@ interface PipelineState {
 /** F4：用量零值（startRun/reset 时复位） */
 const ZERO_USAGE = { prompt_tokens: 0, completion_tokens: 0 };
 
-/** 组装角色级 API 覆盖：过滤全空/全空格条目 + 非法角色 key（无覆盖的角色的不传给后端） */
-const buildRoleOverrides = (settings: AppSettings): PipelineRequest["role_overrides"] => {
+/** 组装角色级 API 覆盖：过滤全空/全空格条目 + 非法角色 key（无覆盖的角色的不传给后端）
+ *  A13：export 供单测（纯函数，无 Tauri 依赖） */
+export const buildRoleOverrides = (settings: AppSettings): PipelineRequest["role_overrides"] => {
   const overrides = settings.roleOverrides ?? {};
   const entries = Object.entries(overrides).filter(([k, v]) =>
     ROLE_NAMES[k] && v && (v.model?.trim() || v.api_key?.trim() || v.base_url?.trim())

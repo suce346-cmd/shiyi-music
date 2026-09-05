@@ -19,8 +19,9 @@ const defaultSettings: AppSettings = {
 };
 
 /** 清洗 localStorage 旧数据：坏类型字段回退默认值，防透传后端 serde 反序列化失败。
- *  A12：apiKey 字段只接受哨兵或空——明文 key 不再从 localStorage 读取（走钥匙串迁移）。 */
-function sanitizeStored(raw: unknown): AppSettings {
+ *  A12：apiKey 字段只接受哨兵或空——明文 key 不再从 localStorage 读取（走钥匙串迁移）。
+ *  A13：export 供单测（纯函数）+ 导入配置清洗复用同一入口。 */
+export function sanitizeStored(raw: unknown): AppSettings {
   const base = { ...defaultSettings };
   if (typeof raw !== "object" || raw === null) return base;
   const o = raw as Record<string, unknown>;

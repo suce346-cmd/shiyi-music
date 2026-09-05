@@ -39,7 +39,8 @@ const FILTER_TABS: { label: string; value: Mode | "all" }[] = [
   { label: "D", value: "mode_d" },
 ];
 
-function outputSummary(entry: HistoryEntry): string {
+/** A13：export 供单测（纯函数） */
+export function outputSummary(entry: HistoryEntry): string {
   const text = entry.output || "";
   return text.length > 60 ? text.slice(0, 60) + "..." : text;
 }
