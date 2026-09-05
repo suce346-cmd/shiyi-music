@@ -13,6 +13,8 @@ pub struct Table {
     pub name: String,
     pub headers: Vec<String>,
     pub rows: Vec<Vec<String>>,
+    /// A7：加载期跳过的坏行号（1-based 含表头偏移，供日志与测试断言）
+    pub skipped_rows: Vec<usize>,
 }
 
 impl Table {
@@ -168,6 +170,48 @@ pub struct KnowledgeBase {
     tables: HashMap<String, Table>,
 }
 
+/// A4：进程级共享缓存（一次生成触发 8~16 次加载，解析一次够用）。
+/// OnceLock 线程安全（A2 并发共享无锁）；初始化失败 panic——嵌入数据损坏属构建期错误。
+static SHARED_KB: std::sync::OnceLock<KnowledgeBase> = std::sync::OnceLock::new();
+
+/// A4：取共享缓存（生产路径；测试直调 load/load_embedded）
+pub fn shared_knowledge() -> &'static KnowledgeBase {
+    SHARED_KB.get_or_init(|| {
+        load_embedded_internal().expect("嵌入知识库损坏（构建期错误）")
+    })
+}
+
+/// A4：嵌入加载内部实现（load_embedded 与 shared_knowledge 共用）
+fn load_embedded_internal() -> Result<KnowledgeBase, String> {
+    let mut kb = KnowledgeBase::default();
+    // 名称必须与 knowledge/ 目录下文件名一致（不含扩展名）
+    let files: [(&str, &str); 6] = [
+        ("instruments", include_str!("../knowledge/instruments.csv")),
+        ("emotions", include_str!("../knowledge/emotions.csv")),
+        ("style_genre", include_str!("../knowledge/style_genre.csv")),
+        ("suno_rules", include_str!("../knowledge/suno_rules.csv")),
+        ("cliches", include_str!("../knowledge/cliches.csv")),
+        ("hooks", include_str!("../knowledge/hooks.csv")),
+    ];
+    let mut loaded = 0usize;
+    for (name, content) in files {
+        match parse_csv(name, content) {
+            Ok(table) => {
+                kb.tables.insert(name.to_string(), table);
+                loaded += 1;
+            }
+            Err(e) => {
+                tracing::warn!(table = %name, error = %e, "知识库跳过坏表");
+            }
+        }
+    }
+    if loaded == 0 {
+        return Err("知识库嵌入数据全部不可用".to_string());
+    }
+    Ok(kb)
+}
+
+
 impl KnowledgeBase {
     /// 从目录加载所有 `.csv` 文件（测试与动态加载场景用；生产走 load_embedded）。
     /// P3：单表解析失败降级——跳过该表并打印警告，不阻断其他表；全失败才报错。
@@ -191,7 +235,7 @@ impl KnowledgeBase {
                 Ok(c) => c,
                 Err(e) => {
                     // P3：读失败也降级跳过（与坏表一致，不阻断其他表）
-                    eprintln!("[knowledge] 跳过不可读表 {}: {}", name, e);
+                    tracing::warn!(table = %name, error = %e, "知识库跳过不可读表");
                     continue;
                 }
             };
@@ -201,7 +245,7 @@ impl KnowledgeBase {
                     loaded += 1;
                 }
                 Err(e) => {
-                    eprintln!("[knowledge] 跳过坏表 {}: {}", name, e);
+                    tracing::warn!(table = %name, error = %e, "知识库跳过坏表");
                 }
             }
         }
@@ -214,33 +258,9 @@ impl KnowledgeBase {
     /// 编译期嵌入加载（打包后亦可用，不依赖运行时文件路径）。
     /// 生产路径使用这个，避免 dev 目录在分发态不存在导致崩溃。
     /// P3：单表解析失败降级——跳过该表并打印警告，其余表照常可用。
+    /// A4：shared_knowledge() 缓存调用内部实现（OnceLock 只初始化一次）。
     pub fn load_embedded() -> Result<KnowledgeBase, String> {
-        let mut kb = KnowledgeBase::default();
-        // 名称必须与 knowledge/ 目录下文件名一致（不含扩展名）
-        let files: [(&str, &str); 6] = [
-            ("instruments", include_str!("../knowledge/instruments.csv")),
-            ("emotions", include_str!("../knowledge/emotions.csv")),
-            ("style_genre", include_str!("../knowledge/style_genre.csv")),
-            ("suno_rules", include_str!("../knowledge/suno_rules.csv")),
-            ("cliches", include_str!("../knowledge/cliches.csv")),
-            ("hooks", include_str!("../knowledge/hooks.csv")),
-        ];
-        let mut loaded = 0usize;
-        for (name, content) in files {
-            match parse_csv(name, content) {
-                Ok(table) => {
-                    kb.tables.insert(name.to_string(), table);
-                    loaded += 1;
-                }
-                Err(e) => {
-                    eprintln!("[knowledge] 跳过坏表 {}: {}", name, e);
-                }
-            }
-        }
-        if loaded == 0 {
-            return Err("知识库嵌入数据全部不可用".to_string());
-        }
-        Ok(kb)
+        crate::knowledge::load_embedded_internal()
     }
 
     /// 按"列名 → 候选值列表"过滤渲染（任一列任一候选 contains 命中即保留该行）。
@@ -554,6 +574,8 @@ impl KnowledgeBase {
 /// 简易 CSV 解析：支持双引号包裹字段与转义 `""`。
 /// 不做完整 RFC 4180（无跨行字段），我们的表都是简单表格。
 fn parse_csv(name: &str, content: &str) -> Result<Table, String> {
+    // A7：BOM 剥离（Windows 记事本存 CSV 常见，首列名会 mismatch）
+    let content = content.strip_prefix('\u{feff}').unwrap_or(content);
     let mut lines = content.lines().filter(|l| !l.trim().is_empty());
     let header_line = lines
         .next()
@@ -563,26 +585,38 @@ fn parse_csv(name: &str, content: &str) -> Result<Table, String> {
         return Err(format!("CSV {} 表头列数不足（{}）", name, headers.len()));
     }
     let mut rows = Vec::new();
+    let mut skipped_rows: Vec<usize> = Vec::new();
+    let mut total = 0usize;
     for (i, line) in lines.enumerate() {
+        total += 1;
         let fields = split_csv_line(line);
         if fields.len() != headers.len() {
-            return Err(format!(
-                "CSV {} 第 {} 行列数 {} 与表头 {} 不一致",
-                name,
-                i + 2,
-                fields.len(),
-                headers.len()
-            ));
+            // A7：坏行跳过（行号 1-based 含表头偏移 i+2），不废整表
+            skipped_rows.push(i + 2);
+            continue;
         }
         rows.push(fields);
     }
     if rows.is_empty() {
         return Err(format!("CSV {} 没有数据行", name));
     }
+    // A7：半残表拒绝——坏行占比超 10% 视为表损坏，走 P3 表级降级（跳过该表）
+    if skipped_rows.len() * 10 > total {
+        return Err(format!(
+            "CSV {} 坏行过多（{}/{}），整表拒绝",
+            name,
+            skipped_rows.len(),
+            total
+        ));
+    }
+    if !skipped_rows.is_empty() {
+        tracing::warn!(table = %name, skipped = ?skipped_rows, "知识库跳过坏行");
+    }
     Ok(Table {
         name: name.to_string(),
         headers,
         rows,
+        skipped_rows,
     })
 }
 
@@ -637,10 +671,33 @@ mod tests {
         assert_eq!(t.rows[0][1], "warm, soft keys");
     }
 
+    /// A7：单数据行全坏（坏行比 100% > 10%）→ 整表拒绝（旧语义保留）
     #[test]
     fn rejects_column_mismatch() {
         let content = "a,b\n1,2,3\n";
         assert!(parse_csv("test", content).is_err());
+    }
+
+    /// A7：多行中 1 坏行（占比 <10%）→ 跳过该行 + 记录行号，好行保留
+    #[test]
+    fn skips_single_bad_row_keeps_good_ones() {
+        let mut content = String::from("a,b\n");
+        for i in 0..20 {
+            content.push_str(&format!("{}, {}\n", i, i));
+        }
+        content.push_str("bad,extra,col\n"); // 1 坏行（1/21 < 10%）
+        let t = parse_csv("test", &content).unwrap();
+        assert_eq!(t.rows.len(), 20);
+        assert_eq!(t.skipped_rows, vec![22]);
+    }
+
+    /// A7：BOM 前缀剥离（Windows 记事本存 CSV 常见）
+    #[test]
+    fn strips_utf8_bom() {
+        let content = "\u{feff}a,b\n1,2\n";
+        let t = parse_csv("test", content).unwrap();
+        assert_eq!(t.headers, vec!["a", "b"]);
+        assert_eq!(t.rows.len(), 1);
     }
 
     #[test]

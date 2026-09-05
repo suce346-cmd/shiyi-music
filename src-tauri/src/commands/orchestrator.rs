@@ -77,9 +77,9 @@ pub fn roles_for_feedback(feedback: &str, mode: &Mode) -> Vec<PipelineRole> {
     out
 }
 
-/// 加载知识库
+/// 加载知识库（A4：读进程共享缓存，解析一次；测试直调 knowledge 接口）
 fn load_knowledge() -> Result<KnowledgeBase, String> {
-    KnowledgeBase::load_embedded()
+    Ok(crate::knowledge::shared_knowledge().clone())
 }
 
 /// 按模式取原版完整指令（主持人阶段 0 用，一字不改）
@@ -324,16 +324,16 @@ fn inject_knowledge(kb: &KnowledgeBase, tables: &[(&str, &[&str], &[&str])], pla
             }
             Err(e) => {
                 // 表可能在加载期被 P3 降级跳过——告警但不阻断
-                eprintln!("[inject_knowledge] 表 {} 注入失败: {}", t, e);
+                tracing::warn!(table = %t, error = %e, "知识库注入失败");
             }
         }
     }
     // 总字数封顶：超过预算告警（不截断——宁可让测试/日志暴露，也不破坏表格完整性）
     if out.chars().count() > INJECT_MAX_TOTAL_CHARS {
-        eprintln!(
-            "[inject_knowledge] 注入总量 {} 字超过封顶 {} 字——检查 INJECT_MAX_* 常量或表内容",
-            out.chars().count(),
-            INJECT_MAX_TOTAL_CHARS
+        tracing::warn!(
+            total_chars = out.chars().count(),
+            cap = INJECT_MAX_TOTAL_CHARS,
+            "注入总量超封顶"
         );
     }
     out
@@ -396,12 +396,12 @@ async fn execute_review<R: Runtime>(
     .await?;
     // B4（上限放开后简化）：30000 上限下截断极罕见，观测记录即可——JSON 已完整时仍可正常解析
     if llm::is_truncated(&resp.finish_reason) {
-        eprintln!("[pipeline] {} 审改输出触及 max_tokens 上限（finish_reason=length）", role.name());
+        tracing::warn!(role = %role.name(), "审改输出触及 max_tokens 上限");
     }
     let mut result = parse_review(&resp.raw);
     // B4：解析失败 → 同参数重试一次（LLM 输出有随机性，重试常能修复）；仍失败走 B10 降级警示
     if result.degraded {
-        eprintln!("[pipeline] {} 审改输出无法解析，重试一次", role.name());
+        tracing::warn!(role = %role.name(), "审改输出无法解析，重试一次");
         let resp2 = llm::call_llm_silent(
             &base_url, &api_key, &model,
             messages.clone(),
@@ -515,12 +515,12 @@ async fn execute_audit_review<R: Runtime>(
     .await?;
     // B4（上限放开后简化）：截断观测记录，JSON 完整时照常解析
     if llm::is_truncated(&resp.finish_reason) {
-        eprintln!("[pipeline] 校验员审查输出触及 max_tokens 上限（finish_reason=length）");
+        tracing::warn!("校验员审查输出触及 max_tokens 上限");
     }
     let mut result = parse_review(&resp.raw);
     // B4：解析失败 → 重试一次；仍失败走 B10 降级警示
     if result.degraded {
-        eprintln!("[pipeline] 校验员审查输出无法解析，重试一次");
+        tracing::warn!("校验员审查输出无法解析，重试一次");
         let resp2 = llm::call_llm_silent(
             &base_url, &api_key, &model,
             messages.clone(),
@@ -569,7 +569,7 @@ async fn run_host_initial<R: Runtime>(
     .await?;
     // B4：流式截断直接报错——半截方案绝不允许进入讨论轮（用户可见明确错误，可简化输入后重试）
     if llm::is_truncated(&resp.finish_reason) {
-        eprintln!("[pipeline] 方案初稿输出被截断（finish_reason=length）");
+        tracing::error!("方案初稿输出被截断");
         return Err("方案初稿输出被截断（达到输出上限），请简化输入后重试".into());
     }
     let _ = app.emit("pipeline", PipelineEvent::HostDone { stage: HostStage::Initial });
@@ -626,7 +626,7 @@ async fn run_host_summarize<R: Runtime>(
     .await?;
     // B4（上限放开后简化）：截断观测记录，split_tasks 对无标记文本全文当方案，行为兼容
     if llm::is_truncated(&resp.finish_reason) {
-        eprintln!("[pipeline] 主持人汇总输出触及 max_tokens 上限（finish_reason=length），按现状继续（下轮讨论可修正）");
+        tracing::warn!("主持人汇总输出触及 max_tokens 上限，按现状继续");
     }
     let _ = app.emit("pipeline", PipelineEvent::HostDone { stage: HostStage::Summarize });
     emit_usage(app, PipelineRole::Host, &resp);
@@ -850,7 +850,7 @@ pub(crate) async fn run_pipeline_with_timeout<R: Runtime>(
         GuardOutcome::JoinPanicked(join_err) => {
             // spawn 的 future panic（如字符边界切片越界）：不杀 worker，转错误返回
             let msg = format!("流水线内部异常: {}", join_err);
-            eprintln!("[pipeline] {}", msg);
+            tracing::error!(message = %msg, "流水线失败");
             let err = AppError::new(ErrorKind::Internal, msg.clone());
             let _ = app.emit("pipeline", PipelineEvent::Failed { error: msg });
             Err(err)
@@ -858,7 +858,7 @@ pub(crate) async fn run_pipeline_with_timeout<R: Runtime>(
         GuardOutcome::TimedOut => {
             let mins = timeout.as_secs() / 60;
             let msg = format!("流水线超时（{} 分钟）未完成，已中止", mins);
-            eprintln!("[pipeline] {}", msg);
+            tracing::error!(message = %msg, "流水线失败");
             let err = AppError::new(ErrorKind::Timeout, msg.clone());
             let _ = app.emit("pipeline", PipelineEvent::Failed { error: msg });
             Err(err)
@@ -1043,10 +1043,10 @@ async fn run_pipeline_inner<R: Runtime>(
     if !issues.is_empty() {
         // 降级输出（对齐"永远有产出"原则）：打回耗尽仍返回最后一次方案，
         // 格式问题已通过 AuditResult(pass=false) 事件显式告知前端（不空手报错）
-        eprintln!(
-            "[pipeline] 硬校验打回耗尽（{} 个问题），降级返回最后一次方案：{}",
-            issues.len(),
-            issues.join("；")
+        tracing::warn!(
+            issue_count = issues.len(),
+            issues = %issues.join("；"),
+            "硬校验打回耗尽，降级返回最后一次方案"
         );
     }
 
@@ -1622,7 +1622,7 @@ mod tests {
                     limit
                 );
             }
-            eprintln!("[budget] {} 注入 {} 字（封顶 {}）", r.name, chars, INJECT_MAX_TOTAL_CHARS);
+            tracing::warn!(role = %r.name, chars = chars, cap = INJECT_MAX_TOTAL_CHARS, "注入总量超封顶");
             assert!(
                 chars <= INJECT_MAX_TOTAL_CHARS,
                 "{} 注入 {} 字超过封顶 {}",
