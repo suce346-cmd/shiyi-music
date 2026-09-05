@@ -14,6 +14,8 @@ use crate::models::{
     HostStage, Mode, PipelineEvent, PipelineRequest, PipelineRole, PipelineStep,
 };
 use serde_json::{json, Value};
+use std::future::Future;
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, Runtime};
 
 /// 各模式的流水线动态角色（固定主持/校验由各自阶段独家执行）
@@ -608,34 +610,76 @@ fn collect_hard_issues(mode: &Mode, final_text: &str, extra: Option<&str>) -> Ve
 /// 讨论轮数上限（阶段 1：首轮审改 + 最多 2 轮修订讨论）
 const MAX_DISCUSSION_ROUNDS: u32 = 3;
 
+/// 流水线整体超时（防静默挂死兜底：所有模式正常 10 分钟内完成）
+pub(crate) const PIPELINE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
+/// spawn + 超时守卫的结果
+enum GuardOutcome {
+    /// 正常完成（含业务 Err）
+    Completed(Result<String, String>),
+    /// 内部 panic（隔离层捕获，依赖 unwind——Cargo.toml 不得设置 panic="abort"）
+    JoinPanicked(String),
+    /// 超时：任务已被 abort 并回收，费用已停止
+    TimedOut,
+}
+
+/// spawn 任务并施加超时守卫：超时则 abort 任务并等待其真正终止（防假中止）。
+/// panic 隔离与超时强杀都在这里，与事件发射解耦（可独立单测）。
+async fn spawn_guarded<F>(fut: F, timeout: Duration) -> GuardOutcome
+where
+    F: Future<Output = Result<String, String>> + Send + 'static,
+{
+    let mut handle = tokio::task::spawn(fut);
+    // 用 &mut handle 保住所有权：若按值传入，超时后 handle 会随 timeout future 一起被
+    // drop → tokio 语义为 detach，任务会继续在后台烧钱（B1 修复的根因）
+    match tokio::time::timeout(timeout, &mut handle).await {
+        Ok(Ok(inner)) => GuardOutcome::Completed(inner),
+        Ok(Err(e)) => GuardOutcome::JoinPanicked(format!("{}", e)),
+        Err(_elapsed) => {
+            handle.abort();
+            let _ = handle.await; // 等任务真正终止（future drop 完成、在途连接关闭）再返回
+            GuardOutcome::TimedOut
+        }
+    }
+}
+
 /// 主流程：跑圆桌流水线。
-/// 隔离层：tokio::task::spawn 执行（内部 panic 不杀 worker 线程，转为错误返回）+ 整体超时
-/// （挂死/异常兜底，防前端永久"生成中"）。任何失败统一发 Failed 事件。
+/// 隔离层：tokio::task::spawn 执行（内部 panic 不杀 worker 线程，转为错误返回——依赖
+/// unwind，Cargo.toml 禁设 panic="abort"，改配置前先看这里）+ 整体超时（超时 = abort
+/// 强杀在途任务，非放弃等待）。任何失败统一发 Failed 事件。
 pub async fn run_pipeline<R: Runtime>(app: AppHandle<R>, request: PipelineRequest) -> Result<String, String> {
-    /// 流水线整体超时（防静默挂死兜底：所有模式正常 10 分钟内完成）
-    const PIPELINE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+    run_pipeline_with_timeout(app, request, PIPELINE_TIMEOUT).await
+}
+
+/// run_pipeline 的可测形态：超时时长参数化（生产 15 分钟，测试注入极小值）
+pub(crate) async fn run_pipeline_with_timeout<R: Runtime>(
+    app: AppHandle<R>,
+    request: PipelineRequest,
+    timeout: Duration,
+) -> Result<String, String> {
     let app2 = app.clone();
-    let handle = tokio::task::spawn(run_pipeline_inner(app2, request));
-    let result = tokio::time::timeout(PIPELINE_TIMEOUT, handle).await;
-    let inner = match result {
-        Ok(Ok(inner)) => inner,
-        Ok(Err(join_err)) => {
+    match spawn_guarded(run_pipeline_inner(app2, request), timeout).await {
+        GuardOutcome::Completed(inner) => {
+            if let Err(e) = &inner {
+                let _ = app.emit("pipeline", PipelineEvent::Failed { error: e.clone() });
+            }
+            inner
+        }
+        GuardOutcome::JoinPanicked(join_err) => {
             // spawn 的 future panic（如字符边界切片越界）：不杀 worker，转错误返回
             let msg = format!("流水线内部异常: {}", join_err);
             eprintln!("[pipeline] {}", msg);
             let _ = app.emit("pipeline", PipelineEvent::Failed { error: msg.clone() });
-            return Err(msg);
+            Err(msg)
         }
-        Err(_elapsed) => {
-            let msg = format!("流水线超时（{} 分钟）未完成，已中止", 15);
+        GuardOutcome::TimedOut => {
+            let mins = timeout.as_secs() / 60;
+            let msg = format!("流水线超时（{} 分钟）未完成，已中止", mins);
+            eprintln!("[pipeline] {}", msg);
             let _ = app.emit("pipeline", PipelineEvent::Failed { error: msg.clone() });
-            return Err(msg);
+            Err(msg)
         }
-    };
-    if let Err(e) = &inner {
-        let _ = app.emit("pipeline", PipelineEvent::Failed { error: e.clone() });
     }
-    inner
 }
 
 /// 主流程内层：三阶段（主持人统领 → 角色审改+校验员审查讨论 → 校验员格式化）
@@ -1118,5 +1162,61 @@ mod tests {
             role_overrides: overrides,
             thinking: false,
         }
+    }
+
+    // ---- B1：超时守卫（spawn_guarded）----
+
+    /// 超时必须真正终止任务——守卫返回 TimedOut 后，内层任务不得再推进
+    #[tokio::test]
+    async fn timeout_guard_aborts_inner_task() {
+        let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = finished.clone();
+        let inner = async move {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            // 只有任务未被 abort 时才会执行到这一行
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok("done".to_string())
+        };
+        let started = std::time::Instant::now();
+        let outcome = spawn_guarded(inner, std::time::Duration::from_millis(50)).await;
+        let elapsed = started.elapsed();
+
+        assert!(matches!(outcome, GuardOutcome::TimedOut), "应为超时分支");
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "必须在超时点附近返回，而非等任务跑完（实际 {:?}）",
+            elapsed
+        );
+        // 关键断言：任务已被强杀，sleep 之后的代码永远没机会执行
+        assert!(
+            !finished.load(std::sync::atomic::Ordering::SeqCst),
+            "内层任务应已被 abort，不得继续推进"
+        );
+    }
+
+    /// 完成路径（含业务 Err）原样透传，行为与修复前一致
+    #[tokio::test]
+    async fn timeout_guard_passes_through_result() {
+        let outcome =
+            spawn_guarded(async { Err("业务错误".to_string()) }, Duration::from_secs(1)).await;
+        assert!(matches!(outcome, GuardOutcome::Completed(Err(e)) if e == "业务错误"));
+        let outcome2 =
+            spawn_guarded(async { Ok("方案".to_string()) }, Duration::from_secs(1)).await;
+        assert!(matches!(outcome2, GuardOutcome::Completed(Ok(s)) if s == "方案"));
+    }
+
+    /// panic 隔离路径仍然成立（unwind 语义；release 依赖 B2 不得设 panic=abort）
+    #[tokio::test]
+    async fn timeout_guard_catches_panic() {
+        let outcome = spawn_guarded(
+            async {
+                panic!("模拟越界");
+                #[allow(unreachable_code)]
+                Ok(String::new())
+            },
+            Duration::from_secs(1),
+        )
+        .await;
+        assert!(matches!(outcome, GuardOutcome::JoinPanicked(_)), "panic 应被隔离为 JoinPanicked");
     }
 }

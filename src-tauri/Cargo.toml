@@ -32,4 +32,6 @@ futures-util = "0.3"
 strip = true
 lto = true
 codegen-units = 1
-panic = "abort"
+# 必须保持 unwind（默认值）：orchestrator.rs 的 spawn 隔离层依赖 JoinError 捕获 panic，
+# 设 panic="abort" 会让 release 版任何 panic 直接杀进程闪退（B2 修复，勿回退）
+# panic = "abort"
