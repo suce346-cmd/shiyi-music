@@ -44,6 +44,15 @@ describe("sanitizeStored", () => {
     expect(missing.generation).toBeUndefined();
   });
 
+  it("F7/F8：theme/language 清洗——合法保留，非法回退缺省", () => {
+    expect(sanitizeStored(JSON.parse('{"theme":"dark"}')).theme).toBe("dark");
+    expect(sanitizeStored(JSON.parse('{"theme":"nope"}')).theme).toBeUndefined();
+    expect(sanitizeStored(JSON.parse('{"language":"en"}')).language).toBe("en");
+    expect(sanitizeStored(JSON.parse('{"language":"fr"}')).language).toBeUndefined();
+    expect(sanitizeStored({}).theme).toBeUndefined();
+    expect(sanitizeStored({}).language).toBeUndefined();
+  });
+
   it("角色哨兵保留、非哨兵不读入", () => {
     const keep = sanitizeStored(
       JSON.parse(`{"${K.rk}":{"auditor":{"${K.ak}":"${SENTINEL}"}}}`),
