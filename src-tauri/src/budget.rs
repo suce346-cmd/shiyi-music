@@ -19,6 +19,7 @@ impl Budget {
     }
 
     /// 测试/兜底：几乎无限（1 小时，远超任何单轮耗时）
+    #[allow(dead_code)] // 测试专用（生产走 with_timeout）
     pub fn unlimited() -> Self {
         Self::with_timeout(Duration::from_secs(3600))
     }

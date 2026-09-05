@@ -29,7 +29,8 @@ pub fn init(app_data_dir: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
-/// 日志目录路径（"打开日志目录"按钮用）
+/// 日志目录路径（open_log_dir 命令内部复用；保留供未来诊断命令用）
+#[allow(dead_code)]
 pub fn log_dir(app_data_dir: &std::path::Path) -> std::path::PathBuf {
     app_data_dir.join("logs")
 }

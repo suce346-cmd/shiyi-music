@@ -13,7 +13,8 @@ pub struct Table {
     pub name: String,
     pub headers: Vec<String>,
     pub rows: Vec<Vec<String>>,
-    /// A7：加载期跳过的坏行号（1-based 含表头偏移，供日志与测试断言）
+    /// A7：加载期跳过的坏行号（1-based 含表头偏移，供日志与测试断言；生产渲染不读）
+    #[allow(dead_code)] // 非测试构建下生产渲染不读此字段
     pub skipped_rows: Vec<usize>,
 }
 
@@ -256,7 +257,8 @@ impl KnowledgeBase {
     }
 
     /// 编译期嵌入加载（打包后亦可用，不依赖运行时文件路径）。
-    /// 生产路径使用这个，避免 dev 目录在分发态不存在导致崩溃。
+    /// 生产走 shared_knowledge 缓存；测试直调本函数；分发态 dev 目录不存在时兜底。
+    #[allow(dead_code)] // 生产走缓存，测试+兜底保留
     /// P3：单表解析失败降级——跳过该表并打印警告，其余表照常可用。
     /// A4：shared_knowledge() 缓存调用内部实现（OnceLock 只初始化一次）。
     pub fn load_embedded() -> Result<KnowledgeBase, String> {
