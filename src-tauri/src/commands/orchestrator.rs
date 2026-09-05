@@ -259,8 +259,44 @@ pub const INJECT_MAX_INSTRUMENTS_ROWS: usize = 15;
 pub const INJECT_MAX_FULL_ROWS: usize = 50;
 /// 单角色一次注入总字数封顶（超过告警；最坏情况 = 制作人三表全命中含 22 条规则子集 ≈ 4300 字）
 pub const INJECT_MAX_TOTAL_CHARS: usize = 4500;
+/// A3：方案注入长度上限（超则截断 + 附注；对齐知识库"少而准"纪律，上下文同样需要预算）
+pub const INJECT_MAX_PLAN_CHARS: usize = 8000;
+/// A3：revisions_log 保留条数（更早折叠为单行摘要，reason 关键词保留供去重参考）
+pub const INJECT_MAX_LOG_ENTRIES: usize = 6;
 /// B4：格式输出截断时注入打回循环的 issue 文案（走 AuditResult 事件，用户可见）
 const TRUNCATION_ISSUE: &str = "输出被截断（finish_reason=length），请精简内容后重新输出完整提示词包";
+
+/// A3：方案截断（超长截断 + 附注，不静默丢；纯函数可测）
+fn truncate_plan(plan: &str) -> String {
+    if plan.chars().count() <= INJECT_MAX_PLAN_CHARS {
+        return plan.to_string();
+    }
+    let kept: String = plan.chars().take(INJECT_MAX_PLAN_CHARS).collect();
+    format!("{}…\n[方案过长，已截断前 {} 字]", kept, INJECT_MAX_PLAN_CHARS)
+}
+
+/// A3：修订 log 折叠（只留最近 N 条，更早合成单行摘要；纯函数可测）
+/// B4 的 ⚠️ 条目短，折叠只压旧条目，警示可见性不受影响
+fn fold_log(log: &[(String, String)]) -> Vec<(String, String)> {
+    if log.len() <= INJECT_MAX_LOG_ENTRIES {
+        return log.to_vec();
+    }
+    let folded_count = log.len() - INJECT_MAX_LOG_ENTRIES;
+    // 摘要保留各条 reason 前 30 字（去重关键词仍在）
+    let summary: Vec<String> = log[..folded_count]
+        .iter()
+        .map(|(name, rev)| {
+            let brief: String = rev.chars().take(30).collect();
+            format!("{}:{}", name, brief)
+        })
+        .collect();
+    let mut out = vec![(
+        "早期修订".to_string(),
+        format!("等 {} 条早期修订已折叠（{}）", folded_count, summary.join("；")),
+    )];
+    out.extend_from_slice(&log[folded_count..]);
+    out
+}
 
 /// 微观②：按需检索注入——按角色绑定表 + 列投影 + 当前方案关键词过滤，只注入命中条目。
 /// - emotions/cliches/hooks/style_genre：候选词（emotion/cliche/hook_type/genre 列值）命中 → 过滤注入
@@ -349,6 +385,8 @@ async fn execute_review<R: Runtime>(
     req: &PipelineRequest,
     budget: &crate::budget::SharedBudget,
 ) -> Result<ReviewResult, AppError> {
+    // A11：生成参数（缺省默认；调用点透传给 llm 层）
+    let gen = req.generation.clone().unwrap_or_default();
     let kb = load_knowledge()?;
     let r = roles::role_for(role);
 
@@ -360,14 +398,17 @@ async fn execute_review<R: Runtime>(
     system.push_str("\n输出 JSON（严格符合格式，不输出其他内容）：\n");
     system.push_str(r.output_schema);
 
-    let mut user = format!("【主持人当前方案】\n{}\n\n", current_plan);
+    // A3：方案截断 + log 折叠（预算纪律；知识库注入同风格）
+    let plan_view = truncate_plan(current_plan);
+    let log_view = fold_log(revisions_log);
+    let mut user = format!("【主持人当前方案】\n{}\n\n", plan_view);
     // Mode C：原歌词全链路传递——审改员逐行字数/韵脚对齐的依据（P2 硬校验前置）
     if let Some(original) = req.original_lyrics_text() {
         user.push_str(&format!("【原歌词（改写需逐行对齐）】\n{}\n\n", original));
     }
-    if !revisions_log.is_empty() {
+    if !log_view.is_empty() {
         user.push_str("【已提修订（可参考，不要重复提同一问题）】\n");
-        for (name, rev) in revisions_log {
+        for (name, rev) in &log_view {
             user.push_str(&format!("- {}：{}\n", name, rev));
         }
         user.push('\n');
@@ -392,6 +433,7 @@ async fn execute_review<R: Runtime>(
         llm::MAX_TOKENS_CAP,
         req.thinking,
         budget,
+        &gen,
     )
     .await?;
     // B4（上限放开后简化）：30000 上限下截断极罕见，观测记录即可——JSON 已完整时仍可正常解析
@@ -408,6 +450,7 @@ async fn execute_review<R: Runtime>(
             llm::MAX_TOKENS_CAP,
             req.thinking,
             budget,
+            &gen,
         )
         .await?;
         let result2 = parse_review(&resp2.raw);
@@ -433,7 +476,10 @@ fn build_audit_review_user_prompt(
     next_tasks: &str,
     req: &PipelineRequest,
 ) -> String {
-    let mut user = format!("【主持人当前方案】\n{}\n\n", current_plan);
+    // A3：方案截断 + log 折叠
+    let plan_view = truncate_plan(current_plan);
+    let log_view = fold_log(revisions_log);
+    let mut user = format!("【主持人当前方案】\n{}\n\n", plan_view);
     // Mode C：原歌词全链路传递——校验员核对逐行对齐（P2 硬校验前置）
     if let Some(original) = req.original_lyrics_text() {
         user.push_str(&format!("【原歌词（逐行字数对齐依据）】\n{}\n\n", original));
@@ -457,9 +503,9 @@ fn build_audit_review_user_prompt(
         }
         user.push('\n');
     }
-    if !revisions_log.is_empty() {
+    if !log_view.is_empty() {
         user.push_str("【已提修订（不要重复提同一问题）】\n");
-        for (name, rev) in revisions_log {
+        for (name, rev) in &log_view {
             user.push_str(&format!("- {}：{}\n", name, rev));
         }
         user.push('\n');
@@ -484,6 +530,8 @@ async fn execute_audit_review<R: Runtime>(
     req: &PipelineRequest,
     budget: &crate::budget::SharedBudget,
 ) -> Result<ReviewResult, AppError> {
+    // A11：生成参数（缺省默认；调用点透传给 llm 层）
+    let gen = req.generation.clone().unwrap_or_default();
     let kb = load_knowledge()?;
 
     let mut system = String::new();
@@ -511,6 +559,7 @@ async fn execute_audit_review<R: Runtime>(
         llm::MAX_TOKENS_CAP,
         req.thinking,
         budget,
+        &gen,
     )
     .await?;
     // B4（上限放开后简化）：截断观测记录，JSON 完整时照常解析
@@ -527,6 +576,7 @@ async fn execute_audit_review<R: Runtime>(
             llm::MAX_TOKENS_CAP,
             req.thinking,
             budget,
+            &gen,
         )
         .await?;
         let result2 = parse_review(&resp2.raw);
@@ -552,6 +602,7 @@ async fn run_host_initial<R: Runtime>(
     req: &PipelineRequest,
     budget: &crate::budget::SharedBudget,
 ) -> Result<String, AppError> {
+    let gen = req.generation.clone().unwrap_or_default();
     let _ = app.emit("pipeline", PipelineEvent::HostStart { stage: HostStage::Initial });
     let system = prompt_for_mode(&req.mode);
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Host);
@@ -565,6 +616,7 @@ async fn run_host_initial<R: Runtime>(
         vec![json!({"role":"system","content":system}), json!({"role":"user","content":user})],
         req.thinking,
         budget,
+        &gen,
     )
     .await?;
     // B4：流式截断直接报错——半截方案绝不允许进入讨论轮（用户可见明确错误，可简化输入后重试）
@@ -584,7 +636,8 @@ fn build_summarize_user_prompt(
     current_plan: &str,
     round_changes: &[(PipelineRole, Vec<ReviewChange>, String)],
 ) -> String {
-    let mut user = format!("【当前方案】\n{}\n\n【本轮各角色修订片段与校验员观点】\n", current_plan);
+    // A3：方案截断（汇总输入同样封顶）
+    let mut user = format!("【当前方案】\n{}\n\n【本轮各角色修订片段与校验员观点】\n", truncate_plan(current_plan));
     for (role, changes, role_reason) in round_changes {
         user.push_str(&format!("## {} 的修订：\n", role.name()));
         if !role_reason.is_empty() {
@@ -608,6 +661,7 @@ async fn run_host_summarize<R: Runtime>(
     req: &PipelineRequest,
     budget: &crate::budget::SharedBudget,
 ) -> Result<(String, String), AppError> {
+    let gen = req.generation.clone().unwrap_or_default();
     let host = roles::host();
     let user = build_summarize_user_prompt(current_plan, round_changes);
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Host);
@@ -622,6 +676,7 @@ async fn run_host_summarize<R: Runtime>(
         llm::MAX_TOKENS_CAP,
         req.thinking,
         budget,
+        &gen,
     )
     .await?;
     // B4（上限放开后简化）：截断观测记录，split_tasks 对无标记文本全文当方案，行为兼容
@@ -646,6 +701,7 @@ async fn run_audit_format<R: Runtime>(
     req: &PipelineRequest,
     budget: &crate::budget::SharedBudget,
 ) -> Result<(String, bool), AppError> {
+    let gen = req.generation.clone().unwrap_or_default();
     let _ = app.emit("pipeline", PipelineEvent::AuditStart);
     let auditor = roles::auditor();
     let kb = load_knowledge()?;
@@ -688,6 +744,7 @@ async fn run_audit_format<R: Runtime>(
         llm::MAX_TOKENS_CAP,
         req.thinking,
         budget,
+        &gen,
     )
     .await?;
     emit_usage(app, PipelineRole::Auditor, &resp);
@@ -1114,6 +1171,7 @@ pub async fn interject_feedback(note: String) -> Result<(), AppError> {
             role_overrides: None,
             thinking: false,
             refine_targets: None,
+            generation: None,
         },
         Some(&note),
     )?;
@@ -1570,6 +1628,36 @@ mod tests {
         assert!(hit_lines <= 17, "注入行数超限: {}", hit_lines); // 表头+分隔+≤15
     }
 
+    /// A3：方案截断——短方案原样，超长截断+附注（INJECT_MAX_PLAN_CHARS 锁）
+    #[test]
+    fn truncate_plan_caps_long_input() {
+        assert_eq!(truncate_plan("短方案"), "短方案");
+        let long = "啊".repeat(INJECT_MAX_PLAN_CHARS + 100);
+        let out = truncate_plan(&long);
+        assert!(out.contains("[方案过长，已截断前"), "应有截断附注: {}", &out[out.len().saturating_sub(120)..]);
+        assert!(out.chars().count() < long.chars().count());
+        // 边界：恰好上限不过截断
+        let edge = "啊".repeat(INJECT_MAX_PLAN_CHARS);
+        assert_eq!(truncate_plan(&edge), edge);
+    }
+
+    /// A3：log 折叠——6 条内原样，7 条折叠为摘要+最近 6 条，关键词保留
+    #[test]
+    fn fold_log_keeps_recent_and_summarizes_rest() {
+        let mk = |i: usize| (format!("角色{}", i), format!("修订内容很长很长很长很长很长很长{}", i));
+        let log: Vec<(String, String)> = (0..6).map(mk).collect();
+        assert_eq!(fold_log(&log).len(), 6);
+        let long: Vec<(String, String)> = (0..8).map(mk).collect();
+        let folded = fold_log(&long);
+        assert_eq!(folded.len(), 7, "1 摘要 + 最近 6 条");
+        assert_eq!(folded[0].0, "早期修订");
+        assert!(folded[0].1.contains("等 2 条早期修订已折叠"), "got: {}", folded[0].1);
+        assert!(folded[0].1.contains("角色0"), "摘要应保留早期角色名: {}", folded[0].1);
+        // 最近 6 条完整保留
+        assert_eq!(folded[1].0, "角色2");
+        assert_eq!(folded[6].0, "角色7");
+    }
+
     /// 注入量规范：每个角色用"最坏情况方案"（命中所有关键词表 + 全能量区间）注入，
     /// 断言单表条数 ≤ 上限、单角色总字数 ≤ 封顶。常量 INJECT_MAX_* 的测试锁。
     #[test]
@@ -1645,6 +1733,7 @@ mod tests {
             role_overrides: overrides,
             thinking: false,
             refine_targets: None,
+            generation: None,
         }
     }
 

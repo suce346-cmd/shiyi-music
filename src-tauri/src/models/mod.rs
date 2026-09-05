@@ -171,6 +171,44 @@ mod tests {
         assert!(back.thinking);
     }
 
+    /// A11：GenerationConfig 缺省=现行值（silent 0.6/stream 0.7/max 30000），越界 Validation
+    #[test]
+    fn generation_config_defaults_and_validation() {
+        let d = GenerationConfig::default();
+        assert_eq!(d.silent_temperature(), 0.6);
+        assert_eq!(d.stream_temperature(), 0.7);
+        assert_eq!(d.max_tokens(), 30000);
+        assert!(d.validate().is_ok());
+        // 钳制：超 32000 收敛到 32000
+        let big = GenerationConfig { temperature: None, max_tokens: Some(99999) };
+        assert_eq!(big.max_tokens(), 32000);
+        // 越界
+        let bad_t = GenerationConfig { temperature: Some(2.5), max_tokens: None };
+        assert_eq!(bad_t.validate().unwrap_err().kind, ErrorKind::Validation);
+        let bad_m = GenerationConfig { temperature: None, max_tokens: Some(500) };
+        assert_eq!(bad_m.validate().unwrap_err().kind, ErrorKind::Validation);
+        // 边界通过
+        let edge = GenerationConfig { temperature: Some(2.0), max_tokens: Some(1000) };
+        assert!(edge.validate().is_ok());
+        // generation 越界经 validate_request 透出
+        let mut req = PipelineRequest {
+            mode: Mode::ModeB,
+            user_input: "雨天".into(),
+            model: "m".into(),
+            api_key: "k".into(),
+            base_url: "https://api.example.com/v1".into(),
+            extra: None,
+            original_lyrics: None,
+            role_overrides: None,
+            thinking: false,
+            refine_targets: None,
+            generation: Some(GenerationConfig { temperature: Some(9.0), max_tokens: None }),
+        };
+        assert_eq!(validate_request(&req, None).unwrap_err().kind, ErrorKind::Validation);
+        req.generation = None;
+        assert!(validate_request(&req, None).is_ok());
+    }
+
     /// F13：准入校验——空/超长/非法 URL/缺配置一律 Validation（构造请求用 struct 直写，无凭据字面量 JSON）
     #[test]
     fn validate_request_rejects_bad_input() {
@@ -186,6 +224,7 @@ mod tests {
                 role_overrides: None,
                 thinking: false,
                 refine_targets: None,
+                generation: None,
             }
         }
         use crate::errors::ErrorKind;
@@ -341,6 +380,54 @@ pub struct PipelineRequest {
     /// 旧前端无此字段 → None（serde default）。
     #[serde(default)]
     pub refine_targets: Option<Vec<PipelineRole>>,
+    /// A11：生成参数覆盖（缺省走内置默认；旧前端无此字段 → None）。
+    #[serde(default)]
+    pub generation: Option<GenerationConfig>,
+}
+
+/// A11：生成参数（全字段可选，缺省=现行硬编码值，零行为变化）。
+/// temperature 默认：静默 0.6 / 流式 0.7（调用方区分）；max_tokens 默认 30000（MAX_TOKENS_CAP）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GenerationConfig {
+    #[serde(default)]
+    pub temperature: Option<f32>,
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+}
+
+impl GenerationConfig {
+    /// 静默调用 temperature（缺省 0.6）
+    pub fn silent_temperature(&self) -> f32 {
+        self.temperature.unwrap_or(0.6)
+    }
+    /// 流式调用 temperature（缺省 0.7）
+    pub fn stream_temperature(&self) -> f32 {
+        self.temperature.unwrap_or(0.7)
+    }
+    /// max_tokens（缺省 30000，上限钳制 32000）
+    pub fn max_tokens(&self) -> u32 {
+        self.max_tokens.unwrap_or(30000).min(32000)
+    }
+    /// F13 扩展：范围校验（temperature 0~2，max_tokens 1000~32000）
+    pub fn validate(&self) -> Result<(), AppError> {
+        if let Some(t) = self.temperature {
+            if !(0.0..=2.0).contains(&t) {
+                return Err(AppError::new(
+                    ErrorKind::Validation,
+                    format!("temperature 越界（{}，允许 0~2）", t),
+                ));
+            }
+        }
+        if let Some(m) = self.max_tokens {
+            if !(1000..=32000).contains(&m) {
+                return Err(AppError::new(
+                    ErrorKind::Validation,
+                    format!("max_tokens 越界（{}，允许 1000~32000）", m),
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 impl PipelineRequest {
@@ -401,6 +488,10 @@ pub fn validate_request(req: &PipelineRequest, feedback: Option<&str>) -> Result
             ErrorKind::Validation,
             "API 地址非法（必须 http(s) 开头），请在设置中检查",
         ));
+    }
+    // A11：生成参数范围校验（缺省跳过）
+    if let Some(g) = &req.generation {
+        g.validate()?;
     }
     Ok(())
 }

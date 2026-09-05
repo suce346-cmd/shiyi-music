@@ -198,6 +198,7 @@ async fn send_and_extract(
 /// 返回 LLMResponse（B4：含 finish_reason，供调用方做截断分级处置）。
 /// 思考模式下若响应无正文（思维链偶发吃满预算），自动降级为无思考重试一次，保证流水线不中断。
 /// A1：budget 透传（单调用超时按剩余预算收紧，见 build_client_for_budget）。
+/// A11：gen 缺省走内置默认（temperature 0.6 / max_tokens=调用方传入值）。
 pub(crate) async fn call_llm_silent(
     base_url: &str,
     api_key: &str,
@@ -206,16 +207,20 @@ pub(crate) async fn call_llm_silent(
     max_tokens: u32,
     thinking: bool,
     budget: &SharedBudget,
+    gen: &crate::models::GenerationConfig,
 ) -> Result<LLMResponse, AppError> {
     // A1：单调用超时取 min(场景默认, 剩余预算)——预算不足时 reqwest 层即快速失败
     let client_timeout = budget.remaining().as_secs().min(if thinking { 300 } else { 120 }).max(10);
     let client = build_client(client_timeout)?;
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+    // A11：temperature 缺省 0.6；max_tokens 取 min(调用方, 配置)——配置只收紧不放宽旧行为
+    let temperature = gen.silent_temperature();
+    let max_tokens = max_tokens.min(gen.max_tokens());
     let mut body = serde_json::json!({
         "model": model,
         "messages": messages,
         "stream": false,
-        "temperature": 0.6,
+        "temperature": temperature,
         "max_tokens": max_tokens,
     });
     if thinking {
@@ -230,7 +235,7 @@ pub(crate) async fn call_llm_silent(
                 "model": model,
                 "messages": body["messages"],
                 "stream": false,
-                "temperature": 0.6,
+                "temperature": temperature,
                 "max_tokens": max_tokens,
             });
             send_and_extract(&client, &url, &api_key, &fallback, budget).await
@@ -239,7 +244,7 @@ pub(crate) async fn call_llm_silent(
     }
 }
 
-/// 调用 LLM 流式接口并逐 chunk 转发给前端（A1：budget 透传）
+/// 调用 LLM 流式接口并逐 chunk 转发给前端（A1：budget 透传；A11：gen 缺省 temperature 0.7）
 pub(crate) async fn call_llm_stream<R: Runtime>(
     app: AppHandle<R>,
     base_url: &str,
@@ -248,6 +253,7 @@ pub(crate) async fn call_llm_stream<R: Runtime>(
     messages: Vec<Value>,
     thinking: bool,
     budget: &SharedBudget,
+    gen: &crate::models::GenerationConfig,
 ) -> Result<LLMResponse, AppError> {
     let client_timeout = budget.remaining().as_secs().min(if thinking { 300 } else { 120 }).max(10);
     let client = build_client(client_timeout)?;
@@ -257,11 +263,11 @@ pub(crate) async fn call_llm_stream<R: Runtime>(
         "model": model,
         "messages": messages,
         "stream": true,
-        "temperature": 0.7,
-        "max_tokens": MAX_TOKENS_CAP,
+        "temperature": gen.stream_temperature(),
+        "max_tokens": gen.max_tokens(),
     });
     if thinking {
-        apply_thinking(&mut body, model, MAX_TOKENS_CAP);
+        apply_thinking(&mut body, model, gen.max_tokens());
     }
 
     let response = send_with_retry(
