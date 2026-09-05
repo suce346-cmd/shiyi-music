@@ -258,20 +258,24 @@ pub fn validate_douyin(text: &str) -> ValidationResult {
         issues.push(format!("Hook 出现 {} 次（要求 >= 2）", hook_count));
     }
 
-    // 2. Verse 不超过 4 行：统计 [Verse] 标签下到下一个标签前的行数
+    // 2. Verse 不超过 4 行（B8：逐段结算——旧实现每遇新 Verse 重置计数，
+    //    多段 Verse 只检查了最后一段，前面段落超行漏检）
     let lines: Vec<&str> = text.lines().collect();
-    let mut in_verse = false;
+    let mut verse_counts: Vec<(String, usize)> = Vec::new();
+    let mut current_verse: Option<String> = None;
     let mut verse_line_count = 0usize;
     for line in lines.iter() {
         let t = line.trim();
         if t.starts_with('[') && t.ends_with(']') && !t.contains(',') {
-            if t.contains("Verse") {
-                in_verse = true;
+            // 遇到任何结构标签：先结算进行中的 Verse 段
+            if let Some(label) = current_verse.take() {
+                verse_counts.push((label, verse_line_count));
                 verse_line_count = 0;
-            } else {
-                in_verse = false;
             }
-        } else if in_verse && !t.is_empty() && !(t.starts_with('[') && t.ends_with(']')) {
+            if t.contains("Verse") {
+                current_verse = Some(t.trim_matches(|c| c == '[' || c == ']').to_string());
+            }
+        } else if current_verse.is_some() && !t.is_empty() && !(t.starts_with('[') && t.ends_with(']')) {
             // 排除说明行（[乐器, 空间] 含逗号，M5 修复）与裸包装行（含逗号且 >15 字）
             let n = t.chars().filter(|c| !c.is_whitespace()).count();
             if !(t.contains(',') && n > 15) {
@@ -279,8 +283,14 @@ pub fn validate_douyin(text: &str) -> ValidationResult {
             }
         }
     }
-    if verse_line_count > 4 {
-        issues.push(format!("Verse 行数 {} 超限（要求 <= 4）", verse_line_count));
+    // 文本结束：结算最后一个 Verse 段
+    if let Some(label) = current_verse.take() {
+        verse_counts.push((label, verse_line_count));
+    }
+    for (label, count) in &verse_counts {
+        if *count > 4 {
+            issues.push(format!("{} 行数 {} 超限（要求 <= 4）", label, count));
+        }
     }
 
     // 3. 结尾骤停标记：全文包含 骤停 / abruptly / cut / [Drop] 结尾等
@@ -464,7 +474,27 @@ mod tests {
         assert!(!r.passed);
     }
 
-    // ---- H-2 修复后：真硬校验测试 ----
+    /// B8：多段 Verse 逐段结算——第一段超行必须被检出（旧实现只查最后一段，漏检）
+    #[test]
+    fn douyin_multi_verse_each_section_checked() {
+        // Verse 1 六行超限 + Verse 2 两行合规：旧实现只看最后一段会放行
+        let text = "[Hook]\n我 真的 会谢\n[Verse]\n这一行\n这一行\n这一行\n这一行\n这一行\n这一行\n[Hook]\n我 真的 会谢\n[Verse]\n一行\n一行\n[Hook]\n[all instruments cut abruptly]";
+        let r = validate_douyin(text);
+        assert!(!r.passed, "Verse 1 六行必须被检出: {:?}", r.issues);
+        assert!(
+            r.issues.iter().any(|i| i.contains("Verse") && i.contains("6")),
+            "issue 应带段名与行数: {:?}",
+            r.issues
+        );
+    }
+
+    /// B8 回归：两段 Verse 各 4 行（合法）不得误报
+    #[test]
+    fn douyin_multi_verse_legal_passes() {
+        let text = "[Hook]\n我 真的 会谢\n[Verse]\n一\n二\n三\n四\n[Hook]\n我 真的 会谢\n[Verse]\n一\n二\n三\n四\n[Hook]\n[all instruments cut abruptly]";
+        let r = validate_douyin(text);
+        assert!(!r.issues.iter().any(|i| i.contains("超限")), "4 行 Verse 不应报超限: {:?}", r.issues);
+    }
 
     /// 一份合规的 Mode A 产出应能通过（正样）
     #[test]
