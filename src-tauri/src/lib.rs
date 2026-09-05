@@ -26,6 +26,7 @@ pub fn run() {
             commands::llm::test_api,
             commands::orchestrator::cancel_pipeline,
             commands::orchestrator::interject_feedback,
+            commands::orchestrator::get_pipeline_meta,
             commands::keychain::keychain_set,
             commands::keychain::keychain_get,
             commands::keychain::keychain_delete,

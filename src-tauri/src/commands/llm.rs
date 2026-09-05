@@ -33,13 +33,17 @@ fn retry_plan(attempt: usize, status: Option<u16>, network_err: bool) -> Option<
 /// 带退避重试的请求发送：429/5xx/网络错误按 retry_plan 退避，最多 3 次（4xx 凭据类错误不重试）。
 /// A5：错误分类——reqwest 层失败=Network，重试耗尽=Network。
 /// A1：每次尝试前查共享预算——剩余不足则跳过重试直接 Timeout；退避等待可被预算到期中断。
-async fn send_with_retry(req: reqwest::RequestBuilder, budget: &SharedBudget) -> Result<reqwest::Response, AppError> {
+async fn send_with_retry(
+    req: reqwest::RequestBuilder,
+    budget: &SharedBudget,
+    run_id: &str,
+) -> Result<reqwest::Response, AppError> {
     /// 预算不足以再尝试一次的最低门槛（一次 HTTP 往返的悲观下限）
     const MIN_ATTEMPT_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
     let mut last_err = "unknown".to_string();
     for attempt in 0..3 {
-        // B3：取消检查优先于预算（用户意图 > 预算约束）
-        if crate::commands::cancel::is_cancelled() {
+        // B3/A9：取消检查优先于预算（按 run_id 隔离）
+        if crate::commands::cancel::is_cancelled(run_id) {
             return Err(AppError::cancelled());
         }
         // A1：预算闸门——不够一次尝试就直接失败，不再烧钱等 B1 abort
@@ -167,6 +171,7 @@ async fn send_and_extract(
     api_key: &str,
     body: &Value,
     budget: &SharedBudget,
+    run_id: &str,
 ) -> Result<LLMResponse, AppError> {
     let resp = send_with_retry(
         client
@@ -175,6 +180,7 @@ async fn send_and_extract(
             .header("Content-Type", "application/json")
             .json(body),
         budget,
+        run_id,
     )
     .await?;
     let status = resp.status();
@@ -208,6 +214,7 @@ pub(crate) async fn call_llm_silent(
     thinking: bool,
     budget: &SharedBudget,
     gen: &crate::models::GenerationConfig,
+    run_id: &str,
 ) -> Result<LLMResponse, AppError> {
     // A1：单调用超时取 min(场景默认, 剩余预算)——预算不足时 reqwest 层即快速失败
     let client_timeout = budget.remaining().as_secs().min(if thinking { 300 } else { 120 }).max(10);
@@ -226,7 +233,7 @@ pub(crate) async fn call_llm_silent(
     if thinking {
         apply_thinking(&mut body, model, max_tokens);
     }
-    match send_and_extract(&client, &url, &api_key, &body, budget).await {
+    match send_and_extract(&client, &url, &api_key, &body, budget, run_id).await {
         Ok(resp) => Ok(resp),
         Err(e) if thinking && e.message.contains("missing content") => {
             // 降级：去掉思考参数重试一次（同一 prompt 无思考直接输出，必有正文）
@@ -238,7 +245,7 @@ pub(crate) async fn call_llm_silent(
                 "temperature": temperature,
                 "max_tokens": max_tokens,
             });
-            send_and_extract(&client, &url, &api_key, &fallback, budget).await
+            send_and_extract(&client, &url, &api_key, &fallback, budget, run_id).await
         }
         Err(e) => Err(e),
     }
@@ -254,6 +261,7 @@ pub(crate) async fn call_llm_stream<R: Runtime>(
     thinking: bool,
     budget: &SharedBudget,
     gen: &crate::models::GenerationConfig,
+    run_id: &str,
 ) -> Result<LLMResponse, AppError> {
     let client_timeout = budget.remaining().as_secs().min(if thinking { 300 } else { 120 }).max(10);
     let client = build_client(client_timeout)?;
@@ -277,10 +285,11 @@ pub(crate) async fn call_llm_stream<R: Runtime>(
             .header("Content-Type", "application/json")
             .json(&body),
         budget,
+        run_id,
     )
     .await?;
 
-    stream_response(app, response).await
+    stream_response(app, response, run_id).await
 }
 
 /// 解析单行 SSE 数据（`data: ...` 前缀行，兼容 `data:{...}` 无空格变体，M8 修复）。
@@ -323,6 +332,7 @@ fn parse_sse_line(
 async fn stream_response<R: Runtime>(
     app: AppHandle<R>,
     response: reqwest::Response,
+    run_id: &str,
 ) -> Result<LLMResponse, AppError> {
     let status = response.status();
     if !status.is_success() {
@@ -343,8 +353,8 @@ async fn stream_response<R: Runtime>(
     let mut last_log = std::time::Instant::now();
 
     while let Some(chunk_result) = stream.next().await {
-        // B3：取消检查点——流式过程中置位立即中断
-        if crate::commands::cancel::is_cancelled() {
+        // B3/A9：取消检查点——按 run_id 隔离
+        if crate::commands::cancel::is_cancelled(run_id) {
             return Err(AppError::cancelled());
         }
         if last_log.elapsed().as_secs() >= 30 {
@@ -597,12 +607,12 @@ mod tests {
         // 预算已耗尽（0ms）：必须直接 Timeout，不得尝试发送
         let spent = Arc::new(Budget::with_timeout(std::time::Duration::from_millis(0)));
         std::thread::sleep(std::time::Duration::from_millis(5));
-        let err = send_with_retry(req, &spent).await.unwrap_err();
+        let err = send_with_retry(req, &spent, "").await.unwrap_err();
         assert_eq!(err.kind, ErrorKind::Timeout, "预算耗尽应直接 Timeout: {:?}", err);
         // 预算充足时同样不可达地址应走 Network 路径（证明闸门是预算触发的，不是地址问题）
         let rich = Arc::new(Budget::unlimited());
         let req2 = build_client(2).unwrap().get("http://127.0.0.1:1/unreachable");
-        let err2 = send_with_retry(req2, &rich).await.unwrap_err();
+        let err2 = send_with_retry(req2, &rich, "").await.unwrap_err();
         assert_eq!(err2.kind, ErrorKind::Network, "预算充足时应尝试发送并报 Network: {:?}", err2);
     }
 
