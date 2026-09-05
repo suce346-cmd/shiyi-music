@@ -312,6 +312,7 @@ async fn execute_review<R: Runtime>(
     revisions_log: &[(String, String)],
     next_tasks: &str,
     req: &PipelineRequest,
+    budget: &crate::budget::SharedBudget,
 ) -> Result<ReviewResult, AppError> {
     let kb = load_knowledge()?;
     let r = roles::role_for(role);
@@ -355,6 +356,7 @@ async fn execute_review<R: Runtime>(
         messages.clone(),
         llm::MAX_TOKENS_CAP,
         req.thinking,
+        budget,
     )
     .await?;
     // B4（上限放开后简化）：30000 上限下截断极罕见，观测记录即可——JSON 已完整时仍可正常解析
@@ -370,6 +372,7 @@ async fn execute_review<R: Runtime>(
             messages.clone(),
             llm::MAX_TOKENS_CAP,
             req.thinking,
+            budget,
         )
         .await?;
         let result2 = parse_review(&resp2.raw);
@@ -443,6 +446,7 @@ async fn execute_audit_review<R: Runtime>(
     revisions_log: &[(String, String)],
     next_tasks: &str,
     req: &PipelineRequest,
+    budget: &crate::budget::SharedBudget,
 ) -> Result<ReviewResult, AppError> {
     let kb = load_knowledge()?;
 
@@ -470,6 +474,7 @@ async fn execute_audit_review<R: Runtime>(
         messages.clone(),
         llm::MAX_TOKENS_CAP,
         req.thinking,
+        budget,
     )
     .await?;
     // B4（上限放开后简化）：截断观测记录，JSON 完整时照常解析
@@ -485,6 +490,7 @@ async fn execute_audit_review<R: Runtime>(
             messages.clone(),
             llm::MAX_TOKENS_CAP,
             req.thinking,
+            budget,
         )
         .await?;
         let result2 = parse_review(&resp2.raw);
@@ -504,7 +510,11 @@ async fn execute_audit_review<R: Runtime>(
 // ---------------------------------------------------------------------------
 
 /// 阶段 0：主持人用该模式的完整指令产出方案初稿（流式）
-async fn run_host_initial<R: Runtime>(app: &AppHandle<R>, req: &PipelineRequest) -> Result<String, AppError> {
+async fn run_host_initial<R: Runtime>(
+    app: &AppHandle<R>,
+    req: &PipelineRequest,
+    budget: &crate::budget::SharedBudget,
+) -> Result<String, AppError> {
     let _ = app.emit("pipeline", PipelineEvent::HostStart { stage: HostStage::Initial });
     let system = prompt_for_mode(&req.mode);
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Host);
@@ -517,6 +527,7 @@ async fn run_host_initial<R: Runtime>(app: &AppHandle<R>, req: &PipelineRequest)
         app.clone(), &base_url, &api_key, &model,
         vec![json!({"role":"system","content":system}), json!({"role":"user","content":user})],
         req.thinking,
+        budget,
     )
     .await?;
     // B4：流式截断直接报错——半截方案绝不允许进入讨论轮（用户可见明确错误，可简化输入后重试）
@@ -557,6 +568,7 @@ async fn run_host_summarize<R: Runtime>(
     current_plan: &str,
     round_changes: &[(PipelineRole, Vec<ReviewChange>, String)],
     req: &PipelineRequest,
+    budget: &crate::budget::SharedBudget,
 ) -> Result<(String, String), AppError> {
     let host = roles::host();
     let user = build_summarize_user_prompt(current_plan, round_changes);
@@ -571,6 +583,7 @@ async fn run_host_summarize<R: Runtime>(
         messages,
         llm::MAX_TOKENS_CAP,
         req.thinking,
+        budget,
     )
     .await?;
     // B4（上限放开后简化）：截断观测记录，split_tasks 对无标记文本全文当方案，行为兼容
@@ -592,6 +605,7 @@ async fn run_audit_format<R: Runtime>(
     current_plan: &str,
     issues: Option<&[String]>,
     req: &PipelineRequest,
+    budget: &crate::budget::SharedBudget,
 ) -> Result<(String, bool), AppError> {
     let _ = app.emit("pipeline", PipelineEvent::AuditStart);
     let auditor = roles::auditor();
@@ -634,6 +648,7 @@ async fn run_audit_format<R: Runtime>(
         vec![json!({"role":"system","content":system}), json!({"role":"user","content":user})],
         llm::MAX_TOKENS_CAP,
         req.thinking,
+        budget,
     )
     .await?;
     Ok((resp.raw, llm::is_truncated(&resp.finish_reason)))
@@ -747,9 +762,12 @@ pub(crate) async fn run_pipeline_with_timeout<R: Runtime>(
     request: PipelineRequest,
     timeout: Duration,
 ) -> Result<String, AppError> {
+    use crate::budget::Budget;
     use crate::errors::ErrorKind;
     let app2 = app.clone();
-    match spawn_guarded(run_pipeline_inner(app2, request), timeout).await {
+    // A1：共享预算 = 超时时长——超时守卫（B1）是最后防线，预算是事前约束
+    let budget = std::sync::Arc::new(Budget::with_timeout(timeout));
+    match spawn_guarded(run_pipeline_inner(app2, request, budget), timeout).await {
         GuardOutcome::Completed(inner) => {
             if let Err(e) = &inner {
                 // B3：取消走 Cancelled 事件（前端不标红），真实错误仍走 Failed
@@ -781,7 +799,12 @@ pub(crate) async fn run_pipeline_with_timeout<R: Runtime>(
 }
 
 /// 主流程内层：三阶段（主持人统领 → 角色审改+校验员审查讨论 → 校验员格式化）
-async fn run_pipeline_inner<R: Runtime>(app: AppHandle<R>, request: PipelineRequest) -> Result<String, AppError> {
+/// A1：budget 为共享预算（Arc），调用链逐层透传
+async fn run_pipeline_inner<R: Runtime>(
+    app: AppHandle<R>,
+    request: PipelineRequest,
+    budget: crate::budget::SharedBudget,
+) -> Result<String, AppError> {
     let mode = &request.mode;
     // B3：取消检查点——各阶段入口统一拦截
     let checkpoint = || -> Result<(), AppError> {
@@ -795,7 +818,7 @@ async fn run_pipeline_inner<R: Runtime>(app: AppHandle<R>, request: PipelineRequ
 
     // ---- 阶段 0：主持人统领（原模式完整指令，产出方案初稿）----
     checkpoint()?;
-    let mut current_plan = run_host_initial(&app, &request).await?;
+    let mut current_plan = run_host_initial(&app, &request, &budget).await?;
     // 主持人上轮任务分发（第一轮无任务）
     let mut next_tasks = String::new();
 
@@ -808,10 +831,14 @@ async fn run_pipeline_inner<R: Runtime>(app: AppHandle<R>, request: PipelineRequ
         // 本轮开始前的修订快照（上一轮及更早；本轮角色修订经 round_changes 传递，避免 auditor 双写）
         let prev_revisions = revisions_log.clone();
         checkpoint()?;
-        // ① 动态角色逐个审改
-        for role in &roles {
-            checkpoint()?; // B3：每个角色开跑前检查
-            let result = execute_review(&app, *role, &current_plan, &revisions_log, &next_tasks, &request).await?;
+        // ① 动态角色并发审改（A2：同轮角色互相无依赖，join_all 并发；顺序收敛保证 revisions_log 确定性）
+        let review_futs: Vec<_> = roles
+            .iter()
+            .map(|role| execute_review(&app, *role, &current_plan, &revisions_log, &next_tasks, &request, &budget))
+            .collect();
+        let review_results = futures_util::future::join_all(review_futs).await;
+        for (role, result) in roles.iter().zip(review_results) {
+            let result = result?;
             if result.degraded {
                 // B10：不可信输出不进 round_changes（无可整合内容）、不阻断收敛，但必须留下警示
                 revisions_log.push((role.name().to_string(), humanize_review(*role, &result)));
@@ -825,7 +852,7 @@ async fn run_pipeline_inner<R: Runtime>(app: AppHandle<R>, request: PipelineRequ
         // ② 校验员审查（当前方案 + 本轮修订 + 上轮修订 + 任务分发核验 → 观点返回主持人）
         checkpoint()?;
         let auditor_result = execute_audit_review(
-            &app, &current_plan, &round_changes, &prev_revisions, &next_tasks, &request,
+            &app, &current_plan, &round_changes, &prev_revisions, &next_tasks, &request, &budget,
         )
         .await?;
         if auditor_result.degraded {
@@ -849,7 +876,7 @@ async fn run_pipeline_inner<R: Runtime>(app: AppHandle<R>, request: PipelineRequ
             break; // 动态角色 + 校验员全部无异议 → 收敛
         }
         // ③ 主持人汇总修订 + 校验员观点 → 新版完整方案 + 下轮任务分发
-        let (new_plan, tasks) = run_host_summarize(&app, &current_plan, &round_changes, &request).await?;
+        let (new_plan, tasks) = run_host_summarize(&app, &current_plan, &round_changes, &request, &budget).await?;
         current_plan = new_plan;
         next_tasks = tasks;
         let _ = app.emit("pipeline", PipelineEvent::DiscussionRound {
@@ -867,7 +894,7 @@ async fn run_pipeline_inner<R: Runtime>(app: AppHandle<R>, request: PipelineRequ
     }
 
     // ---- 阶段 2：校验员按标准格式输出最终提示词包（硬校验失败打回重格式化 ≤2 次）----
-    let (mut final_text, mut truncated) = run_audit_format(&app, &current_plan, None, &request).await?;
+    let (mut final_text, mut truncated) = run_audit_format(&app, &current_plan, None, &request, &budget).await?;
     let mut issues = Vec::new();
     for _ in 0..2 {
         issues = collect_hard_issues(mode, &final_text, request.extra.as_deref());
@@ -882,7 +909,7 @@ async fn run_pipeline_inner<R: Runtime>(app: AppHandle<R>, request: PipelineRequ
             role: PipelineRole::Auditor,
             reason: issues.join("；"),
         });
-        let (text, t) = run_audit_format(&app, &current_plan, Some(&issues), &request).await?;
+        let (text, t) = run_audit_format(&app, &current_plan, Some(&issues), &request, &budget).await?;
         final_text = text;
         truncated = t;
     }
@@ -1396,6 +1423,31 @@ mod tests {
             role_overrides: overrides,
             thinking: false,
         }
+    }
+
+    /// A2：同轮角色并发语义——join_all 按输入顺序返回（revisions_log 确定性），
+    /// 任一角色 Err 时整轮中断（与串行语义一致）
+    #[tokio::test]
+    async fn concurrent_reviews_preserve_order_and_fail_fast() {
+        // 保序：慢任务排前面，完成顺序仍按输入序（显式标注输出类型统一 future 类型）
+        let futs: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = &'static str>>>> = vec![
+            Box::pin(async {
+                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                "slow"
+            }),
+            Box::pin(async { "fast" }),
+        ];
+        let out = futures_util::future::join_all(futs).await;
+        assert_eq!(out, vec!["slow", "fast"]);
+        // 失败中断：任一 Err → 整轮 ? 传播（模拟 zip 后 ? 语义）
+        let futs: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = Result<&'static str, AppError>>>>> =
+            vec![
+                Box::pin(async { Ok::<_, AppError>("ok") }),
+                Box::pin(async { Err::<_, AppError>(AppError::cancelled()) }),
+            ];
+        let res: Result<Vec<&str>, AppError> =
+            futures_util::future::join_all(futs).await.into_iter().collect::<Result<Vec<_>, _>>();
+        assert!(matches!(res, Err(e) if e.kind == crate::errors::ErrorKind::Cancelled));
     }
 
     // ---- B1：超时守卫（spawn_guarded）----

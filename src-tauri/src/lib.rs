@@ -1,3 +1,4 @@
+mod budget;
 mod commands;
 mod energy;
 mod errors;

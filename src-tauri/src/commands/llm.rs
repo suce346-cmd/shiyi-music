@@ -1,3 +1,4 @@
+use crate::budget::SharedBudget;
 use crate::errors::{AppError, ErrorKind};
 use crate::models::{LLMResponse, StreamChunk};
 use futures_util::StreamExt;
@@ -31,12 +32,22 @@ fn retry_plan(attempt: usize, status: Option<u16>, network_err: bool) -> Option<
 
 /// 带退避重试的请求发送：429/5xx/网络错误按 retry_plan 退避，最多 3 次（4xx 凭据类错误不重试）。
 /// A5：错误分类——reqwest 层失败=Network，重试耗尽=Network。
-async fn send_with_retry(req: reqwest::RequestBuilder) -> Result<reqwest::Response, AppError> {
+/// A1：每次尝试前查共享预算——剩余不足则跳过重试直接 Timeout；退避等待可被预算到期中断。
+async fn send_with_retry(req: reqwest::RequestBuilder, budget: &SharedBudget) -> Result<reqwest::Response, AppError> {
+    /// 预算不足以再尝试一次的最低门槛（一次 HTTP 往返的悲观下限）
+    const MIN_ATTEMPT_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
     let mut last_err = "unknown".to_string();
     for attempt in 0..3 {
-        // B3：取消检查点——置位后立即中止，不再发起新尝试（可穿透退避等待）
+        // B3：取消检查优先于预算（用户意图 > 预算约束）
         if crate::commands::cancel::is_cancelled() {
             return Err(AppError::cancelled());
+        }
+        // A1：预算闸门——不够一次尝试就直接失败，不再烧钱等 B1 abort
+        if !budget.has(MIN_ATTEMPT_BUDGET) {
+            return Err(AppError::new(
+                ErrorKind::Timeout,
+                format!("流水线预算不足（剩余 {:?}），停止重试", budget.remaining()),
+            ));
         }
         let builder = req.try_clone().ok_or_else(|| AppError::new(ErrorKind::Internal, "请求无法克隆（重试不可用）"))?;
         match builder.send().await {
@@ -46,7 +57,14 @@ async fn send_with_retry(req: reqwest::RequestBuilder) -> Result<reqwest::Respon
                     Some(wait) => {
                         last_err = format!("{} 错误", status);
                         eprintln!("[llm] {} 错误，{}s 后重试（{}/3）", status, wait, attempt + 1);
-                        tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+                        // A1：退避等待可被预算到期中断——不等满，只等到 deadline
+                        let wait_dur = std::time::Duration::from_secs(wait);
+                        if tokio::time::timeout(budget.remaining(), tokio::time::sleep(wait_dur)).await.is_err() {
+                            return Err(AppError::new(
+                                ErrorKind::Timeout,
+                                "等待重试时流水线预算耗尽".to_string(),
+                            ));
+                        }
                         continue;
                     }
                     None => return Ok(resp),
@@ -57,7 +75,13 @@ async fn send_with_retry(req: reqwest::RequestBuilder) -> Result<reqwest::Respon
                 if let Some(wait) = retry_plan(attempt, None, true) {
                     last_err = format!("网络错误: {}", e);
                     eprintln!("[llm] 网络错误，{}s 后重试（{}/3）: {}", wait, attempt + 1, e);
-                    tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+                    let wait_dur = std::time::Duration::from_secs(wait);
+                    if tokio::time::timeout(budget.remaining(), tokio::time::sleep(wait_dur)).await.is_err() {
+                        return Err(AppError::new(
+                            ErrorKind::Timeout,
+                            "等待重试时流水线预算耗尽".to_string(),
+                        ));
+                    }
                     continue;
                 }
                 return Err(AppError::new(ErrorKind::Network, format!("API request failed: {}", e)));
@@ -134,11 +158,13 @@ fn extract_message(json: &Value) -> Option<(String, Option<String>)> {
 
 /// 发送请求并解析正文；无正文返回 Err（供思考模式降级重试判断）。
 /// A5：HTTP 状态分类（401/403=Auth，429=RateLimit，5xx/其他=Network）；解析失败=Parse。
+/// A1：budget 透传给 send_with_retry（预算闸门）。
 async fn send_and_extract(
     client: &Client,
     url: &str,
     api_key: &str,
     body: &Value,
+    budget: &SharedBudget,
 ) -> Result<LLMResponse, AppError> {
     let resp = send_with_retry(
         client
@@ -146,6 +172,7 @@ async fn send_and_extract(
             .header("Authorization", format!("Bearer {}", api_key))
             .header("Content-Type", "application/json")
             .json(body),
+        budget,
     )
     .await?;
     let status = resp.status();
@@ -165,9 +192,10 @@ async fn send_and_extract(
     Ok(LLMResponse { raw, finish_reason })
 }
 
-/// 无流式的单次 LLM 调用（流水线步骤用，小 max_tokens）。
+/// 无流式的单次 LLM 调用（流水线步骤用）。
 /// 返回 LLMResponse（B4：含 finish_reason，供调用方做截断分级处置）。
 /// 思考模式下若响应无正文（思维链偶发吃满预算），自动降级为无思考重试一次，保证流水线不中断。
+/// A1：budget 透传（单调用超时按剩余预算收紧，见 build_client_for_budget）。
 pub(crate) async fn call_llm_silent(
     base_url: &str,
     api_key: &str,
@@ -175,8 +203,11 @@ pub(crate) async fn call_llm_silent(
     messages: Vec<Value>,
     max_tokens: u32,
     thinking: bool,
+    budget: &SharedBudget,
 ) -> Result<LLMResponse, AppError> {
-    let client = build_client(if thinking { 300 } else { 120 })?;
+    // A1：单调用超时取 min(场景默认, 剩余预算)——预算不足时 reqwest 层即快速失败
+    let client_timeout = budget.remaining().as_secs().min(if thinking { 300 } else { 120 }).max(10);
+    let client = build_client(client_timeout)?;
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let mut body = serde_json::json!({
         "model": model,
@@ -188,7 +219,7 @@ pub(crate) async fn call_llm_silent(
     if thinking {
         apply_thinking(&mut body, model, max_tokens);
     }
-    match send_and_extract(&client, &url, &api_key, &body).await {
+    match send_and_extract(&client, &url, &api_key, &body, budget).await {
         Ok(resp) => Ok(resp),
         Err(e) if thinking && e.message.contains("missing content") => {
             // 降级：去掉思考参数重试一次（同一 prompt 无思考直接输出，必有正文）
@@ -200,13 +231,13 @@ pub(crate) async fn call_llm_silent(
                 "temperature": 0.6,
                 "max_tokens": max_tokens,
             });
-            send_and_extract(&client, &url, &api_key, &fallback).await
+            send_and_extract(&client, &url, &api_key, &fallback, budget).await
         }
         Err(e) => Err(e),
     }
 }
 
-/// 调用 LLM 流式接口并逐 chunk 转发给前端
+/// 调用 LLM 流式接口并逐 chunk 转发给前端（A1：budget 透传）
 pub(crate) async fn call_llm_stream<R: Runtime>(
     app: AppHandle<R>,
     base_url: &str,
@@ -214,8 +245,10 @@ pub(crate) async fn call_llm_stream<R: Runtime>(
     model: &str,
     messages: Vec<Value>,
     thinking: bool,
+    budget: &SharedBudget,
 ) -> Result<LLMResponse, AppError> {
-    let client = build_client(if thinking { 300 } else { 120 })?;
+    let client_timeout = budget.remaining().as_secs().min(if thinking { 300 } else { 120 }).max(10);
+    let client = build_client(client_timeout)?;
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
 
     let mut body = serde_json::json!({
@@ -235,6 +268,7 @@ pub(crate) async fn call_llm_stream<R: Runtime>(
             .header("Authorization", format!("Bearer {}", api_key))
             .header("Content-Type", "application/json")
             .json(&body),
+        budget,
     )
     .await?;
 
@@ -516,6 +550,25 @@ mod tests {
         assert_eq!(extract_message(&empty), None);
         let blank = serde_json::json!({"choices": [{"message": {"content": "   "}}]});
         assert_eq!(extract_message(&blank), None);
+    }
+
+    /// A1：预算耗尽时 send_with_retry 不发起请求，直接 Timeout（用不可达地址验证：若发起请求会是 Network 错误）
+    #[tokio::test]
+    async fn send_with_retry_budget_exhausted_skips() {
+        use crate::budget::Budget;
+        use std::sync::Arc;
+        let client = build_client(10).unwrap();
+        let req = client.get("http://127.0.0.1:1/unreachable");
+        // 预算已耗尽（0ms）：必须直接 Timeout，不得尝试发送
+        let spent = Arc::new(Budget::with_timeout(std::time::Duration::from_millis(0)));
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let err = send_with_retry(req, &spent).await.unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Timeout, "预算耗尽应直接 Timeout: {:?}", err);
+        // 预算充足时同样不可达地址应走 Network 路径（证明闸门是预算触发的，不是地址问题）
+        let rich = Arc::new(Budget::unlimited());
+        let req2 = build_client(2).unwrap().get("http://127.0.0.1:1/unreachable");
+        let err2 = send_with_retry(req2, &rich).await.unwrap_err();
+        assert_eq!(err2.kind, ErrorKind::Network, "预算充足时应尝试发送并报 Network: {:?}", err2);
     }
 
     /// B4：截断判定——只有 finish_reason == "length" 算截断（stop/缺失/其他值都不算）
