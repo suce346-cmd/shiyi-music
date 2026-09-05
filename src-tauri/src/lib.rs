@@ -12,7 +12,10 @@ pub fn run() {
             commands::orchestrator::pipeline_generate,
             commands::orchestrator::pipeline_refine,
             commands::llm::test_api,
-            commands::orchestrator::cancel_pipeline
+            commands::orchestrator::cancel_pipeline,
+            commands::keychain::keychain_set,
+            commands::keychain::keychain_get,
+            commands::keychain::keychain_delete
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

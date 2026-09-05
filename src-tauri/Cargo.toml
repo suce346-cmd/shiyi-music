@@ -26,6 +26,7 @@ serde_json = "1"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 tokio = { version = "1", features = ["rt", "macros", "time"] }
 futures-util = "0.3"
+keyring = "3"
 
 [profile.release]
 # 生产包优化：剥离符号 + LTO + 压缩（产物更小、启动更快）
