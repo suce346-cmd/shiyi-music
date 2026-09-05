@@ -30,6 +30,10 @@ export function sanitizeStored(raw: unknown): AppSettings {
   if (typeof o.model === "string") base.model = o.model;
   if (typeof o.baseUrl === "string") base.baseUrl = o.baseUrl;
   if (typeof o.thinking === "boolean") base.thinking = o.thinking;
+  // F7：theme 清洗（非法值回退跟随系统）
+  if (o.theme === "light" || o.theme === "dark" || o.theme === "system") base.theme = o.theme;
+  // F8：language 清洗（非法值回退中文）
+  if (o.language === "zh" || o.language === "en") base.language = o.language;
   // A11：generation 清洗（数值范围收敛，坏值丢弃走后端默认）
   if (typeof o.generation === "object" && o.generation !== null && !Array.isArray(o.generation)) {
     const g = o.generation as Record<string, unknown>;

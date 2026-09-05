@@ -19,7 +19,16 @@ export interface AppSettings {
   roleOverrides?: Partial<Record<PipelineRoleKey, RoleApiOverride>>;
   /** A11：生成参数覆盖（缺省走后端内置默认；旧数据无此字段） */
   generation?: GenerationConfig;
+  /** F7：主题（缺省跟随系统；旧数据无此字段） */
+  theme?: ThemeMode;
+  /** F8：界面语言（缺省中文；旧数据无此字段） */
+  language?: Locale;
 }
+
+/** F7：主题模式 */
+export type ThemeMode = "system" | "light" | "dark";
+/** F8：界面语言 */
+export type Locale = "zh" | "en";
 
 /** A11：生成参数（全字段可选，与后端 GenerationConfig 对齐） */
 export interface GenerationConfig {
