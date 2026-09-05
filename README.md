@@ -27,3 +27,7 @@ npm run tauri build
 ## 角色级 API
 
 设置面板支持为每个角色单独配置 API（模型/密钥/地址），未配置的角色共用全局 API；留空的字段继承全局。
+
+## License
+
+MIT，见 [LICENSE](./LICENSE) 文件。
