@@ -165,13 +165,9 @@ fn humanize_review(role: PipelineRole, r: &ReviewResult) -> String {
     }
     let mut out = format!("{}：提出 {} 处修订", role.name(), r.changes.len());
     for c in &r.changes {
-        let brief = if c.content.chars().count() > 40 {
-            c.content.chars().take(40).collect::<String>() + "…"
-        } else {
-            c.content.clone()
-        };
+        // F2：修订全文展示（旧 40 字截断删除——对话流气泡支持长文本，用户应看到完整意见）
         let reason = if c.reason.is_empty() { String::new() } else { format!("（{}）", c.reason) };
-        out.push_str(&format!("\n· {} → {}{}", c.target, brief, reason));
+        out.push_str(&format!("\n· {} → {}{}", c.target, c.content, reason));
     }
     if !r.reason.is_empty() {
         out.push_str(&format!("\n总体意见：{}", r.reason));
@@ -384,6 +380,7 @@ async fn execute_review<R: Runtime>(
         role,
         summary: humanize_review(role, &result),
     });
+    emit_usage(app, role, &resp);
     Ok(result)
 }
 
@@ -502,6 +499,7 @@ async fn execute_audit_review<R: Runtime>(
         role: PipelineRole::Auditor,
         summary: humanize_review(PipelineRole::Auditor, &result),
     });
+    emit_usage(app, PipelineRole::Auditor, &resp);
     Ok(result)
 }
 
@@ -536,6 +534,7 @@ async fn run_host_initial<R: Runtime>(
         return Err("方案初稿输出被截断（达到输出上限），请简化输入后重试".into());
     }
     let _ = app.emit("pipeline", PipelineEvent::HostDone { stage: HostStage::Initial });
+    emit_usage(app, PipelineRole::Host, &resp);
     Ok(resp.raw)
 }
 
@@ -591,6 +590,7 @@ async fn run_host_summarize<R: Runtime>(
         eprintln!("[pipeline] 主持人汇总输出触及 max_tokens 上限（finish_reason=length），按现状继续（下轮讨论可修正）");
     }
     let _ = app.emit("pipeline", PipelineEvent::HostDone { stage: HostStage::Summarize });
+    emit_usage(app, PipelineRole::Host, &resp);
     Ok(split_tasks(&resp.raw))
 }
 
@@ -651,7 +651,22 @@ async fn run_audit_format<R: Runtime>(
         budget,
     )
     .await?;
+    emit_usage(app, PipelineRole::Auditor, &resp);
     Ok((resp.raw, llm::is_truncated(&resp.finish_reason)))
+}
+
+/// F4：单次调用结束后发射用量事件（usage为None时不发射——网关未返回不阻塞流程）
+fn emit_usage<R: tauri::Runtime>(app: &tauri::AppHandle<R>, role: PipelineRole, resp: &crate::models::LLMResponse) {
+    if let Some(u) = &resp.usage {
+        let _ = app.emit(
+            "pipeline",
+            PipelineEvent::StepUsage {
+                role,
+                prompt_tokens: u.prompt_tokens,
+                completion_tokens: u.completion_tokens,
+            },
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1146,6 +1161,26 @@ mod tests {
         });
         assert!(fix.contains("提出 1 处修订"), "got: {}", fix);
         assert!(fix.contains("Chorus 配器太弱"), "got: {}", fix);
+    }
+
+    /// F2：长修订全文展示——100 字 content 不得被截断
+    #[test]
+    fn humanize_review_full_content_no_truncation() {
+        let long = "这是一段超过四十字的修订内容".repeat(5); // 70 字
+        let r = ReviewResult {
+            agree: false,
+            changes: vec![ReviewChange {
+                target: "lyrics".into(),
+                content: long.clone(),
+                reason: "太长".into(),
+            }],
+            reason: String::new(),
+            checked: vec![],
+            degraded: false,
+        };
+        let s = humanize_review(PipelineRole::Lyricist, &r);
+        assert!(s.contains(&long), "修订全文必须保留: {}", &s[..s.len().min(200)]);
+        assert!(!s.contains("…"), "不得出现截断省略号: {}", &s[..s.len().min(200)]);
     }
 
     #[test]

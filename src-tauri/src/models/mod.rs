@@ -25,6 +25,36 @@ impl Mode {
 pub struct LLMResponse {
     pub raw: String,
     pub finish_reason: Option<String>,
+    /// F4：token 用量（网关不返回时为 None，不阻塞流程）
+    #[serde(default)]
+    pub usage: Option<TokenUsage>,
+}
+
+/// F4：单次 LLM 调用的 token 用量（只计数，不估算金额——各渠道单价不同）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TokenUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+}
+
+impl TokenUsage {
+    /// 宽容提取：缺字段/非数字一律按 0 处理（部分网关不返回 usage）
+    pub fn from_json(v: &serde_json::Value) -> Option<Self> {
+        let u = v.get("usage")?;
+        let p = u.get("prompt_tokens").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+        let c = u.get("completion_tokens").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+        if p == 0 && c == 0 {
+            None
+        } else {
+            Some(Self { prompt_tokens: p, completion_tokens: c })
+        }
+    }
+
+    /// 流式 usage 块累加（OpenAI 流式 usage 在尾部独立块出现）
+    pub fn add(&mut self, other: &TokenUsage) {
+        self.prompt_tokens += other.prompt_tokens;
+        self.completion_tokens += other.completion_tokens;
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,6 +109,33 @@ mod tests {
         let e = PipelineEvent::Cancelled;
         let j: Value = serde_json::from_str(&serde_json::to_string(&e).unwrap()).unwrap();
         assert_eq!(j["type"], "cancelled");
+    }
+
+    /// F4：TokenUsage 宽容提取——正常 / 缺字段 / 全零 / 非数字
+    #[test]
+    fn token_usage_extracts_tolerantly() {
+        let ok = serde_json::json!({"usage": {"prompt_tokens": 120, "completion_tokens": 34}});
+        let u = TokenUsage::from_json(&ok).unwrap();
+        assert_eq!(u.prompt_tokens, 120);
+        assert_eq!(u.completion_tokens, 34);
+        // 缺 usage 字段 → None（不阻塞）
+        assert!(TokenUsage::from_json(&serde_json::json!({})).is_none());
+        // 全零 → None（无意义计数）
+        assert!(TokenUsage::from_json(&serde_json::json!({"usage": {"prompt_tokens": 0, "completion_tokens": 0}})).is_none());
+        // 缺单字段 → 按 0 处理，另一字段有效即 Some
+        let half = serde_json::json!({"usage": {"prompt_tokens": 50}});
+        let uh = TokenUsage::from_json(&half).unwrap();
+        assert_eq!((uh.prompt_tokens, uh.completion_tokens), (50, 0));
+    }
+
+    /// F4：StepUsage 事件序列化形态（前端累计分支）
+    #[test]
+    fn step_usage_event_serializes() {
+        let e = PipelineEvent::StepUsage { role: PipelineRole::Emotion, prompt_tokens: 100, completion_tokens: 20 };
+        let j: Value = serde_json::from_str(&serde_json::to_string(&e).unwrap()).unwrap();
+        assert_eq!(j["type"], "step_usage");
+        assert_eq!(j["role"], "emotion");
+        assert_eq!(j["prompt_tokens"], 100);
     }
 
     #[test]
@@ -260,4 +317,6 @@ pub enum PipelineEvent {
     Failed { error: String },
     /// B3：用户取消（前端"停止"按钮）——与 Failed 区别：不标红，只回到空闲
     Cancelled,
+    /// F4：单次调用的 token 用量（前端累计展示，不阻塞流程）
+    StepUsage { role: PipelineRole, prompt_tokens: u32, completion_tokens: u32 },
 }

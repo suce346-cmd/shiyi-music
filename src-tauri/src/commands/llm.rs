@@ -1,6 +1,6 @@
 use crate::budget::SharedBudget;
 use crate::errors::{AppError, ErrorKind};
-use crate::models::{LLMResponse, StreamChunk};
+use crate::models::{LLMResponse, StreamChunk, TokenUsage};
 use futures_util::StreamExt;
 use reqwest::Client;
 use serde_json::Value;
@@ -144,15 +144,17 @@ pub(crate) fn is_truncated(finish_reason: &Option<String>) -> bool {
     finish_reason.as_deref() == Some("length")
 }
 
-/// 从非流式响应中提取（正文 content, finish_reason）（纯函数，可测）。
+/// 从非流式响应中提取（正文 content, finish_reason, usage）（纯函数，可测）。
 /// content 缺失或空字符串都算"无正文"（思考模式下思维链吃满 max_tokens 时 content 可能为空）。
 /// B4：finish_reason 一并返回——"length"（截断）由调用方分级处置，不再静默丢弃。
-fn extract_message(json: &Value) -> Option<(String, Option<String>)> {
+/// F4：usage 一并返回（网关不返回时为 None，不阻塞流程）。
+fn extract_message(json: &Value) -> Option<(String, Option<String>, Option<TokenUsage>)> {
     let c = json["choices"][0]["message"]["content"].as_str()?;
     if c.trim().is_empty() { return None; }
     Some((
         c.to_string(),
         json["choices"][0]["finish_reason"].as_str().map(String::from),
+        TokenUsage::from_json(json),
     ))
 }
 
@@ -187,9 +189,9 @@ async fn send_and_extract(
         .json()
         .await
         .map_err(|e| AppError::new(ErrorKind::Parse, format!("API response parse failed: {}", e)))?;
-    let (raw, finish_reason) = extract_message(&json)
+    let (raw, finish_reason, usage) = extract_message(&json)
         .ok_or_else(|| AppError::new(ErrorKind::Parse, "API response missing content".to_string()))?;
-    Ok(LLMResponse { raw, finish_reason })
+    Ok(LLMResponse { raw, finish_reason, usage })
 }
 
 /// 无流式的单次 LLM 调用（流水线步骤用）。
@@ -277,8 +279,14 @@ pub(crate) async fn call_llm_stream<R: Runtime>(
 
 /// 解析单行 SSE 数据（`data: ...` 前缀行，兼容 `data:{...}` 无空格变体，M8 修复）。
 /// 返回本次解析出的增量内容（未 emit，由调用方决定是否转发）。
+/// F4：流式 usage 块（`{"choices":[],"usage":{...}}` 尾部形态）累加进 stream_usage。
 /// 纯函数，可独立单测（不含网络）。
-fn parse_sse_line(line: &str, full_content: &mut String, finish_reason: &mut Option<String>) -> Option<String> {
+fn parse_sse_line(
+    line: &str,
+    full_content: &mut String,
+    finish_reason: &mut Option<String>,
+    stream_usage: &mut TokenUsage,
+) -> Option<String> {
     let trimmed = line.trim();
     if let Some(data) = trimmed.strip_prefix("data:") {
         let data = data.trim_start();
@@ -286,6 +294,10 @@ fn parse_sse_line(line: &str, full_content: &mut String, finish_reason: &mut Opt
             return None;
         }
         if let Ok(parsed) = serde_json::from_str::<Value>(data) {
+            // F4：usage 块可能独立出现（choices 为空），先累加再处理 delta
+            if let Some(u) = TokenUsage::from_json(&parsed) {
+                stream_usage.add(&u);
+            }
             let mut delta = None;
             if let Some(d) = parsed["choices"][0]["delta"]["content"].as_str() {
                 full_content.push_str(d);
@@ -317,6 +329,8 @@ async fn stream_response<R: Runtime>(
 
     let mut full_content = String::new();
     let mut finish_reason: Option<String> = None;
+    // F4：流式 usage 累加（尾部独立块形态）
+    let mut stream_usage = TokenUsage::default();
     let mut line_buf = String::new();
     let mut stream = response.bytes_stream();
     let started = std::time::Instant::now();
@@ -342,7 +356,7 @@ async fn stream_response<R: Runtime>(
             let line = line_buf[..pos].to_string();
             line_buf = line_buf[pos + 1..].to_string();
 
-            if let Some(delta) = parse_sse_line(&line, &mut full_content, &mut finish_reason) {
+            if let Some(delta) = parse_sse_line(&line, &mut full_content, &mut finish_reason, &mut stream_usage) {
                 let _ = app.emit(
                     "llm-chunk",
                     StreamChunk {
@@ -355,7 +369,7 @@ async fn stream_response<R: Runtime>(
 
     // 流结束后 flush 残留的不完整行（M8 修复：尾部 data 行不再静默丢弃）
     if !line_buf.trim().is_empty() {
-        if let Some(delta) = parse_sse_line(&line_buf, &mut full_content, &mut finish_reason) {
+        if let Some(delta) = parse_sse_line(&line_buf, &mut full_content, &mut finish_reason, &mut stream_usage) {
             let _ = app.emit("llm-chunk", StreamChunk { content: delta });
         }
     }
@@ -371,6 +385,12 @@ async fn stream_response<R: Runtime>(
     Ok(LLMResponse {
         raw: full_content,
         finish_reason,
+        // F4：流式 usage 全零时记 None（与非流式宽容语义一致）
+        usage: if stream_usage.prompt_tokens == 0 && stream_usage.completion_tokens == 0 {
+            None
+        } else {
+            Some(stream_usage)
+        },
     })
 }
 
@@ -382,8 +402,9 @@ mod tests {
     fn parse_sse_extracts_delta_and_finish() {
         let mut full = String::new();
         let mut finish = None;
+        let mut usage = TokenUsage::default();
         let line = r#"data: {"choices":[{"delta":{"content":"你好"},"finish_reason":null}]}"#;
-        let delta = parse_sse_line(line, &mut full, &mut finish);
+        let delta = parse_sse_line(line, &mut full, &mut finish, &mut usage);
         assert_eq!(delta.as_deref(), Some("你好"));
         assert_eq!(full, "你好");
         assert_eq!(finish, None);
@@ -393,7 +414,8 @@ mod tests {
     fn sse_handles_done() {
         let mut full = String::new();
         let mut finish = None;
-        assert_eq!(parse_sse_line("data: [DONE]", &mut full, &mut finish), None);
+        let mut usage = TokenUsage::default();
+        assert_eq!(parse_sse_line("data: [DONE]", &mut full, &mut finish, &mut usage), None);
         assert_eq!(full, "");
     }
 
@@ -401,8 +423,9 @@ mod tests {
     fn sse_extracts_finish_reason_stop() {
         let mut full = String::new();
         let mut finish = None;
+        let mut usage = TokenUsage::default();
         let line = r#"data: {"choices":[{"delta":{},"finish_reason":"stop"}]}"#;
-        parse_sse_line(line, &mut full, &mut finish);
+        parse_sse_line(line, &mut full, &mut finish, &mut usage);
         assert_eq!(finish.as_deref(), Some("stop"));
     }
 
@@ -410,8 +433,9 @@ mod tests {
     fn sse_ignores_non_data_lines() {
         let mut full = String::new();
         let mut finish = None;
-        assert_eq!(parse_sse_line(": keep-alive", &mut full, &mut finish), None);
-        assert_eq!(parse_sse_line("", &mut full, &mut finish), None);
+        let mut usage = TokenUsage::default();
+        assert_eq!(parse_sse_line(": keep-alive", &mut full, &mut finish, &mut usage), None);
+        assert_eq!(parse_sse_line("", &mut full, &mut finish, &mut usage), None);
     }
 
     /// 重试决策：429 退避 30s/60s；5xx 退避 15s/30s；网络错误 10s/20s；4xx 不重试
@@ -440,7 +464,8 @@ mod tests {
     fn sse_ignores_malformed_json() {
         let mut full = String::new();
         let mut finish = None;
-        assert_eq!(parse_sse_line("data: not-json", &mut full, &mut finish), None);
+        let mut usage = TokenUsage::default();
+        assert_eq!(parse_sse_line("data: not-json", &mut full, &mut finish, &mut usage), None);
         assert_eq!(full, "");
     }
 
@@ -463,8 +488,9 @@ mod tests {
         ];
         let mut full = String::new();
         let mut finish = None;
+        let mut usage = TokenUsage::default();
         for line in lines {
-            parse_sse_line(line, &mut full, &mut finish);
+            parse_sse_line(line, &mut full, &mut finish, &mut usage);
         }
         assert_eq!(full, "你好");
         assert_eq!(finish.as_deref(), Some("stop"));
@@ -477,11 +503,12 @@ mod tests {
         let mut finish = None;
         // 思考阶段：delta 只有 reasoning_content，无 content
         let thinking = r#"data: {"choices":[{"delta":{"reasoning_content":"让我想想这个方案…"},"finish_reason":null}]}"#;
-        assert_eq!(parse_sse_line(thinking, &mut full, &mut finish), None);
+        let mut usage = TokenUsage::default();
+        assert_eq!(parse_sse_line(thinking, &mut full, &mut finish, &mut usage), None);
         assert_eq!(full, "");
         // 思考结束进入正文：delta 带 content
         let content = r#"data: {"choices":[{"delta":{"content":"最终方案"},"finish_reason":null}]}"#;
-        assert_eq!(parse_sse_line(content, &mut full, &mut finish), Some("最终方案".to_string()));
+        assert_eq!(parse_sse_line(content, &mut full, &mut finish, &mut usage), Some("最终方案".to_string()));
         assert_eq!(full, "最终方案");
     }
 
@@ -535,21 +562,22 @@ mod tests {
     fn extract_message_handles_missing_and_empty() {
         // 正常：content + finish_reason 一起返回
         let ok = serde_json::json!({"choices": [{"message": {"content": "方案内容"}, "finish_reason": "stop"}]});
-        let (c, fr) = extract_message(&ok).unwrap();
+        let (c, fr, u) = extract_message(&ok).unwrap();
         assert_eq!(c, "方案内容");
         assert_eq!(fr.as_deref(), Some("stop"));
         // finish_reason 缺省也要容忍（部分网关不返回）
         let no_fr = serde_json::json!({"choices": [{"message": {"content": "方案内容"}}]});
-        let (_, fr2) = extract_message(&no_fr).unwrap();
+        let (_, fr2, u2) = extract_message(&no_fr).unwrap();
         assert_eq!(fr2, None);
+        assert!(u2.is_none(), "无 usage 字段应为 None");
         // 缺失 content（思维链吃满预算时网关可能不返回 content）
         let missing = serde_json::json!({"choices": [{"message": {"reasoning_content": "思考..."}}]});
-        assert_eq!(extract_message(&missing), None);
+        assert!(extract_message(&missing).is_none());
         // content 为空字符串也算无正文
         let empty = serde_json::json!({"choices": [{"message": {"content": ""}}]});
-        assert_eq!(extract_message(&empty), None);
+        assert!(extract_message(&empty).is_none());
         let blank = serde_json::json!({"choices": [{"message": {"content": "   "}}]});
-        assert_eq!(extract_message(&blank), None);
+        assert!(extract_message(&blank).is_none());
     }
 
     /// A1：预算耗尽时 send_with_retry 不发起请求，直接 Timeout（用不可达地址验证：若发起请求会是 Network 错误）
@@ -571,6 +599,42 @@ mod tests {
         assert_eq!(err2.kind, ErrorKind::Network, "预算充足时应尝试发送并报 Network: {:?}", err2);
     }
 
+    /// F4：非流式 usage 提取——正常返回 Some，缺字段/全零为 None
+    #[test]
+    fn extract_message_returns_usage() {
+        let ok = serde_json::json!({
+            "choices": [{"message": {"content": "x"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 120, "completion_tokens": 34, "total_tokens": 154}
+        });
+        let (_, _, u) = extract_message(&ok).unwrap();
+        let u = u.unwrap();
+        assert_eq!((u.prompt_tokens, u.completion_tokens), (120, 34));
+        let no_u = serde_json::json!({"choices": [{"message": {"content": "x"}}]});
+        let (_, _, u2) = extract_message(&no_u).unwrap();
+        assert!(u2.is_none());
+    }
+
+    /// F4：流式 usage 尾部块（choices 为空）累加，不污染正文
+    #[test]
+    fn sse_usage_block_accumulates() {
+        let mut full = String::new();
+        let mut finish = None;
+        let mut usage = TokenUsage::default();
+        let line = r#"data: {"choices":[],"usage":{"prompt_tokens":200,"completion_tokens":50}}"#;
+        assert_eq!(parse_sse_line(line, &mut full, &mut finish, &mut usage), None);
+        assert_eq!(full, "");
+        assert_eq!((usage.prompt_tokens, usage.completion_tokens), (200, 50));
+    }
+
+    /// F11：test_api_body 组装——max_tokens=16（旧 1 会让思考模型误报），模型名透传
+    #[test]
+    fn test_api_body_uses_16_tokens() {
+        let b = test_api_body("my-model");
+        assert_eq!(b["max_tokens"], 16);
+        assert_eq!(b["model"], "my-model");
+        assert_eq!(b["stream"], false);
+    }
+
     /// B4：截断判定——只有 finish_reason == "length" 算截断（stop/缺失/其他值都不算）
     #[test]
     fn is_truncated_only_for_length() {
@@ -581,8 +645,21 @@ mod tests {
     }
 }
 
+/// F11：测试连接请求体组装（纯函数，可测）——max_tokens=16（足够返回 hi 级响应；
+/// 旧 max_tokens=1 会让思考型模型无正文/400 误报"连接失败"）
+fn test_api_body(model: &str) -> serde_json::Value {
+    serde_json::json!({
+        "model": model,
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 16,
+        "stream": false,
+    })
+}
+
 /// 测试 API 连接（前端"测试连接"按钮用）。
 /// 走 Rust 后端发请求，绕过 WebView CORS 限制（前端 fetch 跨域会被拦）。
+/// 成功判定：HTTP 200 即成功（不要求 content 非空——思考模型可能只回 reasoning）。
+/// 失败分类复用 api_status（401/403=Auth，429=RateLimit，其余=Network）。
 #[tauri::command]
 pub async fn test_api(
     base_url: String,
@@ -591,12 +668,7 @@ pub async fn test_api(
 ) -> Result<String, AppError> {
     let client = build_client(120)?;
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-    let body = serde_json::json!({
-        "model": model,
-        "messages": [{"role": "user", "content": "hi"}],
-        "max_tokens": 1,
-        "stream": false,
-    });
+    let body = test_api_body(&model);
     let resp = client
         .post(&url)
         .header("Authorization", format!("Bearer {}", api_key))
