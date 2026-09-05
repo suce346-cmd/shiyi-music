@@ -8,7 +8,7 @@
 //!   全角色与校验员无异议或满 3 轮收敛
 //! - 阶段 2：校验员按标准格式输出最终提示词包；代码硬校验兜底（失败打回重格式化）
 
-use crate::commands::{cancel, llm, prompts, roles, validator};
+use crate::commands::{cancel, interject, llm, prompts, roles, validator};
 use crate::energy::plan_energy_range;
 use crate::errors::AppError;
 use crate::knowledge::KnowledgeBase;
@@ -820,6 +820,7 @@ where
 /// 强杀在途任务，非放弃等待）。真实错误统一发 Failed 事件；用户取消发 Cancelled 事件（B3）。
 pub async fn run_pipeline<R: Runtime>(app: AppHandle<R>, request: PipelineRequest) -> Result<String, AppError> {
     cancel::reset(); // 新 run 清除上一轮残留的取消标志
+    interject::reset(); // F10：新 run 清空插话槽（防上一轮残留污染）
     run_pipeline_with_timeout(app, request, PIPELINE_TIMEOUT).await
 }
 
@@ -927,6 +928,23 @@ async fn run_pipeline_inner<R: Runtime>(
         // 本轮开始前的修订快照（上一轮及更早；本轮角色修订经 round_changes 传递，避免 auditor 双写）
         let prev_revisions = revisions_log.clone();
         checkpoint()?;
+        // F10：轮边界消费用户插话（非阻塞——在途调用不受影响，意见进本轮输入）
+        for note in interject::drain() {
+            let preview: String = note.chars().take(60).collect();
+            revisions_log.push(("用户插话".to_string(), note.clone()));
+            if next_tasks.is_empty() {
+                next_tasks = note;
+            } else {
+                next_tasks.push_str(&format!("\n{}", note));
+            }
+            let _ = app.emit(
+                "pipeline",
+                PipelineEvent::StepDone {
+                    role: PipelineRole::Host,
+                    summary: format!("收到用户插话，已纳入本轮讨论：{}", preview),
+                },
+            );
+        }
         // ① 动态角色并发审改（A2：同轮角色互相无依赖，join_all 并发；顺序收敛保证 revisions_log 确定性）
         let review_futs: Vec<_> = roles
             .iter()
@@ -1078,6 +1096,29 @@ pub async fn pipeline_refine(
 #[tauri::command]
 pub async fn cancel_pipeline() {
     cancel::request_cancel();
+}
+
+/// F10：用户中途插话（前端"插入意见"调）——非阻塞存入槽，轮边界消费。
+/// F13 复用：超长意见（>2000）直接 Validation 拦截，与 feedback 同限额。
+#[tauri::command]
+pub async fn interject_feedback(note: String) -> Result<(), AppError> {
+    crate::models::validate_request(
+        &PipelineRequest {
+            mode: Mode::ModeB,
+            user_input: "占位".to_string(),
+            model: "占位".to_string(),
+            api_key: "占位".to_string(),
+            base_url: "https://placeholder.invalid".to_string(),
+            extra: None,
+            original_lyrics: None,
+            role_overrides: None,
+            thinking: false,
+            refine_targets: None,
+        },
+        Some(&note),
+    )?;
+    interject::push(note);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
