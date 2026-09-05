@@ -101,6 +101,12 @@ export type PipelineEvent =
   | { type: "cancelled" }
   | { type: "step_usage"; role: PipelineRoleKey; prompt_tokens: number; completion_tokens: number };
 
+/** A9：事件信封（后端统一包 envelope 传输；run_id 归属，旧裸事件不再出现） */
+export interface PipelineEnvelope {
+  run_id: string;
+  event: PipelineEvent;
+}
+
 /** A5：后端结构化错误 {kind, message}。command 失败时 Tauri 返回该对象（非字符串）。 */
 export interface AppError {
   kind: "network" | "auth" | "rate_limit" | "timeout" | "cancelled" | "parse" | "validation" | "internal";
@@ -132,6 +138,8 @@ export interface PipelineRequest {
   role_overrides?: Partial<Record<PipelineRoleKey, RoleApiOverride>>;
   /** F1：增量优化目标角色（缺省=后端按反馈自动路由；旧后端忽略） */
   refine_targets?: PipelineRoleKey[];
+  /** A9：任务归属 id（后端 envelope/取消/插话定向；旧后端忽略未知字段） */
+  run_id?: string;
   /** A11：生成参数覆盖（缺省走后端默认；旧后端忽略） */
   generation?: GenerationConfig;
 }

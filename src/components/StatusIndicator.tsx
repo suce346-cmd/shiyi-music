@@ -10,6 +10,8 @@ interface Props {
   onRetry?: () => void;
   /** B3：生成中显示"停止"按钮 */
   onCancel?: () => void;
+  /** A9：当前 run_id 读取（插话命令定向用） */
+  getRunId?: () => string;
 }
 
 const config: Record<LLMStatus, { text: string; icon: typeof IconLoader; color: string; bg: string }> = {
@@ -20,7 +22,7 @@ const config: Record<LLMStatus, { text: string; icon: typeof IconLoader; color: 
   error: { text: "出错", icon: IconAlertTriangle, color: "text-danger", bg: "bg-danger/8" },
 };
 
-export default function StatusIndicator({ status, errorMessage, onRetry, onCancel }: Props) {
+export default function StatusIndicator({ status, errorMessage, onRetry, onCancel, getRunId }: Props) {
   /** F10：插话输入展开态 + 发送中 + 结果提示 */
   const [showInterject, setShowInterject] = useState(false);
   const [note, setNote] = useState("");
@@ -30,14 +32,14 @@ export default function StatusIndicator({ status, errorMessage, onRetry, onCance
   const c = config[status];
   const Icon = c.icon;
 
-  /** F10：发送插话（非阻塞存入后端槽，轮边界消费；超长由后端 Validation 拦截） */
+  /** F10/A9：发送插话（按 run_id 定向，非阻塞存入后端槽，轮边界消费；超长由后端 Validation 拦截） */
   const sendInterject = async () => {
     const text = note.trim();
     if (!text || sending) return;
     setSending(true);
     setMsg("");
     try {
-      await invoke("interject_feedback", { note: text });
+      await invoke("interject_feedback", { runId: getRunId?.() ?? "", note: text });
       setNote("");
       setShowInterject(false);
       setMsg("已送达，将在下一轮讨论中纳入");

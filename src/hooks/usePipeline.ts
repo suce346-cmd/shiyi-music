@@ -5,7 +5,7 @@ import type {
   AppSettings,
   ChatTurn,
   Mode,
-  PipelineEvent,
+  PipelineEnvelope,
   PipelineRequest,
   PipelineRoleKey,
   ExpertCard,
@@ -47,7 +47,7 @@ export const MODE_EXPERTS: Record<Mode, Omit<ExpertCard, "status" | "note">[]> =
   ],
 };
 
-/** 角色名映射（后端 PipelineRole 对齐） */
+/** 角色名映射（后端 PipelineRole 对齐；A8：运行时可被 get_pipeline_meta 刷新） */
 export const ROLE_NAMES: Record<string, string> = {
   host: "主持人",
   auditor: "校验员",
@@ -58,7 +58,7 @@ export const ROLE_NAMES: Record<string, string> = {
   style_analyst: "流行风格分析师",
 };
 
-/** 角色 emoji（对话流发言展示用，与后端/App 对齐） */
+/** 角色 emoji（对话流发言展示用，与后端/App 对齐；A8：运行时可被刷新） */
 export const ROLE_EMOJIS: Record<string, string> = {
   host: "👑",
   auditor: "🔍",
@@ -68,6 +68,41 @@ export const ROLE_EMOJIS: Record<string, string> = {
   producer: "🎤",
   style_analyst: "🔥",
 };
+
+/** 角色卡片配色（纯 UI 属性，不进后端；A8 meta 只同步 name/emoji/knowledge） */
+export const ROLE_COLORS: Record<string, string> = {
+  host: "#f59e0b",
+  auditor: "#a3a3a3",
+  emotion: "#f5a3b7",
+  lyricist: "#a78bfa",
+  reviser: "#7ec8a0",
+  producer: "#f5b35c",
+  style_analyst: "#f472b6",
+};
+
+/** A8：后端元数据形态（get_pipeline_meta 返回） */
+export interface PipelineMeta {
+  modes: Record<string, string[]>;
+  roles: Record<string, { name: string; emoji: string; knowledge: string[] }>;
+}
+
+/** A8：localStorage 缓存 key（后端不可达时回退上次元数据） */
+const META_CACHE_KEY = "suno-prompt-meta";
+
+/** A8：用后端元数据构建模式阵容（color 留前端，knowledge 取后端表名） */
+export function buildExpertsFromMeta(meta: PipelineMeta, mode: Mode): Omit<ExpertCard, "status" | "note">[] {
+  const roles = meta.modes[mode] ?? [];
+  return roles.map((id) => {
+    const r = meta.roles[id];
+    return {
+      id,
+      name: r?.name ?? id,
+      emoji: r?.emoji ?? "🎙️",
+      color: ROLE_COLORS[id] ?? "#a3a3a3",
+      knowledge: r?.knowledge ?? [],
+    };
+  });
+}
 
 
 
@@ -124,9 +159,13 @@ export const buildRoleOverrides = (settings: AppSettings): PipelineRequest["role
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 };
 
-/** 初始阵容（按模式，idle 围坐展示） */
-const makeInitialExperts = (mode: Mode): ExpertCard[] => {
-  return (MODE_EXPERTS[mode] ?? []).map((e) => ({ ...e, status: "idle" as const, note: "" }));
+/** 初始阵容（按模式，idle 围坐展示；A8：meta 到达后按后端阵容重建） */
+const makeInitialExperts = (
+  mode: Mode,
+  meta?: PipelineMeta | null,
+): ExpertCard[] => {
+  const base = meta ? buildExpertsFromMeta(meta, mode) : (MODE_EXPERTS[mode] ?? []);
+  return base.map((e) => ({ ...e, status: "idle" as const, note: "" }));
 };
 
 /**
@@ -151,8 +190,50 @@ export function usePipeline() {
   const unlistenRef = useRef<UnlistenFn | null>(null);
   /** run 递增 token：新 run/切模式后，过期 run 的 pipeline 事件一律丢弃（H4 修复） */
   const runTokenRef = useRef(0);
+  /** A9：当前 run 归属 id（事件 envelope 过滤 + 取消/插话定向） */
+  const runIdRef = useRef<string>("");
   /** 当前 run 的发言回调（step_done/host_done/audit_result 时调用，追加对话流） */
   const speechCbRef = useRef<((s: ChatTurn) => void) | null>(null);
+  /** A8：当前模式跟踪（meta 到达后按此模式重建围坐） */
+  const modeRef = useRef<Mode>("mode_d");
+  /** A8：后端元数据（启动获取一次；失败回退本地缓存/内置表，不阻断） */
+  const [meta, setMeta] = useState<PipelineMeta | null>(() => {
+    try {
+      const raw = localStorage.getItem(META_CACHE_KEY);
+      return raw ? (JSON.parse(raw) as PipelineMeta) : null;
+    } catch {
+      return null;
+    }
+  });
+  const metaRef = useRef<PipelineMeta | null>(null);
+  // meta state 与 ref 同步（闭包内读最新）
+  useEffect(() => { metaRef.current = meta; }, [meta]);
+
+  // A8：启动拉取后端元数据（成功刷新 ROLE_NAMES/ROLE_EMOJIS + 阵容并缓存；失败静默回退）
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const m = await invoke<PipelineMeta>("get_pipeline_meta", {});
+        if (cancelled || !m || !m.modes || !m.roles) return;
+        for (const [id, r] of Object.entries(m.roles)) {
+          if (r?.name) ROLE_NAMES[id] = r.name;
+          if (r?.emoji) ROLE_EMOJIS[id] = r.emoji;
+        }
+        try { localStorage.setItem(META_CACHE_KEY, JSON.stringify(m)); } catch { /* 忽略 */ }
+        if (!cancelled) {
+          setMeta(m);
+          // 用后端阵容重建围坐（仅非运行态重建，运行中不碰在途卡片）
+          setState((prev) => {
+            if (prev.active) return prev;
+            const mode = modeRef.current;
+            return { ...prev, experts: makeInitialExperts(mode, m) };
+          });
+        }
+      } catch { /* 后端不可达→回退内置表+缓存，不阻断 */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   /** 构造一条专家发言（对话流用） */
   const makeSpeech = useCallback((id: string, content: string): ChatTurn => ({
@@ -183,12 +264,15 @@ export function usePipeline() {
     }));
   }, []);
 
-  /** 订阅进度事件（每次 run/refine 前先清理旧订阅；token 校验丢弃过期 run 的事件） */
-  const startListening = useCallback(async (token: number) => {
+  /** 订阅进度事件（每次 run/refine 前先清理旧订阅；token + run_id 双重过滤过期事件） */
+  const startListening = useCallback(async (token: number, runId: string) => {
     await cleanup();
-    unlistenRef.current = await listen<PipelineEvent>("pipeline", (event) => {
+    unlistenRef.current = await listen<PipelineEnvelope>("pipeline", (event) => {
       if (token !== runTokenRef.current) return; // 过期 run 的事件丢弃（H4）
-      const e = event.payload;
+      // A9：envelope 按 run_id 过滤（后端原生归属；token 双保险保留）
+      const envelope = event.payload;
+      if (!envelope || envelope.run_id !== runId) return;
+      const e = envelope.event;
       switch (e.type) {
         case "step_start":
           setState((prev) => ({ ...prev, currentStage: e.role }));
@@ -312,10 +396,15 @@ export function usePipeline() {
       command: "pipeline_generate" | "pipeline_refine",
       feedback?: string,
     ): Promise<string> => {
+      // A9：本 run 归属 id（事件过滤 + 取消/插话定向；与后端 envelope.run_id 对齐）
+      const runId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `run-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      runIdRef.current = runId;
       speechCbRef.current = opts.onSpeech ?? null;
       setState({
         active: true,
-        experts: makeInitialExperts(opts.mode),
+        experts: makeInitialExperts(opts.mode, metaRef.current),
         phase: "discussing",
         validation: null,
         error: null,
@@ -325,7 +414,7 @@ export function usePipeline() {
       });
 
       try {
-        await startListening(token);
+        await startListening(token, runId);
       } catch (e) {
         // 监听失败：状态复位并上抛（App 层 catch 展示错误，不卡死在"进行中"）
         setState((prev) => ({ ...prev, active: false, phase: "done", error: errText(e) }));
@@ -355,6 +444,8 @@ export function usePipeline() {
         refine_targets: refineTargets,
         // A11：生成参数直传（缺省后端用默认；旧后端忽略未知字段）
         generation: opts.settings.generation,
+        // A9：任务归属 id（后端 envelope/取消/插话定向）
+        run_id: runId,
       };
 
       try {
@@ -390,11 +481,13 @@ export function usePipeline() {
     [startRun]
   );
 
-  /** B3：请求取消当前生成（后端检查点中断 + Cancelled 事件回传） */
+  /** B3/A9：请求取消当前生成（按 run_id 定向，后端检查点中断 + Cancelled 事件回传） */
   const cancel = useCallback(async () => {
     runTokenRef.current++; // 作废在途 run 的事件（H4 双保险）
+    const runId = runIdRef.current;
+    runIdRef.current = "";
     try {
-      await invoke("cancel_pipeline");
+      await invoke("cancel_pipeline", { runId });
     } catch {
       // 取消命令本身失败不展示（已无在途任务可取消时属正常）
     }
@@ -404,14 +497,17 @@ export function usePipeline() {
   /** 重置 */
   const reset = useCallback(
     (mode: Mode = "mode_a") => {
+      modeRef.current = mode;
       runTokenRef.current++; // 作废在途 run（H4）
       speechCbRef.current = null;
       cleanup();
-      // B3：重置同时请求后端取消在途任务（补旧遗漏：切模式只作废事件会导致后台继续烧钱）
-      invoke("cancel_pipeline").catch(() => {});
+      // B3/A9：重置同时按 run_id 取消在途任务（补旧遗漏：切模式只作废事件会导致后台继续烧钱）
+      const runId = runIdRef.current;
+      runIdRef.current = "";
+      if (runId) invoke("cancel_pipeline", { runId }).catch(() => {});
       setState({
         active: false,
-        experts: makeInitialExperts(mode),
+        experts: makeInitialExperts(mode, metaRef.current),
         phase: "discussing",
         validation: null,
         error: null,
@@ -423,6 +519,9 @@ export function usePipeline() {
     [cleanup]
   );
 
-  // 保留 run/refine/reset 命名（App 调用不变）+ B3 的 cancel
-  return { ...state, run, refine, reset, cancel };
+  /** A9：当前 run_id 读取（插话命令定向用） */
+  const getRunId = useCallback(() => runIdRef.current, []);
+
+  // 保留 run/refine/reset 命名（App 调用不变）+ B3 的 cancel + A9 的 getRunId
+  return { ...state, run, refine, reset, cancel, getRunId };
 }

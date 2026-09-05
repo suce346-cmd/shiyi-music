@@ -8,21 +8,10 @@ import StatusIndicator from "./components/StatusIndicator";
 import HistoryPanel from "./components/HistoryPanel";
 import RoundtablePanel from "./components/RoundtablePanel";
 import { useSettingsWithSecrets } from "./hooks/useSettings";
-import { usePipeline, ROLE_NAMES } from "./hooks/usePipeline";
+import { usePipeline, ROLE_NAMES, ROLE_EMOJIS } from "./hooks/usePipeline";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import type { Mode, ChatMessage, ChatTurn, HistoryEntry, LLMStatus, ExpertCard, PipelineRoleKey } from "./types";
 import { MODE_LABELS, errText } from "./types";
-
-/** 角色 emoji（设置面板展示用，与后端 PipelineRole::emoji 对齐） */
-const ROLE_EMOJIS: Record<PipelineRoleKey, string> = {
-  host: "👑",
-  auditor: "🔍",
-  emotion: "🎭",
-  lyricist: "📝",
-  reviser: "✍️",
-  producer: "🎤",
-  style_analyst: "🔥",
-};
 
 const HISTORY_KEY = "suno-prompt-history";
 /** F3：历史迁移标记（localStorage → 文件一次性迁移） */
@@ -725,7 +714,7 @@ export default function App() {
           <div className="flex-1 flex flex-col overflow-hidden">
             {status !== "idle" && (
               <div className="shrink-0">
-                <StatusIndicator status={status} errorMessage={errorMessage} onRetry={handleRetry} onCancel={pipeline.cancel} />
+                <StatusIndicator status={status} errorMessage={errorMessage} onRetry={handleRetry} onCancel={pipeline.cancel} getRunId={pipeline.getRunId} />
               </div>
             )}
 
