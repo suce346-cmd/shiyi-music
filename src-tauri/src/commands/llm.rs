@@ -56,7 +56,7 @@ async fn send_with_retry(req: reqwest::RequestBuilder, budget: &SharedBudget) ->
                 match retry_plan(attempt, Some(status.as_u16()), false) {
                     Some(wait) => {
                         last_err = format!("{} 错误", status);
-                        eprintln!("[llm] {} 错误，{}s 后重试（{}/3）", status, wait, attempt + 1);
+                        tracing::warn!(status = %status, wait_secs = wait, attempt = attempt + 1, "LLM 请求错误，退避重试");
                         // A1：退避等待可被预算到期中断——不等满，只等到 deadline
                         let wait_dur = std::time::Duration::from_secs(wait);
                         if tokio::time::timeout(budget.remaining(), tokio::time::sleep(wait_dur)).await.is_err() {
@@ -74,7 +74,7 @@ async fn send_with_retry(req: reqwest::RequestBuilder, budget: &SharedBudget) ->
                 // 网络层错误（连接失败/超时/断流）：可重试
                 if let Some(wait) = retry_plan(attempt, None, true) {
                     last_err = format!("网络错误: {}", e);
-                    eprintln!("[llm] 网络错误，{}s 后重试（{}/3）: {}", wait, attempt + 1, e);
+                    tracing::warn!(wait_secs = wait, attempt = attempt + 1, error = %e, "LLM 网络错误，退避重试");
                     let wait_dur = std::time::Duration::from_secs(wait);
                     if tokio::time::timeout(budget.remaining(), tokio::time::sleep(wait_dur)).await.is_err() {
                         return Err(AppError::new(
@@ -225,7 +225,7 @@ pub(crate) async fn call_llm_silent(
         Ok(resp) => Ok(resp),
         Err(e) if thinking && e.message.contains("missing content") => {
             // 降级：去掉思考参数重试一次（同一 prompt 无思考直接输出，必有正文）
-            eprintln!("[llm] 思考模式响应无正文，降级为无思考重试一次");
+            tracing::warn!("思考模式响应无正文，降级为无思考重试一次");
             let fallback = serde_json::json!({
                 "model": model,
                 "messages": body["messages"],
@@ -342,11 +342,11 @@ async fn stream_response<R: Runtime>(
             return Err(AppError::cancelled());
         }
         if last_log.elapsed().as_secs() >= 30 {
-            eprintln!("[llm] 流式进行中 {}s，已收 {} 字符", started.elapsed().as_secs(), full_content.chars().count());
+            tracing::info!(elapsed_secs = started.elapsed().as_secs(), chars = full_content.chars().count(), "流式进行中");
             last_log = std::time::Instant::now();
         }
         let chunk = chunk_result.map_err(|e| {
-            eprintln!("[llm] 流式错误（{}s 时）: {}", started.elapsed().as_secs(), e);
+            tracing::warn!(elapsed_secs = started.elapsed().as_secs(), error = %e, "流式错误");
             AppError::new(ErrorKind::Network, format!("Stream error: {}", e))
         })?;
         line_buf.push_str(&String::from_utf8_lossy(&chunk));
@@ -565,6 +565,7 @@ mod tests {
         let (c, fr, u) = extract_message(&ok).unwrap();
         assert_eq!(c, "方案内容");
         assert_eq!(fr.as_deref(), Some("stop"));
+        assert!(u.is_none(), "无 usage 字段应为 None");
         // finish_reason 缺省也要容忍（部分网关不返回）
         let no_fr = serde_json::json!({"choices": [{"message": {"content": "方案内容"}}]});
         let (_, fr2, u2) = extract_message(&no_fr).unwrap();

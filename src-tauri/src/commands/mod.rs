@@ -7,3 +7,4 @@ pub mod cancel;
 pub mod interject;
 pub mod keychain;
 pub mod history;
+pub mod logdir;

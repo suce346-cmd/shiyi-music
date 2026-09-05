@@ -30,6 +30,10 @@ futures-util = "0.3"
 keyring = "3"
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+tracing-appender = "0.2"
 
 [profile.release]
 # 生产包优化：剥离符号 + LTO + 压缩（产物更小、启动更快）

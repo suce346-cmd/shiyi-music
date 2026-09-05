@@ -71,7 +71,7 @@ pub async fn history_load(app: tauri::AppHandle) -> Result<Vec<HistoryEntry>, Ap
             // 损坏备份：history.json → history.json.bak（覆盖旧备份），然后返回空
             let bak = path.with_extension("json.bak");
             let _ = std::fs::rename(&path, &bak);
-            eprintln!("[history] 历史文件损坏已备份 {:?}: {}", bak, e);
+            tracing::warn!(backup = ?bak, error = %e, "历史文件损坏已备份");
             Ok(vec![])
         }
     }
