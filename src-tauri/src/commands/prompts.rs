@@ -1,3 +1,31 @@
+/// A10：prompt 覆盖目录（setup 时记录；{app_data}/prompts/<name>.txt 存在则优先）
+static PROMPT_OVERRIDE_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// A10：setup 调用一次，记录覆盖目录（目录不存在也记录，读取时判定）
+pub fn set_prompt_override_dir(dir: std::path::PathBuf) {
+    let _ = PROMPT_OVERRIDE_DIR.set(dir.join("prompts"));
+}
+
+/// A10：读覆盖 prompt（存在且非空则 Some；否则 None 走嵌入版）
+pub(crate) fn prompt_override(name: &str) -> Option<String> {
+    let dir = PROMPT_OVERRIDE_DIR.get()?;
+    let content = std::fs::read_to_string(dir.join(format!("{}.txt", name))).ok()?;
+    let trimmed = content.trim().to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+/// A10：prompt 来源（日志用）
+pub fn prompt_source(name: &str) -> &'static str {
+    match PROMPT_OVERRIDE_DIR.get() {
+        Some(dir) if dir.join(format!("{}.txt", name)).is_file() => "override",
+        _ => "embedded",
+    }
+}
+
 pub fn mode_a_system_prompt() -> &'static str {
     r#"你是一个 Suno AI 音乐制作助手。你的任务是根据用户提供的歌词，完成以下工作：
 

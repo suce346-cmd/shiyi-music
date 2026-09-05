@@ -17,6 +17,13 @@ pub fn run() {
             use tauri::Manager;
             if let Ok(dir) = app.path().app_data_dir() {
                 let _ = logging::init(&dir);
+                // A10：知识库覆盖预热 + prompt 覆盖目录记录（失败回退嵌入版，不阻断启动）
+                crate::knowledge::warm_knowledge(&dir);
+                crate::commands::prompts::set_prompt_override_dir(dir);
+                tracing::info!(
+                    kb_source = crate::knowledge::knowledge_source(),
+                    "知识库来源就绪"
+                );
             }
             Ok(())
         })
@@ -33,7 +40,8 @@ pub fn run() {
             commands::history::history_load,
             commands::history::history_save,
             commands::history::history_export_text,
-            commands::logdir::open_log_dir
+            commands::logdir::open_log_dir,
+            commands::logdir::open_config_dir
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

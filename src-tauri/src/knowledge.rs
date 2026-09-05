@@ -175,11 +175,59 @@ pub struct KnowledgeBase {
 /// OnceLock 线程安全（A2 并发共享无锁）；初始化失败 panic——嵌入数据损坏属构建期错误。
 static SHARED_KB: std::sync::OnceLock<KnowledgeBase> = std::sync::OnceLock::new();
 
+/// A10：知识库来源（日志用；embedded=嵌入版，override=用户覆盖目录）
+static KB_SOURCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
 /// A4：取共享缓存（生产路径；测试直调 load/load_embedded）
 pub fn shared_knowledge() -> &'static KnowledgeBase {
     SHARED_KB.get_or_init(|| {
         load_embedded_internal().expect("嵌入知识库损坏（构建期错误）")
     })
+}
+
+/// A10：知识库来源描述（setup 时预热后可查；缺省 embedded）
+pub fn knowledge_source() -> &'static str {
+    KB_SOURCE.get().map(|s| s.as_str()).unwrap_or("embedded")
+}
+
+/// A10：setup 预热——覆盖目录整组有效则替换缓存源，否则嵌入版。
+/// 按组切换（单文件覆盖易致表间不一致）；损坏回退嵌入版 + 日志。
+/// 幂等：OnceLock 已初始化则跳过（测试直调 load 不受影响）。
+pub fn warm_knowledge(app_data_dir: &std::path::Path) {
+    let dir = app_data_dir.join("knowledge");
+    // 目录不存在 → 嵌入版（最常见路径，静默）
+    if !dir.is_dir() {
+        let _ = KB_SOURCE.set("embedded".to_string());
+        let _ = SHARED_KB.get_or_init(|| {
+            load_embedded_internal().expect("嵌入知识库损坏（构建期错误）")
+        });
+        return;
+    }
+    match KnowledgeBase::load(&dir) {
+        Ok(kb) if kb.table_names().len() == 6 => {
+            let _ = SHARED_KB.get_or_init(|| kb.clone());
+            // get_or_init 已初始化时上面的 clone 白做但无害；来源标记尝试设置
+            let _ = KB_SOURCE.set("override".to_string());
+            tracing::info!(dir = %dir.display(), "知识库来源：用户覆盖目录");
+        }
+        Ok(kb) => {
+            tracing::warn!(
+                tables = kb.table_names().len(),
+                "覆盖目录表不全（需 6 张），回退嵌入版"
+            );
+            let _ = KB_SOURCE.set("embedded".to_string());
+            let _ = SHARED_KB.get_or_init(|| {
+                load_embedded_internal().expect("嵌入知识库损坏（构建期错误）")
+            });
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "覆盖目录加载失败，回退嵌入版");
+            let _ = KB_SOURCE.set("embedded".to_string());
+            let _ = SHARED_KB.get_or_init(|| {
+                load_embedded_internal().expect("嵌入知识库损坏（构建期错误）")
+            });
+        }
+    }
 }
 
 /// A4：嵌入加载内部实现（load_embedded 与 shared_knowledge 共用）
@@ -656,6 +704,20 @@ fn split_csv_line(line: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A10：load() 整组有效则可用作覆盖源（6 张 mini 表）；调用方按组切换
+    #[test]
+    fn load_override_dir_semantics() {
+        let dir = std::env::temp_dir().join(format!("kb_override_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["instruments", "emotions", "style_genre", "suno_rules", "cliches", "hooks"] {
+            std::fs::write(dir.join(format!("{}.csv", name)), "a,b\n1,2\n").unwrap();
+        }
+        let kb = KnowledgeBase::load(&dir).unwrap();
+        assert_eq!(kb.table_names().len(), 6);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn parses_simple_csv() {

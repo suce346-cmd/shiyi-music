@@ -83,12 +83,21 @@ fn load_knowledge() -> Result<KnowledgeBase, String> {
 }
 
 /// 按模式取原版完整指令（主持人阶段 0 用，一字不改）
-fn prompt_for_mode(mode: &Mode) -> &'static str {
-    match mode {
-        Mode::ModeA => prompts::mode_a_system_prompt(),
-        Mode::ModeB => prompts::mode_b_system_prompt(),
-        Mode::ModeC => prompts::mode_c_system_prompt(),
-        Mode::ModeD => prompts::mode_d_system_prompt(),
+/// A10：取模式 prompt（用户覆盖优先，嵌入版回退；来源打日志）
+fn prompt_for_mode(mode: &Mode) -> String {
+    let (name, embedded): (&str, &'static str) = match mode {
+        Mode::ModeA => ("mode_a_system_prompt", prompts::mode_a_system_prompt()),
+        Mode::ModeB => ("mode_b_system_prompt", prompts::mode_b_system_prompt()),
+        Mode::ModeC => ("mode_c_system_prompt", prompts::mode_c_system_prompt()),
+        Mode::ModeD => ("mode_d_system_prompt", prompts::mode_d_system_prompt()),
+    };
+    // 覆盖函数在 prompts.rs 内（同模块可见性需 pub(crate)）：此处经 prompts::prompt_override 读取
+    match prompts::prompt_override(name) {
+        Some(text) => {
+            tracing::info!(prompt = %name, source = "override", "prompt 来源：用户覆盖");
+            text
+        }
+        None => embedded.to_string(),
     }
 }
 
@@ -1340,6 +1349,7 @@ mod tests {
 
     #[test]
     fn prompt_for_mode_returns_original_instructions() {
+        // 未设置覆盖目录时走嵌入版（String 返回，长度不断言改）
         for m in [Mode::ModeA, Mode::ModeB, Mode::ModeC, Mode::ModeD] {
             let p = prompt_for_mode(&m);
             assert!(p.len() > 500, "模式 {:?} 指令过短（{}）", m, p.len());
