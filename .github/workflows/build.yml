@@ -78,6 +78,19 @@ jobs:
         if: matrix.os == 'windows-latest'
         run: npm run tauri build -- --target ${{ matrix.target }}
 
+      # F5：产物非空校验——bundle 失败（如 Windows 无 nsis 产物）时显式失败，不上传空目录
+      - name: Verify bundle artifacts
+        shell: bash
+        run: |
+          BUNDLE_DIR="src-tauri/target/${{ matrix.target }}/release/bundle"
+          if [ ! -d "$BUNDLE_DIR" ]; then BUNDLE_DIR="src-tauri/target/release/bundle"; fi
+          echo "=== bundle contents ==="
+          find "$BUNDLE_DIR" -type f | head -20
+          if [ -z "$(find "$BUNDLE_DIR" -type f -print -quit)" ]; then
+            echo "::error::bundle 目录为空，打包失败"
+            exit 1
+          fi
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v5
         with:
