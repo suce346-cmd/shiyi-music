@@ -87,7 +87,23 @@ export type PipelineEvent =
   | { type: "audit_result"; pass: boolean; findings: string[] }
   | { type: "retry"; role: PipelineRoleKey; reason: string }
   | { type: "discussion_round"; round: number; roles: PipelineRoleKey[]; reason: string }
-  | { type: "failed"; error: string };
+  | { type: "failed"; error: string }
+  | { type: "cancelled" };
+
+/** A5：后端结构化错误 {kind, message}。command 失败时 Tauri 返回该对象（非字符串）。 */
+export interface AppError {
+  kind: "network" | "auth" | "rate_limit" | "timeout" | "cancelled" | "parse" | "validation" | "internal";
+  message: string;
+}
+
+/** A5：错误取文案——对象取 message，字符串原样（双形态兼容过渡期）。 */
+export function errText(e: unknown): string {
+  if (typeof e === "string") return e;
+  if (e && typeof e === "object" && typeof (e as AppError).message === "string") {
+    return (e as AppError).message;
+  }
+  return String(e);
+}
 
 /** 流水线请求 */
 export interface PipelineRequest {

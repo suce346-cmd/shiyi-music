@@ -9,6 +9,7 @@ import type {
   PipelineRequest,
   ExpertCard,
 } from "../types";
+import { errText } from "../types";
 
 /** 各模式的流水线角色阵容（与后端 orchestrator.rs steps_for_mode 对齐） */
 export const MODE_EXPERTS: Record<Mode, Omit<ExpertCard, "status" | "note">[]> = {
@@ -260,6 +261,10 @@ export function usePipeline() {
           ));
           break;
         }
+        case "cancelled":
+          // B3：用户取消——回到空闲，不标红为错误
+          setState((prev) => ({ ...prev, error: null, phase: "done", active: false, currentStage: null }));
+          break;
         case "failed":
           // active:false + 清 currentStage：防后端只发 Failed 不返回 Err 时 UI 永久卡"进行中"
           setState((prev) => ({ ...prev, error: e.error, phase: "done", active: false, currentStage: null }));
@@ -296,7 +301,7 @@ export function usePipeline() {
         await startListening(token);
       } catch (e) {
         // 监听失败：状态复位并上抛（App 层 catch 展示错误，不卡死在"进行中"）
-        setState((prev) => ({ ...prev, active: false, phase: "done", error: String(e) }));
+        setState((prev) => ({ ...prev, active: false, phase: "done", error: errText(e) }));
         throw e;
       }
 
@@ -322,7 +327,7 @@ export function usePipeline() {
         finishRun();
         return text;
       } catch (e) {
-        setState((prev) => ({ ...prev, active: false, phase: "done", error: String(e) }));
+        setState((prev) => ({ ...prev, active: false, phase: "done", error: errText(e) }));
         throw e;
       } finally {
         cleanup();
@@ -349,12 +354,25 @@ export function usePipeline() {
     [startRun]
   );
 
+  /** B3：请求取消当前生成（后端检查点中断 + Cancelled 事件回传） */
+  const cancel = useCallback(async () => {
+    runTokenRef.current++; // 作废在途 run 的事件（H4 双保险）
+    try {
+      await invoke("cancel_pipeline");
+    } catch {
+      // 取消命令本身失败不展示（已无在途任务可取消时属正常）
+    }
+    setState((prev) => ({ ...prev, active: false, phase: "done", error: null, currentStage: null }));
+  }, []);
+
   /** 重置 */
   const reset = useCallback(
     (mode: Mode = "mode_a") => {
       runTokenRef.current++; // 作废在途 run（H4）
       speechCbRef.current = null;
       cleanup();
+      // B3：重置同时请求后端取消在途任务（补旧遗漏：切模式只作废事件会导致后台继续烧钱）
+      invoke("cancel_pipeline").catch(() => {});
       setState({
         active: false,
         experts: makeInitialExperts(mode),
@@ -368,6 +386,6 @@ export function usePipeline() {
     [cleanup]
   );
 
-  // 保留 run/refine/reset 命名（App 调用不变）
-  return { ...state, run, refine, reset };
+  // 保留 run/refine/reset 命名（App 调用不变）+ B3 的 cancel
+  return { ...state, run, refine, reset, cancel };
 }

@@ -5,6 +5,8 @@ interface Props {
   status: LLMStatus;
   errorMessage?: string;
   onRetry?: () => void;
+  /** B3：生成中显示"停止"按钮 */
+  onCancel?: () => void;
 }
 
 const config: Record<LLMStatus, { text: string; icon: typeof IconLoader; color: string; bg: string }> = {
@@ -15,7 +17,7 @@ const config: Record<LLMStatus, { text: string; icon: typeof IconLoader; color: 
   error: { text: "出错", icon: IconAlertTriangle, color: "text-danger", bg: "bg-danger/8" },
 };
 
-export default function StatusIndicator({ status, errorMessage, onRetry }: Props) {
+export default function StatusIndicator({ status, errorMessage, onRetry, onCancel }: Props) {
   if (status === "idle") return null;
   const c = config[status];
   const Icon = c.icon;
@@ -34,6 +36,14 @@ export default function StatusIndicator({ status, errorMessage, onRetry }: Props
                      transition-all duration-150 active:scale-95 shrink-0">
           <IconRefresh size={12} />
           重试
+        </button>
+      )}
+      {onCancel && (status === "loading" || status === "streaming") && (
+        <button onClick={onCancel}
+          className="flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-medium
+                     bg-surface-3 hover:bg-border border border-border/50 text-text-2
+                     transition-all duration-150 active:scale-95 shrink-0">
+          停止
         </button>
       )}
       {(status === "loading" || status === "streaming") && (

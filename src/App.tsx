@@ -11,7 +11,7 @@ import { useSettings } from "./hooks/useSettings";
 import { usePipeline, ROLE_NAMES } from "./hooks/usePipeline";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import type { Mode, ChatMessage, ChatTurn, HistoryEntry, LLMStatus, ExpertCard, PipelineRoleKey } from "./types";
-import { MODE_LABELS } from "./types";
+import { MODE_LABELS, errText } from "./types";
 
 /** 角色 emoji（设置面板展示用，与后端 PipelineRole::emoji 对齐） */
 const ROLE_EMOJIS: Record<PipelineRoleKey, string> = {
@@ -254,7 +254,7 @@ export default function App() {
       setHistoryEntries(updated); saveHistory(updated);
     } catch (e) {
       if (token !== runTokenRef.current) return; // 过期 run 的错误丢弃（H4）
-      setStatus("error"); setErrorMessage(String(e));
+      setStatus("error"); setErrorMessage(errText(e));
     }
   }, [mode, settings, ensureLlmListener, pipeline]);
 
@@ -299,7 +299,7 @@ export default function App() {
       });
     } catch (e) {
       if (token !== runTokenRef.current) return; // 过期 run 的错误丢弃（H4）
-      setStatus("error"); setErrorMessage(String(e));
+      setStatus("error"); setErrorMessage(errText(e));
       return;
     }
     if (token !== runTokenRef.current) return; // 过期 run 的结果丢弃（H4）
@@ -544,7 +544,7 @@ export default function App() {
           <div className="flex-1 flex flex-col overflow-hidden">
             {status !== "idle" && (
               <div className="shrink-0">
-                <StatusIndicator status={status} errorMessage={errorMessage} onRetry={handleRetry} />
+                <StatusIndicator status={status} errorMessage={errorMessage} onRetry={handleRetry} onCancel={pipeline.cancel} />
               </div>
             )}
 
