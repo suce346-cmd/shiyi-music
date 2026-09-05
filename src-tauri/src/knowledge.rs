@@ -98,89 +98,56 @@ fn project_table<'a>(
 }
 
 /// 从方案文本提取能量范围（min/max；无能量标注返回 None）。
-/// 兼容四种标注格式：能量:X / 能量 X / energy:X / energy X（与前端 parseEnergy 同格式族），
-/// 只取含标记的行；区间值（如 energy 3-4）取两端各算一个值（min/max 覆盖）。
-/// 注：orchestrator 的 plan_energy_range 委托本函数——单一实现，防双实现漂移。
+/// B9：实现统一委托 energy.rs（原先本函数内嵌一份逐字符扫描，与 validator 重复）。
+/// 本薄壳保留函数名——orchestrator 的 plan_energy_range 与 render_filtered_any 调用点零改动。
 pub(crate) fn plan_energy_range_str(plan: &str) -> Option<(u32, u32)> {
-    let mut vals: Vec<u32> = Vec::new();
-    for line in plan.lines() {
-        let lower = line.to_lowercase();
-        let has_mark = lower.contains("能量") || lower.contains("energy");
-        if !has_mark {
-            continue;
-        }
-        // 该行所有 0-10 数值（跳过紧邻结构词的段号：数字前字母串是 verse/chorus 等结构词时跳过，
-        // "energy 8" 中 8 前是 energy 本身 → 提取；中文标记后数字前是标点/空格 → 提取）
-        let chars: Vec<char> = line.chars().collect();
-        let mut i = 0;
-        while i < chars.len() {
-            if chars[i].is_ascii_digit() {
-                let start = i;
-                while i < chars.len() && chars[i].is_ascii_digit() {
-                    i += 1;
-                }
-                let token: String = chars[start..i].iter().collect();
-                // 段号 vs 能量值判定：取数字前「最后一个词」（跳过空白后收集连续字母）。
-                // "Verse 1" → 词为 Verse（段号，跳过）；"energy 8" → 词为 energy（能量值，提取）；
-                // "能量:3"/"能量 3" → 数字前是标点/中文，词为空（提取）
-                let mut letters = String::new();
-                let mut k = start;
-                while k > 0 && chars[k - 1].is_whitespace() {
-                    k -= 1;
-                }
-                while k > 0 && chars[k - 1].is_ascii_alphabetic() {
-                    letters.insert(0, chars[k - 1]);
-                    k -= 1;
-                }
-                if let Ok(v) = token.parse::<u32>() {
-                    let skip_as_section_no = !letters.is_empty() && !letters.eq_ignore_ascii_case("energy");
-                    if v <= 10 && !skip_as_section_no {
-                        vals.push(v);
-                    }
-                }
-            } else {
-                i += 1;
-            }
-        }
-    }
-    match (vals.iter().min(), vals.iter().max()) {
-        (Some(&a), Some(&b)) => Some((a, b)),
-        _ => None,
-    }
+    crate::energy::plan_energy_range(plan)
 }
 
-/// 从方案文本提取 BPM（"90BPM" / "BPM 90" 等；无则 None）
-fn plan_bpm_value(plan: &str) -> Option<u32> {
-    let re_digits: Vec<u32> = plan
-        .split(|ch: char| !ch.is_ascii_digit())
-        .filter(|s| !s.is_empty())
-        .filter_map(|s| s.parse::<u32>().ok())
-        .filter(|v| (60..=200).contains(v))
-        .collect();
-    // 优先取紧跟 "BPM" 前的数字；退而取第一个 60-200 的数字。
-    // 用 char_indices 全边界遍历——禁止 rfind 字节索引 +1（多字节字符内部切片会 panic）
+/// 从方案文本提取 BPM（"120BPM" / "120 BPM" / "BPM 90" 等显式书写）。
+/// B6：只信任显式 "BPM" 标注——无 BPM 字样返回 None（原 fallback 会从任意 60-200
+/// 数字猜值，"80年代" 等年代词是误报源）。BPM 合理性归制作人审查兜底（validator.rs
+/// 顶部哲学），代码只对明确标注报错。
+/// 提取值限 30-300（防 "能量:8 BPM 范围说明" 这类邻近数字误命中）。
+/// char_indices/chars 全字符遍历——禁止字节索引切片（多字节字符内部切片会 panic）。
+pub(crate) fn plan_bpm_value(plan: &str) -> Option<u32> {
     let upper = plan.to_uppercase();
-    if let Some(pos) = upper.find("BPM") {
-        let before = &upper[..pos];
-        let mut digit_start: Option<usize> = None;
-        let mut digit_end: Option<usize> = None;
-        for (i, c) in before.char_indices() {
-            if c.is_ascii_digit() {
-                if digit_start.is_none() {
-                    digit_start = Some(i);
-                }
-                digit_end = Some(i + c.len_utf8());
-            } else {
-                digit_start = None; // 数字段中断：重新计（BPM 前取最后一个数字段）
-            }
-        }
-        if let (Some(s), Some(e)) = (digit_start, digit_end) {
-            if let Ok(v) = before[s..e].parse::<u32>() {
-                return Some(v);
-            }
+    let pos = upper.find("BPM")?;
+    // "120BPM" / "120 BPM"：BPM 前的最后一个数字段（trim_end 允许 "68 BPM" 的间隔空格）
+    if let Some(v) = trailing_digits(upper[..pos].trim_end()) {
+        return sanity_bpm(v);
+    }
+    // "BPM 90"：BPM 后的第一个数字段
+    leading_digits(upper[pos + 3..].trim_start()).and_then(sanity_bpm)
+}
+
+/// 合理性过滤：BPM 取值限 30-300（音乐常见区间外视为误命中）
+fn sanity_bpm(v: u32) -> Option<u32> {
+    (30..=300).contains(&v).then_some(v)
+}
+
+fn trailing_digits(s: &str) -> Option<u32> {
+    let mut out = String::new();
+    for c in s.chars().rev() {
+        if c.is_ascii_digit() {
+            out.insert(0, c);
+        } else {
+            break;
         }
     }
-    re_digits.first().copied()
+    if out.is_empty() { None } else { out.parse::<u32>().ok() }
+}
+
+fn leading_digits(s: &str) -> Option<u32> {
+    let mut out = String::new();
+    for c in s.chars() {
+        if c.is_ascii_digit() {
+            out.push(c);
+        } else {
+            break;
+        }
+    }
+    if out.is_empty() { None } else { out.parse::<u32>().ok() }
 }
 
 /// bpm_range 列（"60-75" / "110-170" 格式）是否包含给定 BPM
@@ -992,8 +959,21 @@ mod tests {
         assert_eq!(plan_bpm_value(plan), Some(120));
         // 常规：BPM 前带空格
         assert_eq!(plan_bpm_value("深夜民谣 68 BPM"), Some(68));
-        // 无 BPM：退而取 60-200 首个数字
+        // 无 BPM：B6 后不再猜值，直接 None
         assert_eq!(plan_bpm_value("拍号 4/4 节奏"), None);
+    }
+
+    /// B6：年代词不再误判——只信任显式 BPM 标注，无 BPM 字样返回 None
+    #[test]
+    fn plan_bpm_value_ignores_era_words() {
+        // "80年代" 的 80 不得被当成 BPM（旧 fallback 会取首个 60-200 数字 → 80）
+        assert_eq!(plan_bpm_value("80年代复古Disco, 125BPM"), Some(125));
+        assert_eq!(plan_bpm_value("80年代Disco 4/4拍"), None);
+        assert_eq!(plan_bpm_value("90s hip hop"), None);
+        // 合理性过滤：邻近的 0-10 数值（如能量标注）不得被当成 BPM
+        assert_eq!(plan_bpm_value("能量:8 BPM 范围说明"), None);
+        // "BPM 90" 前置书写同样支持
+        assert_eq!(plan_bpm_value("BPM 90 起步"), Some(90));
     }
 
     /// 能量范围提取：段号不误算（"Verse 1" 的 1 跳过），energy 词尾数字提取

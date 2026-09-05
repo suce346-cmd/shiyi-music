@@ -1,4 +1,5 @@
 mod commands;
+mod energy;
 mod knowledge;
 mod models;
 

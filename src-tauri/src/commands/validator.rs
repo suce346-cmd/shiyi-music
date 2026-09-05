@@ -7,6 +7,9 @@
 //! `roles.rs` 中校验员 prompt 的格式规范**同步维护**——改任一处必须改另一处，
 //! 否则会出现「prompt 说合规、代码说不合规」的漂移。
 
+// B9：能量解析唯一实现在 energy.rs（原先 validator/knowledge 各持一份拷贝）
+use crate::energy::extract_energy_values;
+
 /// 校验结果
 #[derive(Debug, Clone, PartialEq)]
 pub struct ValidationResult {
@@ -38,12 +41,15 @@ fn extract_section_tags(text: &str) -> Vec<String> {
     tags
 }
 
-/// 提取 Style Prompt（支持 `**Style Prompt**：` 或 `Style Prompt: ` 两种写法）
-fn extract_style_prompt(text: &str) -> Option<String> {
+/// 提取 Style Prompt 正文（冒号后）。
+/// B7：支持 `**Style Prompt**：` / `Style Prompt: ` / `风格:` 三种写法——
+/// 旧 orchestrator 行级提取器认得 "风格" 前缀（语义下沉至此，无行为回退）。
+/// 返回冒号后正文供过短/BPM 校验使用，不再被 "Style Prompt**: " 标签前缀虚增长度。
+pub(crate) fn extract_style_prompt(text: &str) -> Option<String> {
     for line in text.lines() {
         let t = line.trim().trim_start_matches("**").trim();
-        if t.starts_with("Style Prompt") {
-            // 形如 "**Style Prompt**：..." 或 "Style Prompt: ..."
+        if t.starts_with("Style Prompt") || t.starts_with("风格") {
+            // 形如 "**Style Prompt**：..." 或 "Style Prompt: ..." 或 "风格：..."
             let body = t.split(['：', ':']).nth(1).unwrap_or("").trim();
             if !body.is_empty() {
                 return Some(body.to_string());
@@ -75,50 +81,6 @@ fn parse_section_instruments(line: &str) -> usize {
         }
     }
     count
-}
-
-/// 解析文本中的全部能量数值（0-10，只取含 能量/energy 标记的行）。
-/// 段号跳过：数字前紧跟的字母串是结构词（Verse/Chorus 等）→ 跳过；
-/// 英文 "energy 8" 格式中 8 前的字母串是 "energy" 本身 → 属于能量值，必须提取。
-pub(crate) fn extract_energy_values(text: &str) -> Vec<u32> {
-    let mut values = Vec::new();
-    for line in text.lines() {
-        let lower = line.to_lowercase();
-        if !lower.contains("能量") && !lower.contains("energy") {
-            continue;
-        }
-        let chars: Vec<char> = line.chars().collect();
-        let mut i = 0;
-        while i < chars.len() {
-            if chars[i].is_ascii_digit() {
-                let start = i;
-                while i < chars.len() && chars[i].is_ascii_digit() {
-                    i += 1;
-                }
-                let token: String = chars[start..i].iter().collect();
-                let n: u32 = token.parse().unwrap_or(0);
-                // 段号 vs 能量值判定：取数字前「最后一个词」（跳过空白后收集连续字母）。
-                // "Verse 1" → 词为 Verse（段号，跳过）；"energy 8" → 词为 energy（能量值，提取）；
-                // "能量:3"/"能量 3" → 数字前是标点/中文，词为空（提取）
-                let mut letters = String::new();
-                let mut k = start;
-                while k > 0 && chars[k - 1].is_whitespace() {
-                    k -= 1;
-                }
-                while k > 0 && chars[k - 1].is_ascii_alphabetic() {
-                    letters.insert(0, chars[k - 1]);
-                    k -= 1;
-                }
-                let skip_as_section_no = !letters.is_empty() && !letters.eq_ignore_ascii_case("energy");
-                if n <= 10 && !skip_as_section_no {
-                    values.push(n);
-                }
-            } else {
-                i += 1;
-            }
-        }
-    }
-    values
 }
 
 /// 提取全部（结构标签，说明行乐器数）对
