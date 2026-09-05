@@ -40,6 +40,8 @@ export interface HistoryEntry {
   output: string;
   /** 完整对话流（含原始输入 + 每轮优化）。旧记录可能没有此字段 */
   conversation?: ChatTurn[];
+  /** F4：该次生成的累计 token 用量。旧记录没有此字段 */
+  usage?: { prompt_tokens: number; completion_tokens: number };
   timestamp: number;
 }
 
@@ -88,7 +90,8 @@ export type PipelineEvent =
   | { type: "retry"; role: PipelineRoleKey; reason: string }
   | { type: "discussion_round"; round: number; roles: PipelineRoleKey[]; reason: string }
   | { type: "failed"; error: string }
-  | { type: "cancelled" };
+  | { type: "cancelled" }
+  | { type: "step_usage"; role: PipelineRoleKey; prompt_tokens: number; completion_tokens: number };
 
 /** A5：后端结构化错误 {kind, message}。command 失败时 Tauri 返回该对象（非字符串）。 */
 export interface AppError {

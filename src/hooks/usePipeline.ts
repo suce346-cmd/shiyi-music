@@ -98,7 +98,12 @@ interface PipelineState {
   error: string | null;
   currentStage: string | null;
   doneStages: string[];
+  /** F4：本轮累计 token 用量（step_usage 事件累加，startRun 时清零） */
+  usage: { prompt_tokens: number; completion_tokens: number };
 }
+
+/** F4：用量零值（startRun/reset 时复位） */
+const ZERO_USAGE = { prompt_tokens: 0, completion_tokens: 0 };
 
 /** 组装角色级 API 覆盖：过滤全空/全空格条目 + 非法角色 key（无覆盖的角色的不传给后端） */
 const buildRoleOverrides = (settings: AppSettings): PipelineRequest["role_overrides"] => {
@@ -130,6 +135,7 @@ export function usePipeline() {
     error: null,
     currentStage: null,
     doneStages: [],
+    usage: { ...ZERO_USAGE },
   });
 
   const unlistenRef = useRef<UnlistenFn | null>(null);
@@ -265,6 +271,16 @@ export function usePipeline() {
           // B3：用户取消——回到空闲，不标红为错误
           setState((prev) => ({ ...prev, error: null, phase: "done", active: false, currentStage: null }));
           break;
+        case "step_usage":
+          // F4：累计本轮 token 用量（H4：过期 run 的事件已在顶部丢弃）
+          setState((prev) => ({
+            ...prev,
+            usage: {
+              prompt_tokens: prev.usage.prompt_tokens + e.prompt_tokens,
+              completion_tokens: prev.usage.completion_tokens + e.completion_tokens,
+            },
+          }));
+          break;
         case "failed":
           // active:false + 清 currentStage：防后端只发 Failed 不返回 Err 时 UI 永久卡"进行中"
           setState((prev) => ({ ...prev, error: e.error, phase: "done", active: false, currentStage: null }));
@@ -295,6 +311,7 @@ export function usePipeline() {
         error: null,
         currentStage: null,
         doneStages: [],
+        usage: { ...ZERO_USAGE },
       });
 
       try {
@@ -381,6 +398,7 @@ export function usePipeline() {
         error: null,
         currentStage: null,
         doneStages: [],
+        usage: { ...ZERO_USAGE },
       });
     },
     [cleanup]

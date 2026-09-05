@@ -12,6 +12,8 @@ interface Props {
   /** v2 流水线阶段 */
   currentStage?: string | null;
   doneStages?: string[];
+  /** F4：本轮累计 token 用量（无用量时不显示） */
+  usage?: { prompt_tokens: number; completion_tokens: number } | null;
 }
 
 /**
@@ -163,6 +165,7 @@ export default function RoundtablePanel({
   onOpenDetail,
   currentStage = null,
   doneStages = [],
+  usage = null,
 }: Props) {
   const total = experts.length || 5;
 
@@ -262,12 +265,19 @@ export default function RoundtablePanel({
       </div>
 
       {/* 底部提示条 */}
-      <div className="px-4 py-2 border-t border-border/40 shrink-0">
+      <div className="px-4 py-2 border-t border-border/40 shrink-0 flex items-center justify-between gap-2">
         <span className="text-[9px] text-text-muted">
           {active
             ? "进行中：点击角色查看详情"
             : "就绪：输入内容点击「生成」，专家接力协作"}
         </span>
+        {/* F4：本轮累计 token 用量（有计数时显示，只计数不估算金额） */}
+        {usage && (usage.prompt_tokens > 0 || usage.completion_tokens > 0) && (
+          <span className="text-[9px] text-text-muted tabular-nums shrink-0">
+            tokens {usage.prompt_tokens + usage.completion_tokens}
+            <span className="opacity-70">（入 {usage.prompt_tokens} / 出 {usage.completion_tokens}）</span>
+          </span>
+        )}
       </div>
 
       {/* 校验 / 错误提示 */}

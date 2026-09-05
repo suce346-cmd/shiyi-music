@@ -186,15 +186,15 @@ export default function App() {
     }
   }, [settings]);
 
-  const saveToHistory = useCallback((input: string, output: string, conv: ChatTurn[], currentMode: Mode) => {
-    const entry: HistoryEntry = { id: newId(), mode: currentMode, input, output, conversation: conv, timestamp: Date.now() };
+  const saveToHistory = useCallback((input: string, output: string, conv: ChatTurn[], currentMode: Mode, usage?: { prompt_tokens: number; completion_tokens: number }) => {
+    const entry: HistoryEntry = { id: newId(), mode: currentMode, input, output, conversation: conv, usage, timestamp: Date.now() };
     const updated = [entry, ...historyRef.current];
     setHistoryEntries(updated); saveHistory(updated);
   }, []);
 
-  const updateHistoryEntry = useCallback((id: string, output: string, conv: ChatTurn[]) => {
+  const updateHistoryEntry = useCallback((id: string, output: string, conv: ChatTurn[], usage?: { prompt_tokens: number; completion_tokens: number }) => {
     const updated = historyRef.current.map(e =>
-      e.id === id ? { ...e, output, conversation: conv, timestamp: Date.now() } : e
+      e.id === id ? { ...e, output, conversation: conv, usage: usage ?? e.usage, timestamp: Date.now() } : e
     );
     setHistoryEntries(updated); saveHistory(updated);
   }, []);
@@ -248,7 +248,7 @@ export default function App() {
         { role: "user", content: userInput },
         { role: "assistant", content: raw },
       ];
-      const entry: HistoryEntry = { id: newId(), mode, input: userInput, output: raw, conversation: allTurns, timestamp: Date.now() };
+      const entry: HistoryEntry = { id: newId(), mode, input: userInput, output: raw, conversation: allTurns, usage: { ...pipeline.usage }, timestamp: Date.now() };
       setCurrentHistoryId(entry.id);
       const updated = [entry, ...historyRef.current];
       setHistoryEntries(updated); saveHistory(updated);
@@ -318,9 +318,9 @@ export default function App() {
       { role: "assistant", content: raw },
     ];
     if (currentHistoryId) {
-      updateHistoryEntry(currentHistoryId, raw, allTurns);
+      updateHistoryEntry(currentHistoryId, raw, allTurns, { ...pipeline.usage });
     } else {
-      saveToHistory(conversation[0]?.content || lastUserInput, raw, allTurns, mode);
+      saveToHistory(conversation[0]?.content || lastUserInput, raw, allTurns, mode, { ...pipeline.usage });
     }
   }, [mode, settings, conversation, lastUserInput, saveToHistory, currentHistoryId, updateHistoryEntry, pipeline, ensureLlmListener]);
 
@@ -516,6 +516,7 @@ export default function App() {
                 onOpenDetail={(e) => setDetailExpert(e)}
                 currentStage={pipeline.currentStage}
                 doneStages={pipeline.doneStages}
+                usage={pipeline.usage}
               />
             </div>
 
