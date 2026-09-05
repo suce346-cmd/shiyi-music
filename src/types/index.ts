@@ -122,4 +122,6 @@ export interface PipelineRequest {
   thinking: boolean;
   /** 角色级 API 覆盖（可选）：某角色配了就用配的，空字段继承全局 */
   role_overrides?: Partial<Record<PipelineRoleKey, RoleApiOverride>>;
+  /** F1：增量优化目标角色（缺省=后端按反馈自动路由；旧后端忽略） */
+  refine_targets?: PipelineRoleKey[];
 }

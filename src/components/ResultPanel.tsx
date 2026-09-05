@@ -1,13 +1,17 @@
 import { useState } from "react";
 import { IconCopy, IconCheck, IconRefresh, IconChevronDown } from "@tabler/icons-react";
-import type { ChatTurn, LLMStatus } from "../types";
+import type { ChatTurn, LLMStatus, Mode } from "../types";
+import { estimateRefineTargets, REFINE_TARGET_NAMES } from "../utils/refineTargets";
 
 interface Props {
   conversation: ChatTurn[];
   streamText: string;
   status: LLMStatus;
-  onRefine: (feedback: string) => void;
+  /** F1：双模式优化——feedback + 模式（fast=增量/full=全量） */
+  onRefine: (feedback: string, refineMode: "fast" | "full") => void;
   readOnly?: boolean;
+  /** F1：预估展示用（当前模式；缺省不展示预估） */
+  mode?: Mode;
 }
 
 interface EnergySection {
@@ -75,10 +79,16 @@ function EnergyBars({ sections }: { sections: EnergySection[] }) {
   );
 }
 
-export default function ResultPanel({ conversation, streamText, status, onRefine, readOnly }: Props) {
+export default function ResultPanel({ conversation, streamText, status, onRefine, readOnly, mode }: Props) {
   const [copied, setCopied] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [showRefine, setShowRefine] = useState(false);
+  /** F1：优化模式（fast=增量/full=全量），默认快速优化 */
+  const [refineMode, setRefineMode] = useState<"fast" | "full">("fast");
+  /** F1：增量预估参跑角色（前端镜像，后端为准；无命中则后端回落全量） */
+  const estimated = mode && refineMode === "fast" && feedback.trim()
+    ? estimateRefineTargets(feedback, mode)
+    : [];
 
   const handleCopy = async () => {
     // 复制 Suno 友好文本：能量标注已从说明行摘出（内部校验锚点，Suno 不识别）
@@ -200,14 +210,34 @@ export default function ResultPanel({ conversation, streamText, status, onRefine
               text-text-1 placeholder:text-text-muted/30 resize-y focus:outline-none
               focus:border-brand-500/40 focus:ring-1 focus:ring-brand-500/20 transition-all duration-150"
             placeholder="比如：唢呐不够炸、人声太软、洗脑循环不明显..." />
-          <button onClick={() => { onRefine(feedback); setFeedback(""); setShowRefine(false); }}
+          {/* F1：双模式优化——快速（增量）/深度（全量） */}
+          <div className="flex gap-2">
+            {(["fast", "full"] as const).map((m) => (
+              <button key={m} onClick={() => setRefineMode(m)}
+                className={`flex-1 py-1.5 rounded-lg text-[12px] font-medium border transition-all duration-150 ${
+                  refineMode === m
+                    ? "bg-brand-500/15 border-brand-500/40 text-brand-400"
+                    : "bg-surface-2/60 border-border/40 text-text-muted hover:text-text-2"
+                }`}>
+                {m === "fast" ? "快速优化" : "深度重做"}
+              </button>
+            ))}
+          </div>
+          {refineMode === "fast" && feedback.trim() && (
+            <p className="text-[10px] text-text-muted leading-relaxed">
+              {estimated.length > 0
+                ? `预计重跑：${estimated.map((r) => REFINE_TARGET_NAMES[r]).join("、")}＋校验员（约 1/3 耗时）`
+                : "无法判断涉及角色，将全量重跑（与深度重做一致）"}
+            </p>
+          )}
+          <button onClick={() => { onRefine(feedback, refineMode); setFeedback(""); setShowRefine(false); }}
             disabled={!feedback.trim()}
             className="w-full py-2 rounded-xl text-[13px] font-medium
               bg-surface-3 text-text-1 hover:bg-border
               disabled:opacity-40 disabled:cursor-not-allowed
               transition-all duration-150 active:scale-[0.98]">
             <IconRefresh size={14} className="inline mr-1.5 -mt-0.5" />
-            重新生成
+            {refineMode === "fast" ? "快速优化" : "重新生成"}
           </button>
         </div>
       )}

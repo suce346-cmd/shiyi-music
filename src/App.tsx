@@ -350,7 +350,7 @@ export default function App() {
     }
   }, [mode, settings, ensureLlmListener, pipeline]);
 
-  const handleRefine = useCallback(async (feedback: string) => {
+  const handleRefine = useCallback(async (feedback: string, refineMode: "fast" | "full" = "fast") => {
     if (!feedback.trim()) return;
     const token = ++runTokenRef.current; // 作废旧 run（H4）
     setStatus("loading"); setStreamText(""); setErrorMessage("");
@@ -376,6 +376,9 @@ export default function App() {
       }
       // P1：取最后一条 assistant（重复 refine 时注入的是上一版而非初始版）
       const lastOutput = [...currentHistory].reverse().find((m) => m.role === "assistant")?.content || "";
+      // F1：fast 增量时前端预估 targets 透传（无命中传空→后端自动路由；full 不传=全量）
+      const { estimateRefineTargets } = await import("./utils/refineTargets");
+      const estimated = refineMode === "fast" ? estimateRefineTargets(feedback, mode) : [];
       raw = await pipeline.refine({
         mode,
         userInput: input,
@@ -384,6 +387,8 @@ export default function App() {
         settings,
         extra: undefined,
         originalLyrics,
+        refineMode,
+        refineTargets: refineMode === "fast" && estimated.length > 0 ? estimated : undefined,
         onSpeech: (speech) => {
           // P5：阶段0流式结束后清空中间态流式文本（首个专家发言时）
           if (speechLogRef.current.length === 0) setStreamText("");
@@ -420,13 +425,13 @@ export default function App() {
 
   const handleRetry = useCallback(async () => {
     if (status === "error" && lastFeedback) {
-      await handleRefine(lastFeedback);
+      await handleRefine(lastFeedback, "fast");
     } else if (status === "error" && lastUserInput) {
       // F12：重试走展示文本解析路径（handleGenerate 内部处理直传，此处传原始展示文本由其二次解析）
       // 注意：mode_c 重试时 lastUserInput 为展示拼接文本，handleGenerate 会误判为新主题——
       // 因此 mode_c 重试改走 refine 路径（带上次反馈），避免原歌词丢失
       if (mode === "mode_c" && lastFeedback) {
-        await handleRefine(lastFeedback);
+        await handleRefine(lastFeedback, "fast");
       } else if (mode !== "mode_c") {
         await handleGenerate(lastUserInput);
       }
@@ -678,7 +683,7 @@ export default function App() {
                   { role: "assistant", content: historyView.output, timestamp: historyView.timestamp }
                 ]} streamText="" status="done" onRefine={() => {}} readOnly />
               ) : (conversation.length > 0 || streamText) ? (
-                <ResultPanel conversation={conversation} streamText={streamText} status={status} onRefine={handleRefine} />
+                <ResultPanel conversation={conversation} streamText={streamText} status={status} onRefine={handleRefine} mode={mode} />
               ) : (
                 <div className="h-full flex flex-col items-center justify-center text-text-muted px-8">
                   <div className="w-16 h-16 rounded-2xl glass-panel flex items-center justify-center mb-3">

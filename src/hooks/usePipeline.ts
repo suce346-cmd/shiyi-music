@@ -7,6 +7,7 @@ import type {
   Mode,
   PipelineEvent,
   PipelineRequest,
+  PipelineRoleKey,
   ExpertCard,
 } from "../types";
 import { errText } from "../types";
@@ -90,6 +91,10 @@ export interface PipelineRefineOptions {
   extra?: string;
   /** F12：Mode C 原歌词独立字段 */
   originalLyrics?: string;
+  /** F1：优化模式——fast=增量（后端按反馈路由，显式 targets 透传），full=全量重跑 */
+  refineMode?: "fast" | "full";
+  /** F1：显式增量目标（fast 且前端预估命中时透传；缺省由后端自动路由） */
+  refineTargets?: PipelineRoleKey[];
   /** 角色发言回调（同上） */
   onSpeech?: (speech: ChatTurn) => void;
 }
@@ -329,6 +334,10 @@ export function usePipeline() {
 
       const isRefine = command === "pipeline_refine";
       // P1：refine 时上一版方案注入 user_input（主持人阶段0可见上一版+反馈，优化有对照）
+      // F1：fast 增量时透传 refine_targets（前端预估命中则传，缺省后端自动路由；full 不传=全量）
+      const refineTargets = isRefine && (opts as PipelineRefineOptions).refineMode === "fast"
+        ? (opts as PipelineRefineOptions).refineTargets
+        : undefined;
       const request: PipelineRequest = {
         mode: opts.mode,
         user_input: isRefine && opts.lastOutput
@@ -343,6 +352,7 @@ export function usePipeline() {
         // 旧 localStorage 可能缺字段（合并默认值后恒为 boolean，兜底 || false）
         thinking: opts.settings.thinking ?? false,
         role_overrides: buildRoleOverrides(opts.settings),
+        refine_targets: refineTargets,
       };
 
       try {
