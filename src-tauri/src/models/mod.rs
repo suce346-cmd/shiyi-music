@@ -104,6 +104,16 @@ mod tests {
         }
     }
 
+    /// A9：envelope 序列化形态 {run_id, event:{type,...}}（前端拆包过滤）
+    #[test]
+    fn envelope_serializes_with_run_id() {
+        let e = PipelineEnvelope::new("r1", PipelineEvent::StepStart { role: PipelineRole::Host });
+        let j: Value = serde_json::from_str(&serde_json::to_string(&e).unwrap()).unwrap();
+        assert_eq!(j["run_id"], "r1");
+        assert_eq!(j["event"]["type"], "step_start");
+        assert_eq!(j["event"]["role"], "host");
+    }
+
     /// B3：Cancelled 事件序列化为 {"type":"cancelled"}（前端 usePipeline 分支）
     #[test]
     fn cancelled_event_serializes() {
@@ -203,10 +213,21 @@ mod tests {
             thinking: false,
             refine_targets: None,
             generation: Some(GenerationConfig { temperature: Some(9.0), max_tokens: None }),
+            run_id: None,
         };
         assert_eq!(validate_request(&req, None).unwrap_err().kind, ErrorKind::Validation);
         req.generation = None;
         assert!(validate_request(&req, None).is_ok());
+    }
+
+    /// A9：旧请求无 run_id 字段 → None（后端生成）；新字段透传
+    #[test]
+    fn request_run_id_defaults_none() {
+        let req: PipelineRequest = serde_json::from_str(
+            r#"{"mode":"mode_b","user_input":"x","model":"m","api_key":"k","base_url":"u","extra":null}"#,
+        )
+        .unwrap();
+        assert!(req.run_id.is_none());
     }
 
     /// F13：准入校验——空/超长/非法 URL/缺配置一律 Validation（构造请求用 struct 直写，无凭据字面量 JSON）
@@ -225,6 +246,7 @@ mod tests {
                 thinking: false,
                 refine_targets: None,
                 generation: None,
+                run_id: None,
             }
         }
         use crate::errors::ErrorKind;
@@ -383,6 +405,9 @@ pub struct PipelineRequest {
     /// A11：生成参数覆盖（缺省走内置默认；旧前端无此字段 → None）。
     #[serde(default)]
     pub generation: Option<GenerationConfig>,
+    /// A9：任务归属 id（前端生成传入；缺省后端在 with_timeout 内生成）。
+    #[serde(default)]
+    pub run_id: Option<String>,
 }
 
 /// A11：生成参数（全字段可选，缺省=现行硬编码值，零行为变化）。
@@ -507,6 +532,7 @@ pub enum HostStage {
 }
 
 /// 流水线事件（后端 → 前端，复用 'pipeline' 通道）
+/// A9：统一包 envelope 传输（PipelineEnvelope { run_id, event }），事件本体无 run_id 字段。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PipelineEvent {
@@ -532,4 +558,17 @@ pub enum PipelineEvent {
     Cancelled,
     /// F4：单次调用的 token 用量（前端累计展示，不阻塞流程）
     StepUsage { role: PipelineRole, prompt_tokens: u32, completion_tokens: u32 },
+}
+
+/// A9：事件信封——run_id 归属 + 事件本体（前端按 run_id 过滤，替代 H4 纯 token 补丁的后端原生支持）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PipelineEnvelope {
+    pub run_id: String,
+    pub event: PipelineEvent,
+}
+
+impl PipelineEnvelope {
+    pub fn new(run_id: impl Into<String>, event: PipelineEvent) -> Self {
+        Self { run_id: run_id.into(), event }
+    }
 }

@@ -92,6 +92,63 @@ fn prompt_for_mode(mode: &Mode) -> &'static str {
     }
 }
 
+/// A8：流水线元数据（单一真源下发）——modes 阵容来自 steps_for_mode，
+/// roles 元数据来自 role_for（name/emoji/knowledge 表名；prompt 文本不下发）。
+/// 前端启动获取一次，本地三张表（MODE_EXPERTS/ROLE_NAMES/ROLE_EMOJIS）由它驱动；
+/// 一致性由 pipeline_meta_matches_sources 测试锁定。
+#[derive(serde::Serialize)]
+pub struct PipelineMeta {
+    pub modes: std::collections::HashMap<String, Vec<PipelineRole>>,
+    pub roles: std::collections::HashMap<PipelineRole, RoleMeta>,
+}
+
+#[derive(serde::Serialize)]
+pub struct RoleMeta {
+    pub name: String,
+    pub emoji: String,
+    /// knowledge_tables 的表名列表（列投影/行子集不下发，只同步表级归属）
+    pub knowledge: Vec<String>,
+}
+
+/// A8：元数据查询命令（只读，无参数）
+#[tauri::command]
+pub async fn get_pipeline_meta() -> Result<PipelineMeta, crate::errors::AppError> {
+    use crate::models::Mode;
+    let mut modes = std::collections::HashMap::new();
+    for (key, mode) in [
+        ("mode_a", Mode::ModeA),
+        ("mode_b", Mode::ModeB),
+        ("mode_c", Mode::ModeC),
+        ("mode_d", Mode::ModeD),
+    ] {
+        modes.insert(
+            key.to_string(),
+            steps_for_mode(&mode).iter().map(|s| s.role).collect(),
+        );
+    }
+    let mut roles = std::collections::HashMap::new();
+    for role in [
+        PipelineRole::Host,
+        PipelineRole::Auditor,
+        PipelineRole::Emotion,
+        PipelineRole::Lyricist,
+        PipelineRole::Reviser,
+        PipelineRole::Producer,
+        PipelineRole::StyleAnalyst,
+    ] {
+        let r = roles::role_for(role);
+        roles.insert(
+            role,
+            RoleMeta {
+                name: r.name.to_string(),
+                emoji: r.emoji.to_string(),
+                knowledge: r.knowledge_tables.iter().map(|(t, _, _)| t.to_string()).collect(),
+            },
+        );
+    }
+    Ok(PipelineMeta { modes, roles })
+}
+
 /// 解析角色实际使用的 API 配置：角色覆盖优先，缺的字段逐项 fallback 全局
 pub fn resolve_api(req: &PipelineRequest, role: PipelineRole) -> (String, String, String) {
     if let Some(map) = &req.role_overrides {
@@ -384,9 +441,15 @@ async fn execute_review<R: Runtime>(
     next_tasks: &str,
     req: &PipelineRequest,
     budget: &crate::budget::SharedBudget,
+    run_id: &str,
 ) -> Result<ReviewResult, AppError> {
+    use crate::models::PipelineEnvelope;
     // A11：生成参数（缺省默认；调用点透传给 llm 层）
     let gen = req.generation.clone().unwrap_or_default();
+    // A9：本函数事件包 envelope
+    let emit = |event: PipelineEvent| {
+        let _ = app.emit("pipeline", PipelineEnvelope::new(run_id.to_string(), event));
+    };
     let kb = load_knowledge()?;
     let r = roles::role_for(role);
 
@@ -422,7 +485,7 @@ async fn execute_review<R: Runtime>(
     user.push_str("请审查：同意则输出 {\"agree\":true}；有优化点则输出 {\"agree\":false, \"changes\":[...]}。");
 
     let (base_url, api_key, model) = resolve_api(req, role);
-    let _ = app.emit("pipeline", PipelineEvent::StepStart { role });
+    let _ = emit(PipelineEvent::StepStart { role });
     let messages = vec![
         json!({"role":"system","content":system}),
         json!({"role":"user","content":user}),
@@ -434,6 +497,7 @@ async fn execute_review<R: Runtime>(
         req.thinking,
         budget,
         &gen,
+        &run_id,
     )
     .await?;
     // B4（上限放开后简化）：30000 上限下截断极罕见，观测记录即可——JSON 已完整时仍可正常解析
@@ -451,6 +515,7 @@ async fn execute_review<R: Runtime>(
             req.thinking,
             budget,
             &gen,
+            &run_id,
         )
         .await?;
         let result2 = parse_review(&resp2.raw);
@@ -458,11 +523,11 @@ async fn execute_review<R: Runtime>(
             result = result2;
         }
     }
-    let _ = app.emit("pipeline", PipelineEvent::StepDone {
+    let _ = emit(PipelineEvent::StepDone {
         role,
         summary: humanize_review(role, &result),
     });
-    emit_usage(app, role, &resp);
+    emit_usage(app, role, &resp, run_id);
     Ok(result)
 }
 
@@ -529,9 +594,15 @@ async fn execute_audit_review<R: Runtime>(
     next_tasks: &str,
     req: &PipelineRequest,
     budget: &crate::budget::SharedBudget,
+    run_id: &str,
 ) -> Result<ReviewResult, AppError> {
+    use crate::models::PipelineEnvelope;
     // A11：生成参数（缺省默认；调用点透传给 llm 层）
     let gen = req.generation.clone().unwrap_or_default();
+    // A9：本函数事件包 envelope
+    let emit = |event: PipelineEvent| {
+        let _ = app.emit("pipeline", PipelineEnvelope::new(run_id.to_string(), event));
+    };
     let kb = load_knowledge()?;
 
     let mut system = String::new();
@@ -548,7 +619,7 @@ async fn execute_audit_review<R: Runtime>(
     let user = build_audit_review_user_prompt(current_plan, round_changes, revisions_log, next_tasks, req);
 
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Auditor);
-    let _ = app.emit("pipeline", PipelineEvent::StepStart { role: PipelineRole::Auditor });
+    let _ = emit(PipelineEvent::StepStart { role: PipelineRole::Auditor });
     let messages = vec![
         json!({"role":"system","content":system}),
         json!({"role":"user","content":user}),
@@ -560,6 +631,7 @@ async fn execute_audit_review<R: Runtime>(
         req.thinking,
         budget,
         &gen,
+        &run_id,
     )
     .await?;
     // B4（上限放开后简化）：截断观测记录，JSON 完整时照常解析
@@ -577,6 +649,7 @@ async fn execute_audit_review<R: Runtime>(
             req.thinking,
             budget,
             &gen,
+            &run_id,
         )
         .await?;
         let result2 = parse_review(&resp2.raw);
@@ -584,11 +657,11 @@ async fn execute_audit_review<R: Runtime>(
             result = result2;
         }
     }
-    let _ = app.emit("pipeline", PipelineEvent::StepDone {
+    let _ = emit(PipelineEvent::StepDone {
         role: PipelineRole::Auditor,
         summary: humanize_review(PipelineRole::Auditor, &result),
     });
-    emit_usage(app, PipelineRole::Auditor, &resp);
+    emit_usage(app, PipelineRole::Auditor, &resp, run_id);
     Ok(result)
 }
 
@@ -601,9 +674,14 @@ async fn run_host_initial<R: Runtime>(
     app: &AppHandle<R>,
     req: &PipelineRequest,
     budget: &crate::budget::SharedBudget,
+    run_id: &str,
 ) -> Result<String, AppError> {
+    use crate::models::PipelineEnvelope;
     let gen = req.generation.clone().unwrap_or_default();
-    let _ = app.emit("pipeline", PipelineEvent::HostStart { stage: HostStage::Initial });
+    let emit = |event: PipelineEvent| {
+        let _ = app.emit("pipeline", PipelineEnvelope::new(run_id.to_string(), event));
+    };
+    let _ = emit(PipelineEvent::HostStart { stage: HostStage::Initial });
     let system = prompt_for_mode(&req.mode);
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Host);
     let mut user = format!("用户输入：\n{}\n\n请按上述方法论直接输出完整方案。", req.user_input);
@@ -617,6 +695,7 @@ async fn run_host_initial<R: Runtime>(
         req.thinking,
         budget,
         &gen,
+        &run_id,
     )
     .await?;
     // B4：流式截断直接报错——半截方案绝不允许进入讨论轮（用户可见明确错误，可简化输入后重试）
@@ -624,8 +703,8 @@ async fn run_host_initial<R: Runtime>(
         tracing::error!("方案初稿输出被截断");
         return Err("方案初稿输出被截断（达到输出上限），请简化输入后重试".into());
     }
-    let _ = app.emit("pipeline", PipelineEvent::HostDone { stage: HostStage::Initial });
-    emit_usage(app, PipelineRole::Host, &resp);
+    let _ = emit(PipelineEvent::HostDone { stage: HostStage::Initial });
+    emit_usage(app, PipelineRole::Host, &resp, run_id);
     Ok(resp.raw)
 }
 
@@ -660,12 +739,17 @@ async fn run_host_summarize<R: Runtime>(
     round_changes: &[(PipelineRole, Vec<ReviewChange>, String)],
     req: &PipelineRequest,
     budget: &crate::budget::SharedBudget,
+    run_id: &str,
 ) -> Result<(String, String), AppError> {
+    use crate::models::PipelineEnvelope;
     let gen = req.generation.clone().unwrap_or_default();
+    let emit = |event: PipelineEvent| {
+        let _ = app.emit("pipeline", PipelineEnvelope::new(run_id.to_string(), event));
+    };
     let host = roles::host();
     let user = build_summarize_user_prompt(current_plan, round_changes);
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Host);
-    let _ = app.emit("pipeline", PipelineEvent::HostStart { stage: HostStage::Summarize });
+    let _ = emit(PipelineEvent::HostStart { stage: HostStage::Summarize });
     let messages = vec![
         json!({"role":"system","content":host.system_prompt}),
         json!({"role":"user","content":user}),
@@ -677,14 +761,15 @@ async fn run_host_summarize<R: Runtime>(
         req.thinking,
         budget,
         &gen,
+        &run_id,
     )
     .await?;
     // B4（上限放开后简化）：截断观测记录，split_tasks 对无标记文本全文当方案，行为兼容
     if llm::is_truncated(&resp.finish_reason) {
         tracing::warn!("主持人汇总输出触及 max_tokens 上限，按现状继续");
     }
-    let _ = app.emit("pipeline", PipelineEvent::HostDone { stage: HostStage::Summarize });
-    emit_usage(app, PipelineRole::Host, &resp);
+    let _ = emit(PipelineEvent::HostDone { stage: HostStage::Summarize });
+    emit_usage(app, PipelineRole::Host, &resp, run_id);
     Ok(split_tasks(&resp.raw))
 }
 
@@ -700,9 +785,14 @@ async fn run_audit_format<R: Runtime>(
     issues: Option<&[String]>,
     req: &PipelineRequest,
     budget: &crate::budget::SharedBudget,
+    run_id: &str,
 ) -> Result<(String, bool), AppError> {
+    use crate::models::PipelineEnvelope;
     let gen = req.generation.clone().unwrap_or_default();
-    let _ = app.emit("pipeline", PipelineEvent::AuditStart);
+    let emit = |event: PipelineEvent| {
+        let _ = app.emit("pipeline", PipelineEnvelope::new(run_id.to_string(), event));
+    };
+    let _ = emit(PipelineEvent::AuditStart);
     let auditor = roles::auditor();
     let kb = load_knowledge()?;
     // Mode C 切换专用格式规范（通用规范诱导新增歌词段，与逐行对齐约束冲突）
@@ -745,22 +835,32 @@ async fn run_audit_format<R: Runtime>(
         req.thinking,
         budget,
         &gen,
+        &run_id,
     )
     .await?;
-    emit_usage(app, PipelineRole::Auditor, &resp);
+    emit_usage(app, PipelineRole::Auditor, &resp, run_id);
     Ok((resp.raw, llm::is_truncated(&resp.finish_reason)))
 }
 
 /// F4：单次调用结束后发射用量事件（usage为None时不发射——网关未返回不阻塞流程）
-fn emit_usage<R: tauri::Runtime>(app: &tauri::AppHandle<R>, role: PipelineRole, resp: &crate::models::LLMResponse) {
+fn emit_usage<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    role: PipelineRole,
+    resp: &crate::models::LLMResponse,
+    run_id: &str,
+) {
+    use crate::models::PipelineEnvelope;
     if let Some(u) = &resp.usage {
         let _ = app.emit(
             "pipeline",
-            PipelineEvent::StepUsage {
-                role,
-                prompt_tokens: u.prompt_tokens,
-                completion_tokens: u.completion_tokens,
-            },
+            PipelineEnvelope::new(
+                run_id.to_string(),
+                PipelineEvent::StepUsage {
+                    role,
+                    prompt_tokens: u.prompt_tokens,
+                    completion_tokens: u.completion_tokens,
+                },
+            ),
         );
     }
 }
@@ -876,8 +976,10 @@ where
 /// unwind，Cargo.toml 禁设 panic="abort"，改配置前先看这里）+ 整体超时（超时 = abort
 /// 强杀在途任务，非放弃等待）。真实错误统一发 Failed 事件；用户取消发 Cancelled 事件（B3）。
 pub async fn run_pipeline<R: Runtime>(app: AppHandle<R>, request: PipelineRequest) -> Result<String, AppError> {
-    cancel::reset(); // 新 run 清除上一轮残留的取消标志
-    interject::reset(); // F10：新 run 清空插话槽（防上一轮残留污染）
+    // A9：入口按请求 run_id 清理（与 with_timeout 内解析一致；空请求走全局兼容位）
+    let rid = request.run_id.clone().unwrap_or_default();
+    cancel::reset(&rid);
+    interject::reset(&rid);
     run_pipeline_with_timeout(app, request, PIPELINE_TIMEOUT).await
 }
 
@@ -889,17 +991,30 @@ pub(crate) async fn run_pipeline_with_timeout<R: Runtime>(
 ) -> Result<String, AppError> {
     use crate::budget::Budget;
     use crate::errors::ErrorKind;
+    use crate::models::PipelineEnvelope;
     let app2 = app.clone();
     // A1：共享预算 = 超时时长——超时守卫（B1）是最后防线，预算是事前约束
     let budget = std::sync::Arc::new(Budget::with_timeout(timeout));
-    match spawn_guarded(run_pipeline_inner(app2, request, budget), timeout).await {
+    // A9：run_id 归属（请求带则尊重，缺省后端生成）；全部事件包 envelope 发射
+    let run_id = request
+        .run_id
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| format!("run-{}", std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)));
+    let emit = |app: &AppHandle<R>, event: PipelineEvent| {
+        let _ = app.emit("pipeline", PipelineEnvelope::new(run_id.clone(), event));
+    };
+    match spawn_guarded(run_pipeline_inner(app2, request, budget, run_id.clone()), timeout).await {
         GuardOutcome::Completed(inner) => {
             if let Err(e) = &inner {
                 // B3：取消走 Cancelled 事件（前端不标红），真实错误仍走 Failed
                 if e.kind == ErrorKind::Cancelled {
-                    let _ = app.emit("pipeline", PipelineEvent::Cancelled);
+                    emit(&app, PipelineEvent::Cancelled);
                 } else {
-                    let _ = app.emit("pipeline", PipelineEvent::Failed { error: e.message.clone() });
+                    emit(&app, PipelineEvent::Failed { error: e.message.clone() });
                 }
             }
             inner
@@ -909,7 +1024,7 @@ pub(crate) async fn run_pipeline_with_timeout<R: Runtime>(
             let msg = format!("流水线内部异常: {}", join_err);
             tracing::error!(message = %msg, "流水线失败");
             let err = AppError::new(ErrorKind::Internal, msg.clone());
-            let _ = app.emit("pipeline", PipelineEvent::Failed { error: msg });
+            emit(&app, PipelineEvent::Failed { error: msg });
             Err(err)
         }
         GuardOutcome::TimedOut => {
@@ -917,7 +1032,7 @@ pub(crate) async fn run_pipeline_with_timeout<R: Runtime>(
             let msg = format!("流水线超时（{} 分钟）未完成，已中止", mins);
             tracing::error!(message = %msg, "流水线失败");
             let err = AppError::new(ErrorKind::Timeout, msg.clone());
-            let _ = app.emit("pipeline", PipelineEvent::Failed { error: msg });
+            emit(&app, PipelineEvent::Failed { error: msg });
             Err(err)
         }
     }
@@ -927,15 +1042,22 @@ pub(crate) async fn run_pipeline_with_timeout<R: Runtime>(
 /// A1：budget 为共享预算（Arc），调用链逐层透传
 /// F1：增量模式（request.refine_targets.is_some()）时阶段 0 跳过——以上一版方案为起步，
 /// 讨论轮只跑 targets 角色（Auditor 恒在：最终格式端口 + 讨论轮审查）。
+/// A9：run_id 透传——inner 内全部事件包 envelope 发射；取消/插话按 run_id 隔离。
 async fn run_pipeline_inner<R: Runtime>(
     app: AppHandle<R>,
     request: PipelineRequest,
     budget: crate::budget::SharedBudget,
+    run_id: String,
 ) -> Result<String, AppError> {
+    use crate::models::PipelineEnvelope;
+    // A9：inner 专属发射器（全部事件带 run_id）
+    let emit = |event: PipelineEvent| {
+        let _ = app.emit("pipeline", PipelineEnvelope::new(run_id.clone(), event));
+    };
     let mode = &request.mode;
-    // B3：取消检查点——各阶段入口统一拦截
+    // B3/A9：取消检查点——按 run_id 隔离（多任务并行互不干扰）
     let checkpoint = || -> Result<(), AppError> {
-        if cancel::is_cancelled() {
+        if cancel::is_cancelled(&run_id) {
             Err(AppError::cancelled())
         } else {
             Ok(())
@@ -962,10 +1084,10 @@ async fn run_pipeline_inner<R: Runtime>(
         // 增量起步：从 user_input 的【上一版方案】段提取；缺失则回落全量阶段 0（不静默用空方案）
         match extract_previous_plan(&request.user_input) {
             Some(plan) => plan,
-            None => run_host_initial(&app, &request, &budget).await?,
+            None => run_host_initial(&app, &request, &budget, &run_id).await?,
         }
     } else {
-        run_host_initial(&app, &request, &budget).await?
+        run_host_initial(&app, &request, &budget, &run_id).await?
     };
     // 主持人上轮任务分发（第一轮无任务）
     let mut next_tasks = String::new();
@@ -986,7 +1108,7 @@ async fn run_pipeline_inner<R: Runtime>(
         let prev_revisions = revisions_log.clone();
         checkpoint()?;
         // F10：轮边界消费用户插话（非阻塞——在途调用不受影响，意见进本轮输入）
-        for note in interject::drain() {
+        for note in interject::drain(&run_id) {
             let preview: String = note.chars().take(60).collect();
             revisions_log.push(("用户插话".to_string(), note.clone()));
             if next_tasks.is_empty() {
@@ -994,18 +1116,15 @@ async fn run_pipeline_inner<R: Runtime>(
             } else {
                 next_tasks.push_str(&format!("\n{}", note));
             }
-            let _ = app.emit(
-                "pipeline",
-                PipelineEvent::StepDone {
-                    role: PipelineRole::Host,
-                    summary: format!("收到用户插话，已纳入本轮讨论：{}", preview),
-                },
-            );
+            let _ = emit(PipelineEvent::StepDone {
+                role: PipelineRole::Host,
+                summary: format!("收到用户插话，已纳入本轮讨论：{}", preview),
+            });
         }
         // ① 动态角色并发审改（A2：同轮角色互相无依赖，join_all 并发；顺序收敛保证 revisions_log 确定性）
         let review_futs: Vec<_> = roles
             .iter()
-            .map(|role| execute_review(&app, *role, &current_plan, &revisions_log, &next_tasks, &request, &budget))
+            .map(|role| execute_review(&app, *role, &current_plan, &revisions_log, &next_tasks, &request, &budget, &run_id))
             .collect();
         let review_results = futures_util::future::join_all(review_futs).await;
         for (role, result) in roles.iter().zip(review_results) {
@@ -1023,7 +1142,7 @@ async fn run_pipeline_inner<R: Runtime>(
         // ② 校验员审查（当前方案 + 本轮修订 + 上轮修订 + 任务分发核验 → 观点返回主持人）
         checkpoint()?;
         let auditor_result = execute_audit_review(
-            &app, &current_plan, &round_changes, &prev_revisions, &next_tasks, &request, &budget,
+            &app, &current_plan, &round_changes, &prev_revisions, &next_tasks, &request, &budget, &run_id,
         )
         .await?;
         if auditor_result.degraded {
@@ -1047,10 +1166,10 @@ async fn run_pipeline_inner<R: Runtime>(
             break; // 动态角色 + 校验员全部无异议 → 收敛
         }
         // ③ 主持人汇总修订 + 校验员观点 → 新版完整方案 + 下轮任务分发
-        let (new_plan, tasks) = run_host_summarize(&app, &current_plan, &round_changes, &request, &budget).await?;
+        let (new_plan, tasks) = run_host_summarize(&app, &current_plan, &round_changes, &request, &budget, &run_id).await?;
         current_plan = new_plan;
         next_tasks = tasks;
-        let _ = app.emit("pipeline", PipelineEvent::DiscussionRound {
+        let _ = emit(PipelineEvent::DiscussionRound {
             round,
             roles: round_changes.iter().map(|(r, _, _)| *r).collect(),
             reason: round_changes
@@ -1065,7 +1184,7 @@ async fn run_pipeline_inner<R: Runtime>(
     }
 
     // ---- 阶段 2：校验员按标准格式输出最终提示词包（硬校验失败打回重格式化 ≤2 次）----
-    let (mut final_text, mut truncated) = run_audit_format(&app, &current_plan, None, &request, &budget).await?;
+    let (mut final_text, mut truncated) = run_audit_format(&app, &current_plan, None, &request, &budget, &run_id).await?;
     let mut issues = Vec::new();
     for _ in 0..2 {
         issues = collect_hard_issues(mode, &final_text, request.original_lyrics_text());
@@ -1076,11 +1195,11 @@ async fn run_pipeline_inner<R: Runtime>(
         if issues.is_empty() {
             break;
         }
-        let _ = app.emit("pipeline", PipelineEvent::Retry {
+        let _ = emit(PipelineEvent::Retry {
             role: PipelineRole::Auditor,
             reason: issues.join("；"),
         });
-        let (text, t) = run_audit_format(&app, &current_plan, Some(&issues), &request, &budget).await?;
+        let (text, t) = run_audit_format(&app, &current_plan, Some(&issues), &request, &budget, &run_id).await?;
         final_text = text;
         truncated = t;
     }
@@ -1093,7 +1212,7 @@ async fn run_pipeline_inner<R: Runtime>(
             issues.insert(0, TRUNCATION_ISSUE.to_string());
         }
     }
-    let _ = app.emit("pipeline", PipelineEvent::AuditResult {
+    let _ = emit(PipelineEvent::AuditResult {
         pass: issues.is_empty(),
         findings: issues.clone(),
     });
@@ -1149,16 +1268,16 @@ pub async fn pipeline_refine(
     run_pipeline_refine(app, request, &feedback).await
 }
 
-/// B3：请求取消当前生成（前端"停止"按钮调）——检查点在下次机会中断
+/// B3/A9：请求取消指定 run（前端"停止"按钮调，带 run_id）——检查点在下次机会中断
 #[tauri::command]
-pub async fn cancel_pipeline() {
-    cancel::request_cancel();
+pub async fn cancel_pipeline(run_id: Option<String>) {
+    cancel::request_cancel(&run_id.unwrap_or_default());
 }
 
 /// F10：用户中途插话（前端"插入意见"调）——非阻塞存入槽，轮边界消费。
 /// F13 复用：超长意见（>2000）直接 Validation 拦截，与 feedback 同限额。
 #[tauri::command]
-pub async fn interject_feedback(note: String) -> Result<(), AppError> {
+pub async fn interject_feedback(run_id: Option<String>, note: String) -> Result<(), AppError> {
     crate::models::validate_request(
         &PipelineRequest {
             mode: Mode::ModeB,
@@ -1172,10 +1291,11 @@ pub async fn interject_feedback(note: String) -> Result<(), AppError> {
             thinking: false,
             refine_targets: None,
             generation: None,
+            run_id: None,
         },
         Some(&note),
     )?;
-    interject::push(note);
+    interject::push(&run_id.unwrap_or_default(), note);
     Ok(())
 }
 
@@ -1734,7 +1854,40 @@ mod tests {
             thinking: false,
             refine_targets: None,
             generation: None,
+            run_id: None,
         }
+    }
+
+    /// A8：meta 与真源一致——modes 阵容 == steps_for_mode；roles 元数据 == role_for
+    #[test]
+    fn pipeline_meta_matches_sources() {
+        use crate::models::Mode;
+        // modes：四模式阵容与 steps_for_mode 逐位一致
+        let meta_modes: std::collections::HashMap<String, Vec<PipelineRole>> = [
+            ("mode_a", Mode::ModeA),
+            ("mode_b", Mode::ModeB),
+            ("mode_c", Mode::ModeC),
+            ("mode_d", Mode::ModeD),
+        ]
+        .iter()
+        .map(|(k, m)| {
+            (k.to_string(), steps_for_mode(m).iter().map(|s| s.role).collect())
+        })
+        .collect();
+        assert_eq!(meta_modes["mode_a"], vec![PipelineRole::Emotion, PipelineRole::Producer]);
+        assert_eq!(
+            meta_modes["mode_d"],
+            vec![PipelineRole::Emotion, PipelineRole::Lyricist, PipelineRole::StyleAnalyst, PipelineRole::Producer]
+        );
+        // roles：name/emoji/knowledge 与 role_for 一致（抽查三角色）
+        let emo = roles::role_for(PipelineRole::Emotion);
+        assert_eq!(emo.name, "情感分析师");
+        assert_eq!(emo.emoji, "🎭");
+        assert!(emo.knowledge_tables.iter().any(|(t, _, _)| *t == "emotions"));
+        let host = roles::role_for(PipelineRole::Host);
+        assert!(host.knowledge_tables.is_empty());
+        let auditor = roles::role_for(PipelineRole::Auditor);
+        assert!(auditor.knowledge_tables.iter().any(|(t, _, _)| *t == "suno_rules"));
     }
 
     /// A2：同轮角色并发语义——join_all 按输入顺序返回（revisions_log 确定性），
