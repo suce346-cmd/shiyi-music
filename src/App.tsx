@@ -248,6 +248,19 @@ export default function App() {
   /** 角色级测试状态（idle/testing/ok/fail） */
   const [roleTestStates, setRoleTestStates] = useState<Record<string, "idle" | "testing" | "ok" | "fail">>({});
 
+  /** A6：日志目录按钮文案（成功显示路径 4s，失败显示错误） */
+  const [logDirMsg, setLogDirMsg] = useState("");
+  const handleOpenLogDir = useCallback(async () => {
+    try {
+      const dir = await invoke<string>("open_log_dir", {});
+      setLogDirMsg(`已打开：${dir}`);
+    } catch (e) {
+      setLogDirMsg(`打开失败：${errText(e)}`);
+    } finally {
+      setTimeout(() => setLogDirMsg(""), 4000);
+    }
+  }, []);
+
   // 配置变更后旧测试徽标失效（✓/✗ 与当前配置不符）——settings 任何字段变化都重置
   useEffect(() => {
     setRoleTestStates({});
@@ -525,6 +538,13 @@ export default function App() {
             {testResult === "ok" && "连接成功"}
             {testResult === "fail" && "连接失败，请检查"}
             {testResult === null && (testingApi ? "测试中..." : "测试连接")}
+          </button>
+          {/* A6：打开日志目录（诊断用，失败提示路径） */}
+          <button onClick={handleOpenLogDir}
+            className="w-full py-1.5 rounded-lg text-[11px] text-text-muted hover:text-text-2
+                       bg-surface-2/60 hover:bg-surface-3/80 border border-border/40
+                       transition-all duration-150 active:scale-[0.98]">
+            {logDirMsg || "打开日志目录"}
           </button>
 
           {/* 角色级 API 覆盖（可选）：不配置 = 所有角色共用全局；配置了生效单独 */}
