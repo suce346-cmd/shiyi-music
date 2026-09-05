@@ -72,6 +72,8 @@ export default function App() {
   const { settings, updateSettings, showSettings, setShowSettings, secretsReady } = useSettingsWithSecrets();
   const pipeline = usePipeline();
   const [detailExpert, setDetailExpert] = useState<ExpertCard | null>(null);
+  /** F14：Cmd/Ctrl+K 聚焦目标输入框 */
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
   /** llm-chunk 单例监听（H4：任何时刻最多一个，注册前先清旧的） */
   const llmUnlistenRef = useRef<UnlistenFn | null>(null);
   /** run 递增 token：切模式/新 run 后，过期 run 的结果一律丢弃（H4） */
@@ -105,6 +107,25 @@ export default function App() {
     };
   }, []);
 
+  // F14：全局快捷键（输入框内 Enter 由 InputPanel 处理；这里处理 K/,(设置面板开关)）
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod) return;
+      // 聚焦输入框（输入框内已聚焦时不重复处理）
+      if ((e.key === "k" || e.key === "K") && document.activeElement?.tagName !== "TEXTAREA") {
+        e.preventDefault();
+        inputRef.current?.focus();
+      } else if (e.key === ",") {
+        e.preventDefault();
+        setShowSettings((v) => !v);
+        setTestResult(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [setShowSettings]);
+
   /** 更新某角色的 API 覆盖（空值/全空格 = 清空该字段继承全局；全空 = 移除该角色条目） */
   const updateRoleOverride = useCallback((role: PipelineRoleKey, field: "model" | "api_key" | "base_url", value: string) => {
     const trimmed = value.trim();
@@ -120,6 +141,52 @@ export default function App() {
     updateSettings({ roleOverrides });
     setTestResult(null);
   }, [settings, updateSettings]);
+
+  /** F14：设置导入导出结果提示 */
+  const [settingsMsg, setSettingsMsg] = useState("");
+  const flashSettingsMsg = useCallback((msg: string) => {
+    setSettingsMsg(msg);
+    setTimeout(() => setSettingsMsg(""), 4000);
+  }, []);
+
+  /** F14：导出配置（排除密钥，经 dialog 选路径写文件） */
+  const handleExportSettings = useCallback(async () => {
+    try {
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      const { writeTextFile } = await import("@tauri-apps/plugin-fs");
+      const { scrubSettingsForExport } = await import("./utils/hotkeys");
+      const filePath = await save({
+        defaultPath: "shiyi-settings.json",
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!filePath) return; // 用户取消
+      await writeTextFile(filePath, JSON.stringify(scrubSettingsForExport(settings), null, 2));
+      flashSettingsMsg(`已导出：${filePath}`);
+    } catch (e) {
+      flashSettingsMsg(`导出失败：${errText(e)}`);
+    }
+  }, [settings, flashSettingsMsg]);
+
+  /** F14：导入配置（dialog 选文件 → sanitizeStored 清洗 → 全量替换；密钥需重新输入） */
+  const handleImportSettings = useCallback(async () => {
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const { readTextFile } = await import("@tauri-apps/plugin-fs");
+      const { sanitizeStored } = await import("./hooks/useSettings");
+      const filePath = await open({
+        multiple: false,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!filePath) return; // 用户取消
+      const text = await readTextFile(filePath as string);
+      const cleaned = sanitizeStored(JSON.parse(text));
+      await updateSettings({ ...cleaned });
+      setTestResult(null);
+      flashSettingsMsg("已导入（密钥需重新输入）");
+    } catch (e) {
+      flashSettingsMsg(`导入失败：${errText(e)}`);
+    }
+  }, [updateSettings, flashSettingsMsg]);
 
   // 模式切换时重置圆桌状态（围坐角色跟随当前模式阵容）
   useEffect(() => {
@@ -516,6 +583,26 @@ export default function App() {
               不配置 = 所有角色共用全局 API；给某角色单独配置后，该角色用自己的，留空的字段仍继承全局
             </p>
           </div>
+
+          {/* F14：配置导入导出（密钥不落地：导出排除 apiKey/api_key，需重新输入） */}
+          <div className="border-t border-border/40 pt-3">
+            <div className="flex gap-2">
+              <button onClick={handleExportSettings}
+                className="flex-1 py-1.5 rounded-lg text-[11px] text-text-2 bg-surface-2 hover:bg-surface-3 border border-border/50 transition-all duration-150 active:scale-[0.98]">
+                导出配置
+              </button>
+              <button onClick={handleImportSettings}
+                className="flex-1 py-1.5 rounded-lg text-[11px] text-text-2 bg-surface-2 hover:bg-surface-3 border border-border/50 transition-all duration-150 active:scale-[0.98]">
+                导入配置
+              </button>
+            </div>
+            {settingsMsg && (
+              <p className="text-[10px] text-text-muted mt-1.5 leading-relaxed">{settingsMsg}</p>
+            )}
+            <p className="text-[9px] text-text-muted mt-1 leading-relaxed">
+              导出不含密钥（需重新输入）；导入经格式清洗后生效
+            </p>
+          </div>
         </div>
       )}
 
@@ -620,7 +707,7 @@ export default function App() {
                 </div>
               )}
               <InputPanel key={mode} mode={mode} disabled={status === "loading" || status === "streaming"}
-                settings={settings} onGenerate={handleGenerate} />
+                settings={settings} onGenerate={handleGenerate} inputRef={inputRef} />
             </div>
           </div>
         </div>
