@@ -84,6 +84,9 @@ struct ReviewResult {
     reason: String,
     /// agree=true 时的已核查关键检查项清单（无异议最低门槛：必须列出核查依据，防偷懒 agree）
     checked: Vec<String>,
+    /// B10：输出不可信（JSON 解析失败 / agree 字段缺失）——意见作废，仅作警示记录。
+    /// degraded 的结果不算 agree 也不算异议：不进 round_changes、不阻断收敛，但必须可见。
+    degraded: bool,
 }
 
 /// target 合法枚举（P8：非法 target 归一为 other，主持人汇总时按杂项处理）
@@ -94,67 +97,84 @@ fn normalize_target(t: &str) -> String {
     }
 }
 
-/// 解析审改 JSON（解析失败按"无异议"处理，避免流程死循环）。
-/// P8：content 为空的修订丢弃；非法 target 归一为 other。
+/// 解析审改 JSON（B10：不可信输出显式降级，不再假同意）。
+/// - JSON 解析失败 / agree 字段缺失 → degraded=true（意见作废，仅作警示记录，见 humanize_review）
+/// - P8：content 为空的修订丢弃；非法 target 归一为 other。
 fn parse_review(raw: &str) -> ReviewResult {
     let cleaned = strip_json_fence(raw);
-    if let Ok(v) = serde_json::from_str::<Value>(&cleaned) {
-        let agree = v["agree"].as_bool().unwrap_or(true);
-        let mut changes = Vec::new();
-        if let Some(arr) = v["changes"].as_array() {
-            for c in arr {
-                let content = c["content"].as_str().unwrap_or("").trim().to_string();
-                if content.is_empty() {
-                    continue; // 空修订无意义，丢弃
-                }
-                changes.push(ReviewChange {
-                    target: normalize_target(c["target"].as_str().unwrap_or("other")),
-                    content,
-                    reason: c["reason"].as_str().unwrap_or("").to_string(),
-                });
+    let Ok(v) = serde_json::from_str::<Value>(&cleaned) else {
+        return ReviewResult {
+            agree: false,
+            changes: vec![],
+            reason: "输出无法解析为 JSON，本轮意见未采纳".to_string(),
+            checked: vec![],
+            degraded: true,
+        };
+    };
+    let Some(agree) = v["agree"].as_bool() else {
+        return ReviewResult {
+            agree: false,
+            changes: vec![],
+            reason: "输出缺少 agree 字段（可能被截断或格式不符），本轮意见未采纳".to_string(),
+            checked: vec![],
+            degraded: true,
+        };
+    };
+    let mut changes = Vec::new();
+    if let Some(arr) = v["changes"].as_array() {
+        for c in arr {
+            let content = c["content"].as_str().unwrap_or("").trim().to_string();
+            if content.is_empty() {
+                continue; // 空修订无意义，丢弃
             }
+            changes.push(ReviewChange {
+                target: normalize_target(c["target"].as_str().unwrap_or("other")),
+                content,
+                reason: c["reason"].as_str().unwrap_or("").to_string(),
+            });
         }
-        let reason = v["reason"].as_str().unwrap_or("").to_string();
-        let checked = v["checked"]
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|c| c.as_str().map(|s| s.trim().to_string()))
-                    .filter(|s| !s.is_empty())
-                    .collect()
-            })
-            .unwrap_or_default();
-        ReviewResult { agree, changes, reason, checked }
-    } else {
-        ReviewResult { agree: true, changes: vec![], reason: String::new(), checked: vec![] }
     }
+    let reason = v["reason"].as_str().unwrap_or("").to_string();
+    let checked = v["checked"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|c| c.as_str().map(|s| s.trim().to_string()))
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    ReviewResult { agree, changes, reason, checked, degraded: false }
 }
 
 /// 审改结果 → 前端可读文本
 fn humanize_review(role: PipelineRole, r: &ReviewResult) -> String {
-    if r.agree {
-        // 无异议最低门槛：展示已核查清单（防"偷懒 agree"，让无异议可审计）
-        if r.checked.is_empty() {
-            format!("{}：无异议 ✅", role.name())
-        } else {
-            format!("{}：无异议 ✅（已核查：{}）", role.name(), r.checked.join(" / "))
-        }
-    } else {
-        let mut out = format!("{}：提出 {} 处修订", role.name(), r.changes.len());
-        for c in &r.changes {
-            let brief = if c.content.chars().count() > 40 {
-                c.content.chars().take(40).collect::<String>() + "…"
-            } else {
-                c.content.clone()
-            };
-            let reason = if c.reason.is_empty() { String::new() } else { format!("（{}）", c.reason) };
-            out.push_str(&format!("\n· {} → {}{}", c.target, brief, reason));
-        }
-        if !r.reason.is_empty() {
-            out.push_str(&format!("\n总体意见：{}", r.reason));
-        }
-        out
+    // B10：不可信输出显式示警——绝不伪装成"无异议 ✅"
+    if r.degraded {
+        return format!("⚠️ {}：输出无法采信（{}）", role.name(), r.reason);
     }
+    if r.agree {
+        // 空手 agree 可见化：prompt 要求无异议必须附 checked 清单，未附即警示
+        if r.checked.is_empty() {
+            return format!("{}：无异议 ⚠️（未附核查清单）", role.name());
+        }
+        // 无异议最低门槛：展示已核查清单（防"偷懒 agree"，让无异议可审计）
+        return format!("{}：无异议 ✅（已核查：{}）", role.name(), r.checked.join(" / "));
+    }
+    let mut out = format!("{}：提出 {} 处修订", role.name(), r.changes.len());
+    for c in &r.changes {
+        let brief = if c.content.chars().count() > 40 {
+            c.content.chars().take(40).collect::<String>() + "…"
+        } else {
+            c.content.clone()
+        };
+        let reason = if c.reason.is_empty() { String::new() } else { format!("（{}）", c.reason) };
+        out.push_str(&format!("\n· {} → {}{}", c.target, brief, reason));
+    }
+    if !r.reason.is_empty() {
+        out.push_str(&format!("\n总体意见：{}", r.reason));
+    }
+    out
 }
 
 /// 取表某列全部值（按需检索候选词用）
@@ -342,28 +362,16 @@ async fn execute_review<R: Runtime>(
     Ok(result)
 }
 
-/// 校验员讨论轮审查：审查当前方案 + 本轮角色修订 + 主持人任务分发 → 提出观点返回主持人（复用 ReviewResult 契约）
-async fn execute_audit_review<R: Runtime>(
-    app: &AppHandle<R>,
+/// B10：校验员讨论轮 user prompt 构建（纯函数，可测）。
+/// round_changes 三元组 =（角色, 修订片段, 角色总体意见）——意见必达：即使无具体修订，
+/// 角色总体意见也要进 prompt，供校验员核验冲突与漏项。
+fn build_audit_review_user_prompt(
     current_plan: &str,
-    round_changes: &[(PipelineRole, Vec<ReviewChange>)],
+    round_changes: &[(PipelineRole, Vec<ReviewChange>, String)],
     revisions_log: &[(String, String)],
     next_tasks: &str,
     req: &PipelineRequest,
-) -> Result<ReviewResult, String> {
-    let kb = load_knowledge()?;
-
-    let mut system = String::new();
-    system.push_str("【角色】校验员 🔍\n");
-    system.push_str(roles::auditor_review_prompt());
-    system.push('\n');
-    if let Ok(rendered) = kb.render_table("suno_rules", None, Some(INJECT_MAX_FULL_ROWS)) {
-        system.push_str(&rendered);
-        system.push('\n');
-    }
-    system.push_str("\n输出 JSON（严格符合格式，不输出其他内容）：\n");
-    system.push_str(roles::REVIEW_SCHEMA_AUDITOR);
-
+) -> String {
     let mut user = format!("【主持人当前方案】\n{}\n\n", current_plan);
     // Mode C：原歌词全链路传递——校验员核对逐行对齐（P2 硬校验前置）
     if let Some(original) = &req.extra {
@@ -374,8 +382,11 @@ async fn execute_audit_review<R: Runtime>(
     }
     if !round_changes.is_empty() {
         user.push_str("【本轮各角色修订片段（审查合理性/冲突/漏项）】\n");
-        for (role, changes) in round_changes {
+        for (role, changes, role_reason) in round_changes {
             user.push_str(&format!("## {} 的修订：\n", role.name()));
+            if !role_reason.is_empty() {
+                user.push_str(&format!("（总体意见：{}）\n", role_reason));
+            }
             for c in changes {
                 user.push_str(&format!(
                     "- target: {} | content: {} | reason: {}\n",
@@ -399,6 +410,32 @@ async fn execute_audit_review<R: Runtime>(
         ));
     }
     user.push_str("请审查并输出观点：同意则 {\"agree\":true}；有问题则 {\"agree\":false, \"changes\":[...]}。");
+    user
+}
+
+/// 校验员讨论轮审查：审查当前方案 + 本轮角色修订 + 主持人任务分发 → 提出观点返回主持人（复用 ReviewResult 契约）
+async fn execute_audit_review<R: Runtime>(
+    app: &AppHandle<R>,
+    current_plan: &str,
+    round_changes: &[(PipelineRole, Vec<ReviewChange>, String)],
+    revisions_log: &[(String, String)],
+    next_tasks: &str,
+    req: &PipelineRequest,
+) -> Result<ReviewResult, String> {
+    let kb = load_knowledge()?;
+
+    let mut system = String::new();
+    system.push_str("【角色】校验员 🔍\n");
+    system.push_str(roles::auditor_review_prompt());
+    system.push('\n');
+    if let Ok(rendered) = kb.render_table("suno_rules", None, Some(INJECT_MAX_FULL_ROWS)) {
+        system.push_str(&rendered);
+        system.push('\n');
+    }
+    system.push_str("\n输出 JSON（严格符合格式，不输出其他内容）：\n");
+    system.push_str(roles::REVIEW_SCHEMA_AUDITOR);
+
+    let user = build_audit_review_user_prompt(current_plan, round_changes, revisions_log, next_tasks, req);
 
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Auditor);
     let _ = app.emit("pipeline", PipelineEvent::StepStart { role: PipelineRole::Auditor });
@@ -441,24 +478,38 @@ async fn run_host_initial<R: Runtime>(app: &AppHandle<R>, req: &PipelineRequest)
     Ok(resp.raw)
 }
 
-/// 阶段 1：主持人收集各角色修订 + 校验员观点，汇总成新版完整方案 + 下轮任务分发。
-/// 返回 (完整方案, 下轮任务段)；任务段为空 = 已收敛/无需下轮。
-async fn run_host_summarize<R: Runtime>(
-    app: &AppHandle<R>,
+/// B10：主持人汇总 user prompt 构建（纯函数，可测）。
+/// round_changes 三元组 =（角色, 修订片段, 角色总体意见）——意见必达：即使无具体修订，
+/// "提出总体异议但没给改法"也要让主持人知道并自行权衡。
+fn build_summarize_user_prompt(
     current_plan: &str,
-    round_changes: &[(PipelineRole, Vec<ReviewChange>)],
-    req: &PipelineRequest,
-) -> Result<(String, String), String> {
-    let host = roles::host();
+    round_changes: &[(PipelineRole, Vec<ReviewChange>, String)],
+) -> String {
     let mut user = format!("【当前方案】\n{}\n\n【本轮各角色修订片段与校验员观点】\n", current_plan);
-    for (role, changes) in round_changes {
+    for (role, changes, role_reason) in round_changes {
         user.push_str(&format!("## {} 的修订：\n", role.name()));
+        if !role_reason.is_empty() {
+            user.push_str(&format!("（总体意见：{}）\n", role_reason));
+        }
         for c in changes {
             user.push_str(&format!("- target: {} | content: {} | reason: {}\n", c.target, c.content, c.reason));
         }
     }
     user.push_str("\n请把修订整合进当前方案，输出新版完整方案（只含生产方案：Style Prompt + 歌词（含说明行）+ 参数，不要重复输出分析数据包）。");
     user.push_str("如需下一轮讨论，在方案末尾单独一行【任务分发】后点名各角色下一轮要解决的具体问题；若已无必要则只输出方案，不输出该段。");
+    user
+}
+
+/// 阶段 1：主持人收集各角色修订 + 校验员观点，汇总成新版完整方案 + 下轮任务分发。
+/// 返回 (完整方案, 下轮任务段)；任务段为空 = 已收敛/无需下轮。
+async fn run_host_summarize<R: Runtime>(
+    app: &AppHandle<R>,
+    current_plan: &str,
+    round_changes: &[(PipelineRole, Vec<ReviewChange>, String)],
+    req: &PipelineRequest,
+) -> Result<(String, String), String> {
+    let host = roles::host();
+    let user = build_summarize_user_prompt(current_plan, round_changes);
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Host);
     let _ = app.emit("pipeline", PipelineEvent::HostStart { stage: HostStage::Summarize });
     let raw = llm::call_llm_silent(
@@ -696,16 +747,20 @@ async fn run_pipeline_inner<R: Runtime>(app: AppHandle<R>, request: PipelineRequ
     let mut revisions_log: Vec<(String, String)> = Vec::new(); // (角色名, 修订摘要)
     for round in 1..=MAX_DISCUSSION_ROUNDS {
         let mut all_agree = true;
-        let mut round_changes: Vec<(PipelineRole, Vec<ReviewChange>)> = Vec::new();
+        // B10：三元组 =（角色, 修订片段, 角色总体意见）——异议必达，无具体修订的意见也要汇总
+        let mut round_changes: Vec<(PipelineRole, Vec<ReviewChange>, String)> = Vec::new();
         // 本轮开始前的修订快照（上一轮及更早；本轮角色修订经 round_changes 传递，避免 auditor 双写）
         let prev_revisions = revisions_log.clone();
         // ① 动态角色逐个审改
         for role in &roles {
             let result = execute_review(&app, *role, &current_plan, &revisions_log, &next_tasks, &request).await?;
-            // 仅收录有具体修订的异议（agree=false 但提不出修订 = 视为无异议，避免空条目）
-            if !result.agree && !result.changes.is_empty() {
+            if result.degraded {
+                // B10：不可信输出不进 round_changes（无可整合内容）、不阻断收敛，但必须留下警示
+                revisions_log.push((role.name().to_string(), humanize_review(*role, &result)));
+            } else if !result.agree {
+                // B10：异议必达——有 changes 带着改，没 changes 带着 reason 也要让主持人看到
                 all_agree = false;
-                round_changes.push((*role, result.changes.clone()));
+                round_changes.push((*role, result.changes.clone(), result.reason.clone()));
                 revisions_log.push((role.name().to_string(), humanize_review(*role, &result)));
             }
         }
@@ -714,9 +769,18 @@ async fn run_pipeline_inner<R: Runtime>(app: AppHandle<R>, request: PipelineRequ
             &app, &current_plan, &round_changes, &prev_revisions, &next_tasks, &request,
         )
         .await?;
-        if !auditor_result.agree && !auditor_result.changes.is_empty() {
+        if auditor_result.degraded {
+            revisions_log.push((
+                PipelineRole::Auditor.name().to_string(),
+                humanize_review(PipelineRole::Auditor, &auditor_result),
+            ));
+        } else if !auditor_result.agree {
             all_agree = false;
-            round_changes.push((PipelineRole::Auditor, auditor_result.changes.clone()));
+            round_changes.push((
+                PipelineRole::Auditor,
+                auditor_result.changes.clone(),
+                auditor_result.reason.clone(),
+            ));
             revisions_log.push((
                 PipelineRole::Auditor.name().to_string(),
                 humanize_review(PipelineRole::Auditor, &auditor_result),
@@ -731,10 +795,13 @@ async fn run_pipeline_inner<R: Runtime>(app: AppHandle<R>, request: PipelineRequ
         next_tasks = tasks;
         let _ = app.emit("pipeline", PipelineEvent::DiscussionRound {
             round,
-            roles: round_changes.iter().map(|(r, _)| *r).collect(),
+            roles: round_changes.iter().map(|(r, _, _)| *r).collect(),
             reason: round_changes
                 .iter()
-                .flat_map(|(_, cs)| cs.iter().map(|c| c.reason.clone()))
+                .flat_map(|(_, cs, role_reason)| {
+                    cs.iter().map(|c| c.reason.clone()).chain(std::iter::once(role_reason.clone()))
+                })
+                .filter(|s| !s.is_empty())
                 .collect::<Vec<_>>()
                 .join("；"),
         });
@@ -867,10 +934,63 @@ mod tests {
     }
 
     #[test]
-    fn parse_review_garbage_is_agree() {
-        // 解析失败按"无异议"处理（不阻塞流程）
+    fn parse_review_garbage_is_degraded() {
+        // B10：解析失败不再假同意——显式降级（意见作废，警示可见，流程不阻断）
         let r = parse_review("不是 JSON");
-        assert!(r.agree);
+        assert!(r.degraded);
+        assert!(!r.agree);
+        assert!(r.changes.is_empty());
+        assert!(r.reason.contains("无法解析"));
+        // 降级结果在 humanize 中必须可见，且不得伪装成同意
+        let s = humanize_review(PipelineRole::Emotion, &r);
+        assert!(s.contains("⚠️"), "got: {}", s);
+        assert!(!s.contains("无异议 ✅"), "degraded 不得伪装成同意: {}", s);
+    }
+
+    /// B10：agree 字段缺失（模型输出截断/自由发挥）→ 降级，不再 unwrap_or(true) 默认同意
+    #[test]
+    fn parse_review_missing_agree_is_degraded() {
+        let r = parse_review(r#"{"changes": [{"target": "lyrics", "content": "x", "reason": "y"}]}"#);
+        assert!(r.degraded, "缺 agree 字段必须降级");
+        let r2 = parse_review(r#"{"reason": "整体太模板化"}"#);
+        assert!(r2.degraded);
+    }
+
+    /// B10：空手 agree（agree=true 无 checked）必须可见为警示，而非普通"无异议 ✅"
+    #[test]
+    fn humanize_review_empty_checked_is_warning() {
+        let r = parse_review(r#"{"agree": true}"#);
+        let s = humanize_review(PipelineRole::Lyricist, &r);
+        assert!(s.contains("无异议 ⚠️"), "got: {}", s);
+        assert!(s.contains("未附核查清单"), "got: {}", s);
+        assert!(!s.contains("✅"), "空手 agree 不得显示为合规通过: {}", s);
+    }
+
+    /// B10：round_changes 三元组——无具体修订的总体异议也要进主持人/校验员 prompt
+    #[test]
+    fn summarize_prompt_carries_reason_without_changes() {
+        let rc = vec![(
+            PipelineRole::Emotion,
+            vec![], // 异议但未给具体修订
+            "整体太模板化，缺乏独特意象".to_string(),
+        )];
+        let user = build_summarize_user_prompt("当前方案文本", &rc);
+        assert!(user.contains("（总体意见：整体太模板化，缺乏独特意象）"), "无修订的异议必须进汇总 prompt: {}", user);
+        assert!(user.contains("情感分析师"), "got: {}", user);
+    }
+
+    /// B10：校验员讨论轮 prompt 同样携带无修订的总体意见 + Mode C 专项保留
+    #[test]
+    fn audit_review_prompt_carries_reason_and_mode_c() {
+        let rc = vec![(PipelineRole::Producer, vec![], "参数越界".to_string())];
+        let mut req = make_request(None);
+        req.mode = Mode::ModeC;
+        req.extra = Some("原歌词第一行".to_string());
+        let user = build_audit_review_user_prompt("方案", &rc, &[], "任务", &req);
+        assert!(user.contains("（总体意见：参数越界）"), "got: {}", user);
+        assert!(user.contains("原歌词第一行"), "Mode C 原歌词传递不得回退: {}", user);
+        assert!(user.contains("Mode C 专项"), "got: {}", user);
+        assert!(user.contains("任务"), "got: {}", user);
     }
 
     #[test]
@@ -896,18 +1016,21 @@ mod tests {
             changes: vec![],
             reason: String::new(),
             checked: vec!["情绪内核".into(), "能量差≥3级".into(), "弧线匹配".into()],
+            degraded: false,
         });
         assert!(ok.contains("无异议"), "got: {}", ok);
         assert!(ok.contains("已核查"), "无异议必须展示核查清单: {}", ok);
         assert!(ok.contains("情绪内核"), "got: {}", ok);
-        // 无 checked 时保持原样（兼容）
+        // 无 checked 时为警示（B10：空手 agree 可见化）
         let ok2 = humanize_review(PipelineRole::Emotion, &ReviewResult {
             agree: true,
             changes: vec![],
             reason: String::new(),
             checked: vec![],
+            degraded: false,
         });
-        assert!(ok2.contains("无异议") && !ok2.contains("已核查"), "got: {}", ok2);
+        assert!(ok2.contains("无异议 ⚠️"), "got: {}", ok2);
+        assert!(!ok2.contains("✅"), "空手 agree 不得显示为合规通过: {}", ok2);
         let fix = humanize_review(PipelineRole::Producer, &ReviewResult {
             agree: false,
             changes: vec![ReviewChange {
@@ -917,6 +1040,7 @@ mod tests {
             }],
             reason: String::new(),
             checked: vec![],
+            degraded: false,
         });
         assert!(fix.contains("提出 1 处修订"), "got: {}", fix);
         assert!(fix.contains("Chorus 配器太弱"), "got: {}", fix);
@@ -933,6 +1057,7 @@ mod tests {
             }],
             reason: "总体：参数区间超标".into(),
             checked: vec![],
+            degraded: false,
         };
         let s = humanize_review(PipelineRole::Auditor, &r);
         assert!(s.contains("校验员：提出 1 处修订"), "got: {}", s);
