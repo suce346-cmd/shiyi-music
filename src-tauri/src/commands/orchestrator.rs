@@ -227,8 +227,6 @@ pub const INJECT_MAX_INSTRUMENTS_ROWS: usize = 15;
 pub const INJECT_MAX_FULL_ROWS: usize = 50;
 /// 单角色一次注入总字数封顶（超过告警；最坏情况 = 制作人三表全命中含 22 条规则子集 ≈ 4300 字）
 pub const INJECT_MAX_TOTAL_CHARS: usize = 4500;
-/// B4：审改/汇总输出被截断（finish_reason=length）时的提额重试上限——3000 太紧，6000 覆盖绝大多数修订 JSON
-const REVIEW_RETRY_MAX_TOKENS: u32 = 6000;
 /// B4：格式输出截断时注入打回循环的 issue 文案（走 AuditResult 事件，用户可见）
 const TRUNCATION_ISSUE: &str = "输出被截断（finish_reason=length），请精简内容后重新输出完整提示词包";
 
@@ -355,23 +353,16 @@ async fn execute_review<R: Runtime>(
         json!({"role":"system","content":system}),
         json!({"role":"user","content":user}),
     ];
-    let mut resp = llm::call_llm_silent(
+    let resp = llm::call_llm_silent(
         &base_url, &api_key, &model,
         messages.clone(),
-        3000,
+        llm::MAX_TOKENS_CAP,
         req.thinking,
     )
     .await?;
-    // B4：截断 → max_tokens 提额重试一次（多数截断是 3000 太紧，不是模型能力不足）
+    // B4（上限放开后简化）：30000 上限下截断极罕见，观测记录即可——JSON 已完整时仍可正常解析
     if llm::is_truncated(&resp.finish_reason) {
-        eprintln!("[pipeline] {} 审改输出被截断（finish_reason=length），max_tokens 提额重试", role.name());
-        resp = llm::call_llm_silent(
-            &base_url, &api_key, &model,
-            messages.clone(),
-            REVIEW_RETRY_MAX_TOKENS,
-            req.thinking,
-        )
-        .await?;
+        eprintln!("[pipeline] {} 审改输出触及 max_tokens 上限（finish_reason=length）", role.name());
     }
     let mut result = parse_review(&resp.raw);
     // B4：解析失败 → 同参数重试一次（LLM 输出有随机性，重试常能修复）；仍失败走 B10 降级警示
@@ -380,7 +371,7 @@ async fn execute_review<R: Runtime>(
         let resp2 = llm::call_llm_silent(
             &base_url, &api_key, &model,
             messages.clone(),
-            3000,
+            llm::MAX_TOKENS_CAP,
             req.thinking,
         )
         .await?;
@@ -477,23 +468,16 @@ async fn execute_audit_review<R: Runtime>(
         json!({"role":"system","content":system}),
         json!({"role":"user","content":user}),
     ];
-    let mut resp = llm::call_llm_silent(
+    let resp = llm::call_llm_silent(
         &base_url, &api_key, &model,
         messages.clone(),
-        3000,
+        llm::MAX_TOKENS_CAP,
         req.thinking,
     )
     .await?;
-    // B4：截断 → 提额重试一次
+    // B4（上限放开后简化）：截断观测记录，JSON 完整时照常解析
     if llm::is_truncated(&resp.finish_reason) {
-        eprintln!("[pipeline] 校验员审查输出被截断（finish_reason=length），max_tokens 提额重试");
-        resp = llm::call_llm_silent(
-            &base_url, &api_key, &model,
-            messages.clone(),
-            REVIEW_RETRY_MAX_TOKENS,
-            req.thinking,
-        )
-        .await?;
+        eprintln!("[pipeline] 校验员审查输出触及 max_tokens 上限（finish_reason=length）");
     }
     let mut result = parse_review(&resp.raw);
     // B4：解析失败 → 重试一次；仍失败走 B10 降级警示
@@ -502,7 +486,7 @@ async fn execute_audit_review<R: Runtime>(
         let resp2 = llm::call_llm_silent(
             &base_url, &api_key, &model,
             messages.clone(),
-            3000,
+            llm::MAX_TOKENS_CAP,
             req.thinking,
         )
         .await?;
@@ -541,7 +525,7 @@ async fn run_host_initial<R: Runtime>(app: &AppHandle<R>, req: &PipelineRequest)
     // B4：流式截断直接报错——半截方案绝不允许进入讨论轮（用户可见明确错误，可简化输入后重试）
     if llm::is_truncated(&resp.finish_reason) {
         eprintln!("[pipeline] 方案初稿输出被截断（finish_reason=length）");
-        return Err("方案初稿输出被截断（输出上限 8192 tokens），请简化输入后重试".to_string());
+        return Err("方案初稿输出被截断（达到输出上限），请简化输入后重试".to_string());
     }
     let _ = app.emit("pipeline", PipelineEvent::HostDone { stage: HostStage::Initial });
     Ok(resp.raw)
@@ -585,26 +569,16 @@ async fn run_host_summarize<R: Runtime>(
         json!({"role":"system","content":host.system_prompt}),
         json!({"role":"user","content":user}),
     ];
-    let mut resp = llm::call_llm_silent(
+    let resp = llm::call_llm_silent(
         &base_url, &api_key, &model,
-        messages.clone(),
-        3000,
+        messages,
+        llm::MAX_TOKENS_CAP,
         req.thinking,
     )
     .await?;
-    // B4：汇总截断 → 提额重试一次；仍截断则沿用（split_tasks 对无标记文本全文当方案，行为兼容）
+    // B4（上限放开后简化）：截断观测记录，split_tasks 对无标记文本全文当方案，行为兼容
     if llm::is_truncated(&resp.finish_reason) {
-        eprintln!("[pipeline] 主持人汇总输出被截断（finish_reason=length），max_tokens 提额重试");
-        resp = llm::call_llm_silent(
-            &base_url, &api_key, &model,
-            messages.clone(),
-            REVIEW_RETRY_MAX_TOKENS,
-            req.thinking,
-        )
-        .await?;
-        if llm::is_truncated(&resp.finish_reason) {
-            eprintln!("[pipeline] 主持人汇总重试后仍被截断，按现状继续（下轮讨论可修正）");
-        }
+        eprintln!("[pipeline] 主持人汇总输出触及 max_tokens 上限（finish_reason=length），按现状继续（下轮讨论可修正）");
     }
     let _ = app.emit("pipeline", PipelineEvent::HostDone { stage: HostStage::Summarize });
     Ok(split_tasks(&resp.raw))
@@ -661,7 +635,7 @@ async fn run_audit_format<R: Runtime>(
     let resp = llm::call_llm_silent(
         &base_url, &api_key, &model,
         vec![json!({"role":"system","content":system}), json!({"role":"user","content":user})],
-        3000,
+        llm::MAX_TOKENS_CAP,
         req.thinking,
     )
     .await?;
@@ -698,43 +672,21 @@ fn split_tasks(text: &str) -> (String, String) {
     (text.trim().to_string(), String::new())
 }
 
-/// 从完整方案文本提取 Style Prompt 行（兼容 "**Style Prompt**:" 前缀）
-fn extract_style_prompt_line(text: &str) -> String {
-    for line in text.lines() {
-        let l = line.trim().trim_start_matches('*').trim();
-        if (l.starts_with("Style") && l.len() > 8) || (l.starts_with("风格") && l.len() > 8) {
-            return l.to_string();
-        }
-    }
-    String::new()
-}
-
-/// 从 Style Prompt 提取 BPM 数值（如 "60BPM" "120 bpm"）
-fn extract_bpm(text: &str) -> Option<u32> {
-    let lower = text.to_lowercase();
-    for part in lower.split(|c: char| !c.is_ascii_digit()) {
-        if let Ok(n) = part.parse::<u32>() {
-            if n >= 40 && n <= 220 {
-                return Some(n);
-            }
-        }
-    }
-    None
-}
-
-
 /// 从最终文本收集硬校验问题。
 /// 全模式启用（P2 修复）：mode_c 的 lyric_fill 已过滤包装行 + 去空白计数，
 /// 对标准提示词包可安全执行字数对齐校验，不再跳过。
+/// B7：Style Prompt 统一取 validator::extract_style_prompt 的冒号后正文——
+/// 过短/BPM 校验不再被 "Style Prompt**: " 标签前缀虚增长度；"风格:" 前缀兼容已下沉至该实现。
+/// B6：BPM 只信任显式标注（knowledge::plan_bpm_value，无 BPM 字样返回 None），
+/// 不再从行内任意数字猜值（"80年代" 等年代词误报源已移除）。
 fn collect_hard_issues(mode: &Mode, final_text: &str, extra: Option<&str>) -> Vec<String> {
     let mut issues = Vec::new();
     let v = validator::validate_for_mode(mode.to_str_name(), final_text, extra);
     issues.extend(v.issues);
-    let style_prompt = extract_style_prompt_line(final_text);
-    if !style_prompt.is_empty() {
+    if let Some(style_prompt) = validator::extract_style_prompt(final_text) {
         issues.extend(validator::check_style_prompt_blocks(&style_prompt));
         // BPM 模式感知检查（对齐原指令：仅 mode_d 要求 BPM>=90）
-        if let Some(bpm) = extract_bpm(&style_prompt) {
+        if let Some(bpm) = crate::knowledge::plan_bpm_value(&style_prompt) {
             if let Some(msg) = validator::check_bpm_range(mode.to_str_name(), bpm) {
                 issues.push(msg);
             }
@@ -1210,15 +1162,49 @@ mod tests {
         assert!(tasks2.contains("任务B"));
     }
 
+    /// B7：过短校验按冒号后正文计数——旧行级计数被 "Style Prompt**: " 前缀虚增 16 字符。
+    /// 正文 15 字符：旧实现 15+16=31 ≥30 放行（放水），新实现按正文判过短。
     #[test]
-    fn extract_style_prompt_line_handles_stars() {
-        let text = "**Style Prompt**: 深夜民谣, 68 BPM\n[Verse 1]";
-        assert_eq!(extract_style_prompt_line(text), "Style Prompt**: 深夜民谣, 68 BPM");
+    fn style_prompt_short_check_uses_body_not_line() {
+        let text = "**Style Prompt**: 深夜室内民谣钢琴与弦乐交织回响\n[Verse 1]\n歌词";
+        let issues = collect_hard_issues(&Mode::ModeA, text, None);
+        assert!(issues.iter().any(|i| i.contains("过短")), "正文 15 字符应报过短: {:?}", issues);
+        // 正文充足（≥30）时不报过短
+        let text_ok = "**Style Prompt**: 深夜室内民谣基调, 68BPM D小调, 钢琴与弦乐交织, 气声念白, 温暖木质空间, 能量低回\n[Verse 1]\n歌词";
+        let issues_ok = collect_hard_issues(&Mode::ModeA, text_ok, None);
+        assert!(!issues_ok.iter().any(|i| i.contains("过短")), "正文充足不应报过短: {:?}", issues_ok);
     }
 
+    /// B7 旧语义保留：`风格:` 前缀行同样能提取正文（原 extract_style_prompt_line 认得它）
     #[test]
-    fn extract_style_prompt_line_none() {
-        assert_eq!(extract_style_prompt_line("[Verse 1]\n歌词"), "");
+    fn style_prompt_supports_legacy_grey_prefix() {
+        let text = "风格：深夜室内民谣基调, 68BPM D小调, 钢琴与弦乐交织, 气声念白, 温暖木质空间\n[Verse 1]\n歌词";
+        let issues = collect_hard_issues(&Mode::ModeA, text, None);
+        assert!(!issues.iter().any(|i| i.contains("过短")), "风格: 前缀应提取到正文: {:?}", issues);
+    }
+
+    /// B6+B7 集成：mode_d 的 BPM 只按显式标注判——"80年代" 不再被当成 BPM=80 误报
+    #[test]
+    fn bpm_check_not_fooled_by_era_words() {
+        let text = "**Style Prompt**: 80年代复古Disco, 125BPM, 律动铜管, 痞气男声, 拥挤商场混响, 高能持续\n[Hook]\n[suona, 808]\n我 真的 会谢\n[Hook]\n我 真的 会谢\n[Hook]\n[all instruments cut abruptly]";
+        let issues = collect_hard_issues(&Mode::ModeD, text, None);
+        assert!(
+            !issues.iter().any(|i| i.contains("BPM")),
+            "125BPM 应正确提取，不得因年代词误报 BPM 不足: {:?}",
+            issues
+        );
+    }
+
+    /// B6 旧规则保留：显式 BPM 不足（mode_d 要求 ≥90）仍必须报
+    #[test]
+    fn bpm_explicit_violation_still_reported() {
+        let text = "**Style Prompt**: 深夜室内民谣基调, 68BPM, 钢琴弦乐, 气声念白, 温暖空间\n[Hook]\n[suona, 808]\n我 真的 会谢\n[Hook]\n我 真的 会谢\n[Hook]\n[all instruments cut abruptly]";
+        let issues = collect_hard_issues(&Mode::ModeD, text, None);
+        assert!(
+            issues.iter().any(|i| i.contains("BPM 68") || i.contains("低于")),
+            "显式 68BPM 应报 BPM 不足: {:?}",
+            issues
+        );
     }
 
     #[test]

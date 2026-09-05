@@ -70,8 +70,13 @@ pub(crate) fn build_client(timeout_secs: u64) -> Result<Client, String> {
         .map_err(|e| format!("Failed to build HTTP client: {}", e))
 }
 
+/// 全部调用统一的 max_tokens 上限（用户决策 2026-09-06：放开截断限制到 30000——
+/// max_tokens 是输出上限不是预扣费用，实际按生成量计费；B4 的 3000→6000 提额阶梯随之取消）
+pub(crate) const MAX_TOKENS_CAP: u32 = 30000;
+
 /// 思考模式开启时的 max_tokens 下限：思维链会吃掉一部分输出预算，防长输出被截断
-const THINKING_MAX_TOKENS: u32 = 16384;
+/// （与 MAX_TOKENS_CAP 同值——上限放开后思维链同样有充足预算）
+const THINKING_MAX_TOKENS: u32 = MAX_TOKENS_CAP;
 
 /// 思考参数路由表（纯函数，可测）：按模型名匹配各厂商的思考参数模板。
 /// - DeepSeek 系（含讯飞 MaaS xopdeepseek*）：thinking 二元开关（实测网关接受，返回 reasoning_content）
@@ -211,10 +216,10 @@ pub(crate) async fn call_llm_stream<R: Runtime>(
         "messages": messages,
         "stream": true,
         "temperature": 0.7,
-        "max_tokens": 8192,
+        "max_tokens": MAX_TOKENS_CAP,
     });
     if thinking {
-        apply_thinking(&mut body, model, 8192);
+        apply_thinking(&mut body, model, MAX_TOKENS_CAP);
     }
 
     let response = send_with_retry(
@@ -464,17 +469,17 @@ mod tests {
         }
     }
 
-    /// 开思考时 max_tokens 抬升到 16384 下限（防思维链挤占输出），且只抬不降
+    /// 开思考时 max_tokens 抬升到上限（防思维链挤占输出），且只抬不降
     #[test]
     fn apply_thinking_raises_max_tokens() {
         let mut body = serde_json::json!({"model": "xopdeepseekv4flash0731", "max_tokens": 3000});
         apply_thinking(&mut body, "xopdeepseekv4flash0731", 3000);
         assert_eq!(body["max_tokens"], THINKING_MAX_TOKENS);
         assert_eq!(body["thinking"]["type"], "enabled");
-        // 调用方 max_tokens 已超下限：保持原值不降低
-        let mut body2 = serde_json::json!({"model": "xopdeepseekv4flash0731", "max_tokens": 20000});
-        apply_thinking(&mut body2, "xopdeepseekv4flash0731", 20000);
-        assert_eq!(body2["max_tokens"], 20000);
+        // 调用方 max_tokens 已超上限：保持原值不降低
+        let mut body2 = serde_json::json!({"model": "xopdeepseekv4flash0731", "max_tokens": 32000});
+        apply_thinking(&mut body2, "xopdeepseekv4flash0731", 32000);
+        assert_eq!(body2["max_tokens"], 32000);
     }
 
     /// B4：正文与 finish_reason 联合提取——正常 / 缺失 / 空字符串（思考模式思维链吃满预算）都要正确判定
