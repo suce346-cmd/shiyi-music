@@ -1,3 +1,4 @@
+use crate::errors::{AppError, ErrorKind};
 use crate::models::{LLMResponse, StreamChunk};
 use futures_util::StreamExt;
 use reqwest::Client;
@@ -28,11 +29,16 @@ fn retry_plan(attempt: usize, status: Option<u16>, network_err: bool) -> Option<
     }
 }
 
-/// 带退避重试的请求发送：429/5xx/网络错误按 retry_plan 退避，最多 3 次（4xx 凭据类错误不重试）
-async fn send_with_retry(req: reqwest::RequestBuilder) -> Result<reqwest::Response, String> {
+/// 带退避重试的请求发送：429/5xx/网络错误按 retry_plan 退避，最多 3 次（4xx 凭据类错误不重试）。
+/// A5：错误分类——reqwest 层失败=Network，重试耗尽=Network。
+async fn send_with_retry(req: reqwest::RequestBuilder) -> Result<reqwest::Response, AppError> {
     let mut last_err = "unknown".to_string();
     for attempt in 0..3 {
-        let builder = req.try_clone().ok_or("请求无法克隆（重试不可用）")?;
+        // B3：取消检查点——置位后立即中止，不再发起新尝试（可穿透退避等待）
+        if crate::commands::cancel::is_cancelled() {
+            return Err(AppError::cancelled());
+        }
+        let builder = req.try_clone().ok_or_else(|| AppError::new(ErrorKind::Internal, "请求无法克隆（重试不可用）"))?;
         match builder.send().await {
             Ok(resp) => {
                 let status = resp.status();
@@ -54,20 +60,20 @@ async fn send_with_retry(req: reqwest::RequestBuilder) -> Result<reqwest::Respon
                     tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
                     continue;
                 }
-                return Err(format!("API request failed: {}", e));
+                return Err(AppError::new(ErrorKind::Network, format!("API request failed: {}", e)));
             }
         }
     }
-    Err(format!("API 请求失败（重试 3 次后仍失败）：{}", last_err))
+    Err(AppError::new(ErrorKind::Network, format!("API 请求失败（重试 3 次后仍失败）：{}", last_err)))
 }
 
 /// 构建 HTTP 客户端：connect 10s；总超时按调用场景（普通 120s，思考模式 300s——思维链+长输出耗时更长）
-pub(crate) fn build_client(timeout_secs: u64) -> Result<Client, String> {
+pub(crate) fn build_client(timeout_secs: u64) -> Result<Client, AppError> {
     Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
         .timeout(std::time::Duration::from_secs(timeout_secs))
         .build()
-        .map_err(|e| format!("Failed to build HTTP client: {}", e))
+        .map_err(|e| AppError::new(ErrorKind::Internal, format!("Failed to build HTTP client: {}", e)))
 }
 
 /// 全部调用统一的 max_tokens 上限（用户决策 2026-09-06：放开截断限制到 30000——
@@ -126,13 +132,14 @@ fn extract_message(json: &Value) -> Option<(String, Option<String>)> {
     ))
 }
 
-/// 发送请求并解析正文；无正文返回 Err（供思考模式降级重试判断）
+/// 发送请求并解析正文；无正文返回 Err（供思考模式降级重试判断）。
+/// A5：HTTP 状态分类（401/403=Auth，429=RateLimit，5xx/其他=Network）；解析失败=Parse。
 async fn send_and_extract(
     client: &Client,
     url: &str,
     api_key: &str,
     body: &Value,
-) -> Result<LLMResponse, String> {
+) -> Result<LLMResponse, AppError> {
     let resp = send_with_retry(
         client
             .post(url)
@@ -147,14 +154,14 @@ async fn send_and_extract(
             .text()
             .await
             .unwrap_or_else(|_| "unknown error".to_string());
-        return Err(format!("API returned {}: {}", status, truncate_err(&err)));
+        return Err(AppError::api_status(status.as_u16(), &truncate_err(&err)));
     }
     let json: Value = resp
         .json()
         .await
-        .map_err(|e| format!("API response parse failed: {}", e))?;
+        .map_err(|e| AppError::new(ErrorKind::Parse, format!("API response parse failed: {}", e)))?;
     let (raw, finish_reason) = extract_message(&json)
-        .ok_or_else(|| "API response missing content".to_string())?;
+        .ok_or_else(|| AppError::new(ErrorKind::Parse, "API response missing content".to_string()))?;
     Ok(LLMResponse { raw, finish_reason })
 }
 
@@ -168,7 +175,7 @@ pub(crate) async fn call_llm_silent(
     messages: Vec<Value>,
     max_tokens: u32,
     thinking: bool,
-) -> Result<LLMResponse, String> {
+) -> Result<LLMResponse, AppError> {
     let client = build_client(if thinking { 300 } else { 120 })?;
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let mut body = serde_json::json!({
@@ -183,7 +190,7 @@ pub(crate) async fn call_llm_silent(
     }
     match send_and_extract(&client, &url, &api_key, &body).await {
         Ok(resp) => Ok(resp),
-        Err(e) if thinking && e.contains("missing content") => {
+        Err(e) if thinking && e.message.contains("missing content") => {
             // 降级：去掉思考参数重试一次（同一 prompt 无思考直接输出，必有正文）
             eprintln!("[llm] 思考模式响应无正文，降级为无思考重试一次");
             let fallback = serde_json::json!({
@@ -207,7 +214,7 @@ pub(crate) async fn call_llm_stream<R: Runtime>(
     model: &str,
     messages: Vec<Value>,
     thinking: bool,
-) -> Result<LLMResponse, String> {
+) -> Result<LLMResponse, AppError> {
     let client = build_client(if thinking { 300 } else { 120 })?;
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
 
@@ -264,14 +271,14 @@ fn parse_sse_line(line: &str, full_content: &mut String, finish_reason: &mut Opt
 async fn stream_response<R: Runtime>(
     app: AppHandle<R>,
     response: reqwest::Response,
-) -> Result<LLMResponse, String> {
+) -> Result<LLMResponse, AppError> {
     let status = response.status();
     if !status.is_success() {
         let error_text = response
             .text()
             .await
             .unwrap_or_else(|_| "unknown error".to_string());
-        return Err(format!("API returned {}: {}", status, truncate_err(&error_text)));
+        return Err(AppError::api_status(status.as_u16(), &truncate_err(&error_text)));
     }
 
     let mut full_content = String::new();
@@ -282,13 +289,17 @@ async fn stream_response<R: Runtime>(
     let mut last_log = std::time::Instant::now();
 
     while let Some(chunk_result) = stream.next().await {
+        // B3：取消检查点——流式过程中置位立即中断
+        if crate::commands::cancel::is_cancelled() {
+            return Err(AppError::cancelled());
+        }
         if last_log.elapsed().as_secs() >= 30 {
             eprintln!("[llm] 流式进行中 {}s，已收 {} 字符", started.elapsed().as_secs(), full_content.chars().count());
             last_log = std::time::Instant::now();
         }
         let chunk = chunk_result.map_err(|e| {
             eprintln!("[llm] 流式错误（{}s 时）: {}", started.elapsed().as_secs(), e);
-            format!("Stream error: {}", e)
+            AppError::new(ErrorKind::Network, format!("Stream error: {}", e))
         })?;
         line_buf.push_str(&String::from_utf8_lossy(&chunk));
 
@@ -317,7 +328,10 @@ async fn stream_response<R: Runtime>(
 
     // 思考模式兜底：思维链吃满预算时可能全程无正文，禁止静默产出空方案
     if full_content.trim().is_empty() {
-        return Err("思考模式流式响应无正文（思维链可能耗尽预算）".to_string());
+        return Err(AppError::new(
+            ErrorKind::Parse,
+            "思考模式流式响应无正文（思维链可能耗尽预算）",
+        ));
     }
 
     Ok(LLMResponse {
@@ -521,7 +535,7 @@ pub async fn test_api(
     base_url: String,
     api_key: String,
     model: String,
-) -> Result<String, String> {
+) -> Result<String, AppError> {
     let client = build_client(120)?;
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let body = serde_json::json!({
@@ -537,7 +551,7 @@ pub async fn test_api(
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("请求失败: {}", truncate_err(&e.to_string())))?;
+        .map_err(|e| AppError::new(ErrorKind::Network, format!("请求失败: {}", truncate_err(&e.to_string()))))?;
     let status = resp.status();
     if status.is_success() {
         Ok("连接成功".into())
@@ -546,6 +560,6 @@ pub async fn test_api(
             .text()
             .await
             .unwrap_or_else(|_| "unknown error".to_string());
-        Err(format!("HTTP {}: {}", status, truncate_err(&err)))
+        Err(AppError::api_status(status.as_u16(), &truncate_err(&err)))
     }
 }

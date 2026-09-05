@@ -8,7 +8,9 @@
 //!   全角色与校验员无异议或满 3 轮收敛
 //! - 阶段 2：校验员按标准格式输出最终提示词包；代码硬校验兜底（失败打回重格式化）
 
-use crate::commands::{llm, prompts, roles, validator};
+use crate::commands::{cancel, llm, prompts, roles, validator};
+use crate::energy::plan_energy_range;
+use crate::errors::AppError;
 use crate::knowledge::KnowledgeBase;
 use crate::models::{
     HostStage, Mode, PipelineEvent, PipelineRequest, PipelineRole, PipelineStep,
@@ -200,12 +202,7 @@ fn matching_keywords(plan: &str, candidates: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// 方案能量范围（无能量标注时返回 None）。
-/// 统一走 knowledge 层实现（增强版支持 能量:/能量 /energy:/energy 四种格式），
-/// 避免与 validator::extract_energy_values 双实现漂移。
-fn plan_energy_range(plan: &str) -> Option<(u32, u32)> {
-    crate::knowledge::plan_energy_range_str(plan)
-}
+
 
 // ---------------------------------------------------------------------------
 // 注入量规范（条数上限）——集中定义，测试锁定，禁止散改
@@ -315,7 +312,7 @@ async fn execute_review<R: Runtime>(
     revisions_log: &[(String, String)],
     next_tasks: &str,
     req: &PipelineRequest,
-) -> Result<ReviewResult, String> {
+) -> Result<ReviewResult, AppError> {
     let kb = load_knowledge()?;
     let r = roles::role_for(role);
 
@@ -446,7 +443,7 @@ async fn execute_audit_review<R: Runtime>(
     revisions_log: &[(String, String)],
     next_tasks: &str,
     req: &PipelineRequest,
-) -> Result<ReviewResult, String> {
+) -> Result<ReviewResult, AppError> {
     let kb = load_knowledge()?;
 
     let mut system = String::new();
@@ -507,7 +504,7 @@ async fn execute_audit_review<R: Runtime>(
 // ---------------------------------------------------------------------------
 
 /// 阶段 0：主持人用该模式的完整指令产出方案初稿（流式）
-async fn run_host_initial<R: Runtime>(app: &AppHandle<R>, req: &PipelineRequest) -> Result<String, String> {
+async fn run_host_initial<R: Runtime>(app: &AppHandle<R>, req: &PipelineRequest) -> Result<String, AppError> {
     let _ = app.emit("pipeline", PipelineEvent::HostStart { stage: HostStage::Initial });
     let system = prompt_for_mode(&req.mode);
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Host);
@@ -525,7 +522,7 @@ async fn run_host_initial<R: Runtime>(app: &AppHandle<R>, req: &PipelineRequest)
     // B4：流式截断直接报错——半截方案绝不允许进入讨论轮（用户可见明确错误，可简化输入后重试）
     if llm::is_truncated(&resp.finish_reason) {
         eprintln!("[pipeline] 方案初稿输出被截断（finish_reason=length）");
-        return Err("方案初稿输出被截断（达到输出上限），请简化输入后重试".to_string());
+        return Err("方案初稿输出被截断（达到输出上限），请简化输入后重试".into());
     }
     let _ = app.emit("pipeline", PipelineEvent::HostDone { stage: HostStage::Initial });
     Ok(resp.raw)
@@ -560,7 +557,7 @@ async fn run_host_summarize<R: Runtime>(
     current_plan: &str,
     round_changes: &[(PipelineRole, Vec<ReviewChange>, String)],
     req: &PipelineRequest,
-) -> Result<(String, String), String> {
+) -> Result<(String, String), AppError> {
     let host = roles::host();
     let user = build_summarize_user_prompt(current_plan, round_changes);
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Host);
@@ -595,7 +592,7 @@ async fn run_audit_format<R: Runtime>(
     current_plan: &str,
     issues: Option<&[String]>,
     req: &PipelineRequest,
-) -> Result<(String, bool), String> {
+) -> Result<(String, bool), AppError> {
     let _ = app.emit("pipeline", PipelineEvent::AuditStart);
     let auditor = roles::auditor();
     let kb = load_knowledge()?;
@@ -708,7 +705,7 @@ pub(crate) const PIPELINE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 /// spawn + 超时守卫的结果
 enum GuardOutcome {
     /// 正常完成（含业务 Err）
-    Completed(Result<String, String>),
+    Completed(Result<String, AppError>),
     /// 内部 panic（隔离层捕获，依赖 unwind——Cargo.toml 不得设置 panic="abort"）
     JoinPanicked(String),
     /// 超时：任务已被 abort 并回收，费用已停止
@@ -719,7 +716,7 @@ enum GuardOutcome {
 /// panic 隔离与超时强杀都在这里，与事件发射解耦（可独立单测）。
 async fn spawn_guarded<F>(fut: F, timeout: Duration) -> GuardOutcome
 where
-    F: Future<Output = Result<String, String>> + Send + 'static,
+    F: Future<Output = Result<String, AppError>> + Send + 'static,
 {
     let mut handle = tokio::task::spawn(fut);
     // 用 &mut handle 保住所有权：若按值传入，超时后 handle 会随 timeout future 一起被
@@ -738,8 +735,9 @@ where
 /// 主流程：跑圆桌流水线。
 /// 隔离层：tokio::task::spawn 执行（内部 panic 不杀 worker 线程，转为错误返回——依赖
 /// unwind，Cargo.toml 禁设 panic="abort"，改配置前先看这里）+ 整体超时（超时 = abort
-/// 强杀在途任务，非放弃等待）。任何失败统一发 Failed 事件。
-pub async fn run_pipeline<R: Runtime>(app: AppHandle<R>, request: PipelineRequest) -> Result<String, String> {
+/// 强杀在途任务，非放弃等待）。真实错误统一发 Failed 事件；用户取消发 Cancelled 事件（B3）。
+pub async fn run_pipeline<R: Runtime>(app: AppHandle<R>, request: PipelineRequest) -> Result<String, AppError> {
+    cancel::reset(); // 新 run 清除上一轮残留的取消标志
     run_pipeline_with_timeout(app, request, PIPELINE_TIMEOUT).await
 }
 
@@ -748,12 +746,18 @@ pub(crate) async fn run_pipeline_with_timeout<R: Runtime>(
     app: AppHandle<R>,
     request: PipelineRequest,
     timeout: Duration,
-) -> Result<String, String> {
+) -> Result<String, AppError> {
+    use crate::errors::ErrorKind;
     let app2 = app.clone();
     match spawn_guarded(run_pipeline_inner(app2, request), timeout).await {
         GuardOutcome::Completed(inner) => {
             if let Err(e) = &inner {
-                let _ = app.emit("pipeline", PipelineEvent::Failed { error: e.clone() });
+                // B3：取消走 Cancelled 事件（前端不标红），真实错误仍走 Failed
+                if e.kind == ErrorKind::Cancelled {
+                    let _ = app.emit("pipeline", PipelineEvent::Cancelled);
+                } else {
+                    let _ = app.emit("pipeline", PipelineEvent::Failed { error: e.message.clone() });
+                }
             }
             inner
         }
@@ -761,25 +765,36 @@ pub(crate) async fn run_pipeline_with_timeout<R: Runtime>(
             // spawn 的 future panic（如字符边界切片越界）：不杀 worker，转错误返回
             let msg = format!("流水线内部异常: {}", join_err);
             eprintln!("[pipeline] {}", msg);
-            let _ = app.emit("pipeline", PipelineEvent::Failed { error: msg.clone() });
-            Err(msg)
+            let err = AppError::new(ErrorKind::Internal, msg.clone());
+            let _ = app.emit("pipeline", PipelineEvent::Failed { error: msg });
+            Err(err)
         }
         GuardOutcome::TimedOut => {
             let mins = timeout.as_secs() / 60;
             let msg = format!("流水线超时（{} 分钟）未完成，已中止", mins);
             eprintln!("[pipeline] {}", msg);
-            let _ = app.emit("pipeline", PipelineEvent::Failed { error: msg.clone() });
-            Err(msg)
+            let err = AppError::new(ErrorKind::Timeout, msg.clone());
+            let _ = app.emit("pipeline", PipelineEvent::Failed { error: msg });
+            Err(err)
         }
     }
 }
 
 /// 主流程内层：三阶段（主持人统领 → 角色审改+校验员审查讨论 → 校验员格式化）
-async fn run_pipeline_inner<R: Runtime>(app: AppHandle<R>, request: PipelineRequest) -> Result<String, String> {
+async fn run_pipeline_inner<R: Runtime>(app: AppHandle<R>, request: PipelineRequest) -> Result<String, AppError> {
     let mode = &request.mode;
+    // B3：取消检查点——各阶段入口统一拦截
+    let checkpoint = || -> Result<(), AppError> {
+        if cancel::is_cancelled() {
+            Err(AppError::cancelled())
+        } else {
+            Ok(())
+        }
+    };
     let roles: Vec<PipelineRole> = steps_for_mode(mode).iter().map(|s| s.role).collect();
 
     // ---- 阶段 0：主持人统领（原模式完整指令，产出方案初稿）----
+    checkpoint()?;
     let mut current_plan = run_host_initial(&app, &request).await?;
     // 主持人上轮任务分发（第一轮无任务）
     let mut next_tasks = String::new();
@@ -792,8 +807,10 @@ async fn run_pipeline_inner<R: Runtime>(app: AppHandle<R>, request: PipelineRequ
         let mut round_changes: Vec<(PipelineRole, Vec<ReviewChange>, String)> = Vec::new();
         // 本轮开始前的修订快照（上一轮及更早；本轮角色修订经 round_changes 传递，避免 auditor 双写）
         let prev_revisions = revisions_log.clone();
+        checkpoint()?;
         // ① 动态角色逐个审改
         for role in &roles {
+            checkpoint()?; // B3：每个角色开跑前检查
             let result = execute_review(&app, *role, &current_plan, &revisions_log, &next_tasks, &request).await?;
             if result.degraded {
                 // B10：不可信输出不进 round_changes（无可整合内容）、不阻断收敛，但必须留下警示
@@ -806,6 +823,7 @@ async fn run_pipeline_inner<R: Runtime>(app: AppHandle<R>, request: PipelineRequ
             }
         }
         // ② 校验员审查（当前方案 + 本轮修订 + 上轮修订 + 任务分发核验 → 观点返回主持人）
+        checkpoint()?;
         let auditor_result = execute_audit_review(
             &app, &current_plan, &round_changes, &prev_revisions, &next_tasks, &request,
         )
@@ -895,7 +913,7 @@ async fn run_pipeline_inner<R: Runtime>(app: AppHandle<R>, request: PipelineRequ
 }
 
 /// 优化/重跑：全流程重跑 + 反馈注入
-pub async fn run_pipeline_refine(app: AppHandle, request: PipelineRequest, feedback: &str) -> Result<String, String> {
+pub async fn run_pipeline_refine(app: AppHandle, request: PipelineRequest, feedback: &str) -> Result<String, AppError> {
     let mut req = request;
     req.user_input = format!("{}\n\n（优化反馈：{}）", req.user_input, feedback);
     run_pipeline(app, req).await
@@ -907,7 +925,7 @@ pub async fn run_pipeline_refine(app: AppHandle, request: PipelineRequest, feedb
 
 /// 圆桌生成（前端调用）
 #[tauri::command]
-pub async fn pipeline_generate(app: AppHandle, request: PipelineRequest) -> Result<String, String> {
+pub async fn pipeline_generate(app: AppHandle, request: PipelineRequest) -> Result<String, AppError> {
     run_pipeline(app, request).await
 }
 
@@ -917,8 +935,14 @@ pub async fn pipeline_refine(
     app: AppHandle,
     request: PipelineRequest,
     feedback: String,
-) -> Result<String, String> {
+) -> Result<String, AppError> {
     run_pipeline_refine(app, request, &feedback).await
+}
+
+/// B3：请求取消当前生成（前端"停止"按钮调）——检查点在下次机会中断
+#[tauri::command]
+pub async fn cancel_pipeline() {
+    cancel::request_cancel();
 }
 
 // ---------------------------------------------------------------------------
@@ -1408,8 +1432,8 @@ mod tests {
     #[tokio::test]
     async fn timeout_guard_passes_through_result() {
         let outcome =
-            spawn_guarded(async { Err("业务错误".to_string()) }, Duration::from_secs(1)).await;
-        assert!(matches!(outcome, GuardOutcome::Completed(Err(e)) if e == "业务错误"));
+            spawn_guarded(async { Err(AppError::from("业务错误")) }, Duration::from_secs(1)).await;
+        assert!(matches!(outcome, GuardOutcome::Completed(Err(e)) if e.message == "业务错误"));
         let outcome2 =
             spawn_guarded(async { Ok("方案".to_string()) }, Duration::from_secs(1)).await;
         assert!(matches!(outcome2, GuardOutcome::Completed(Ok(s)) if s == "方案"));

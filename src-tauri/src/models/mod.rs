@@ -73,6 +73,14 @@ mod tests {
         }
     }
 
+    /// B3：Cancelled 事件序列化为 {"type":"cancelled"}（前端 usePipeline 分支）
+    #[test]
+    fn cancelled_event_serializes() {
+        let e = PipelineEvent::Cancelled;
+        let j: Value = serde_json::from_str(&serde_json::to_string(&e).unwrap()).unwrap();
+        assert_eq!(j["type"], "cancelled");
+    }
+
     #[test]
     fn host_stage_roundtrip() {
         for s in [HostStage::Initial, HostStage::Summarize] {
@@ -250,4 +258,6 @@ pub enum PipelineEvent {
     DiscussionRound { round: u32, roles: Vec<PipelineRole>, reason: String },
     /// 整体失败
     Failed { error: String },
+    /// B3：用户取消（前端"停止"按钮）——与 Failed 区别：不标红，只回到空闲
+    Cancelled,
 }
