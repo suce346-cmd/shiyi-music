@@ -30,6 +30,20 @@ export function sanitizeStored(raw: unknown): AppSettings {
   if (typeof o.model === "string") base.model = o.model;
   if (typeof o.baseUrl === "string") base.baseUrl = o.baseUrl;
   if (typeof o.thinking === "boolean") base.thinking = o.thinking;
+  // A11：generation 清洗（数值范围收敛，坏值丢弃走后端默认）
+  if (typeof o.generation === "object" && o.generation !== null && !Array.isArray(o.generation)) {
+    const g = o.generation as Record<string, unknown>;
+    const cleaned: { temperature?: number; max_tokens?: number } = {};
+    if (typeof g.temperature === "number" && g.temperature >= 0 && g.temperature <= 2) {
+      cleaned.temperature = g.temperature;
+    }
+    if (typeof g.max_tokens === "number" && Number.isInteger(g.max_tokens) && g.max_tokens >= 1000 && g.max_tokens <= 32000) {
+      cleaned.max_tokens = g.max_tokens;
+    }
+    if (cleaned.temperature !== undefined || cleaned.max_tokens !== undefined) {
+      base.generation = cleaned;
+    }
+  }
   if (typeof o.roleOverrides === "object" && o.roleOverrides !== null && !Array.isArray(o.roleOverrides)) {
     // 逐角色深校验：非对象条目丢弃；对象只保留 string 三字段
     // A12：api_key 同 apiKey 处理——仅哨兵保留，明文待迁移

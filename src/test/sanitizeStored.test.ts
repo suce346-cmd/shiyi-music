@@ -32,6 +32,18 @@ describe("sanitizeStored", () => {
     expect((s.roleOverrides as Record<string, unknown> | undefined)?.["hacker"]).toBeUndefined();
   });
 
+  it("A11：generation 清洗——范围内保留，越界/坏类型丢弃", () => {
+    const G = "generation";
+    const ok = sanitizeStored(JSON.parse(`{"${G}":{"temperature":0.2,"max_tokens":8000}}`));
+    expect(ok.generation).toEqual({ temperature: 0.2, max_tokens: 8000 });
+    const bad = sanitizeStored(JSON.parse(`{"${G}":{"temperature":9,"max_tokens":100}}`));
+    expect(bad.generation).toBeUndefined();
+    const wrong = sanitizeStored(JSON.parse(`{"${G}":{"temperature":"high"}}`));
+    expect(wrong.generation).toBeUndefined();
+    const missing = sanitizeStored({});
+    expect(missing.generation).toBeUndefined();
+  });
+
   it("角色哨兵保留、非哨兵不读入", () => {
     const keep = sanitizeStored(
       JSON.parse(`{"${K.rk}":{"auditor":{"${K.ak}":"${SENTINEL}"}}}`),

@@ -530,6 +530,39 @@ export default function App() {
               onChange={e => { updateSettings({ thinking: e.target.checked }); setTestResult(null); }}
               className="w-4 h-4 accent-brand-500 cursor-pointer shrink-0" />
           </div>
+          {/* A11：高级参数（缺省走后端默认；temperature 0~2，max_tokens 1000~32000） */}
+          <div className="rounded-lg border border-border/40 bg-surface-0/40 px-3 py-2 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <label htmlFor="gen-temperature" className="text-[11px] text-text-2 cursor-pointer select-none">
+                温度
+                <span className="block text-[10px] text-text-muted font-normal">低=稳定，高=发散（默认 0.6/0.7）</span>
+              </label>
+              <input id="gen-temperature" type="number" min={0} max={2} step={0.1}
+                value={settings.generation?.temperature ?? ""}
+                onChange={e => {
+                  const v = e.target.value === "" ? undefined : Number(e.target.value);
+                  updateSettings({ generation: { ...settings.generation, temperature: v } });
+                  setTestResult(null);
+                }}
+                placeholder="默认"
+                className="w-20 bg-surface-0 border border-border/60 rounded-lg px-2 py-1 text-[12px] text-text-1 focus:outline-none focus:border-brand-500/40 transition-all duration-150" />
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <label htmlFor="gen-max-tokens" className="text-[11px] text-text-2 cursor-pointer select-none">
+                输出上限
+                <span className="block text-[10px] text-text-muted font-normal">单次最大 tokens（默认 30000）</span>
+              </label>
+              <input id="gen-max-tokens" type="number" min={1000} max={32000} step={1000}
+                value={settings.generation?.max_tokens ?? ""}
+                onChange={e => {
+                  const v = e.target.value === "" ? undefined : Math.round(Number(e.target.value));
+                  updateSettings({ generation: { ...settings.generation, max_tokens: v } });
+                  setTestResult(null);
+                }}
+                placeholder="默认"
+                className="w-20 bg-surface-0 border border-border/60 rounded-lg px-2 py-1 text-[12px] text-text-1 focus:outline-none focus:border-brand-500/40 transition-all duration-150" />
+            </div>
+          </div>
           <button onClick={handleTestApi} disabled={testingApi || !settings.apiKey}
             className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-[12px] font-medium
                        bg-surface-2 hover:bg-surface-3 border border-border/50 text-text-2

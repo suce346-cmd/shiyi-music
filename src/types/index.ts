@@ -17,6 +17,14 @@ export interface AppSettings {
   thinking: boolean;
   /** 角色级 API 覆盖（可选）：某角色配了就用配的，空字段继承全局；不配 = 全用全局 */
   roleOverrides?: Partial<Record<PipelineRoleKey, RoleApiOverride>>;
+  /** A11：生成参数覆盖（缺省走后端内置默认；旧数据无此字段） */
+  generation?: GenerationConfig;
+}
+
+/** A11：生成参数（全字段可选，与后端 GenerationConfig 对齐） */
+export interface GenerationConfig {
+  temperature?: number;
+  max_tokens?: number;
 }
 
 export interface ChatMessage {
@@ -124,4 +132,6 @@ export interface PipelineRequest {
   role_overrides?: Partial<Record<PipelineRoleKey, RoleApiOverride>>;
   /** F1：增量优化目标角色（缺省=后端按反馈自动路由；旧后端忽略） */
   refine_targets?: PipelineRoleKey[];
+  /** A11：生成参数覆盖（缺省走后端默认；旧后端忽略） */
+  generation?: GenerationConfig;
 }

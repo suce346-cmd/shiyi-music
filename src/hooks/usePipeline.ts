@@ -353,6 +353,8 @@ export function usePipeline() {
         thinking: opts.settings.thinking ?? false,
         role_overrides: buildRoleOverrides(opts.settings),
         refine_targets: refineTargets,
+        // A11：生成参数直传（缺省后端用默认；旧后端忽略未知字段）
+        generation: opts.settings.generation,
       };
 
       try {
