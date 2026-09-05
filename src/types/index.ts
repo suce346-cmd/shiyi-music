@@ -116,6 +116,8 @@ export interface PipelineRequest {
   api_key: string;
   base_url: string;
   extra?: string;
+  /** F12：Mode C 原歌词独立字段（替代 extra 字符串拼接协议；旧后端无此字段时回退 extra） */
+  original_lyrics?: string;
   /** 思考模式：后端按模型能力路由表注入厂商思考参数（与 AppSettings.thinking 对齐） */
   thinking: boolean;
   /** 角色级 API 覆盖（可选）：某角色配了就用配的，空字段继承全局 */

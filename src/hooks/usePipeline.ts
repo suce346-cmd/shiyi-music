@@ -75,6 +75,8 @@ export interface PipelineRunOptions {
   userInput: string;
   settings: AppSettings;
   extra?: string;
+  /** F12：Mode C 原歌词独立字段（替代 extra 字符串拼接） */
+  originalLyrics?: string;
   /** 角色发言回调：每个专家产出/主持收口/校验结果时调用（追加到对话流） */
   onSpeech?: (speech: ChatTurn) => void;
 }
@@ -86,6 +88,8 @@ export interface PipelineRefineOptions {
   feedback: string;
   settings: AppSettings;
   extra?: string;
+  /** F12：Mode C 原歌词独立字段 */
+  originalLyrics?: string;
   /** 角色发言回调（同上） */
   onSpeech?: (speech: ChatTurn) => void;
 }
@@ -333,6 +337,8 @@ export function usePipeline() {
         api_key: opts.settings.apiKey,
         base_url: opts.settings.baseUrl,
         extra: opts.extra,
+        // F12：原歌词独立字段直传（旧 extra 字符串拼接协议退役，后端回退兼容旧请求）
+        original_lyrics: opts.originalLyrics,
         // 旧 localStorage 可能缺字段（合并默认值后恒为 boolean，兜底 || false）
         thinking: opts.settings.thinking ?? false,
         role_overrides: buildRoleOverrides(opts.settings),

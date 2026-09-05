@@ -6,7 +6,8 @@ interface Props {
   mode: Mode;
   disabled: boolean;
   settings: AppSettings;
-  onGenerate: (userInput: string) => void;
+  /** F12：mode_c 时附带原歌词独立字段（不再拼字符串） */
+  onGenerate: (userInput: string, extra?: { originalLyrics: string }) => void;
 }
 
 export default function InputPanel({ mode, disabled, settings, onGenerate }: Props) {
@@ -18,17 +19,20 @@ export default function InputPanel({ mode, disabled, settings, onGenerate }: Pro
   const handleSubmit = () => {
     if (!settings.apiKey) return;
     let userInput = "";
+    // F12：mode_c 原歌词独立字段直传——新主题即 userInput，原歌词走 extra.originalLyrics
+    let extra: { originalLyrics: string } | undefined;
     if (mode === "mode_a") {
       userInput = lyrics;
       if (lyrics.trim().length < 10) return;
     } else if (mode === "mode_c") {
-      userInput = `原歌词：\n${originalLyrics}\n\n新主题：\n${newTheme}`;
+      userInput = newTheme;
       if (!originalLyrics.trim() || !newTheme.trim()) return;
+      extra = { originalLyrics };
     } else {
       userInput = inspiration;
       if (!inspiration.trim()) return;
     }
-    onGenerate(userInput);
+    onGenerate(userInput, extra);
   };
 
   const canSubmit = (() => {

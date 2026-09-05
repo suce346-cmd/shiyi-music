@@ -7,7 +7,7 @@ import ResultPanel from "./components/ResultPanel";
 import StatusIndicator from "./components/StatusIndicator";
 import HistoryPanel from "./components/HistoryPanel";
 import RoundtablePanel from "./components/RoundtablePanel";
-import { useSettings } from "./hooks/useSettings";
+import { useSettingsWithSecrets } from "./hooks/useSettings";
 import { usePipeline, ROLE_NAMES } from "./hooks/usePipeline";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import type { Mode, ChatMessage, ChatTurn, HistoryEntry, LLMStatus, ExpertCard, PipelineRoleKey } from "./types";
@@ -73,7 +73,7 @@ export default function App() {
   const [testResult, setTestResult] = useState<"ok" | "fail" | null>(null);
   const [showRoleApi, setShowRoleApi] = useState(true); // 默认展开角色级 API（用户反馈看不到）
   const [expandedRole, setExpandedRole] = useState<PipelineRoleKey | null>(null);
-  const { settings, updateSettings, showSettings, setShowSettings } = useSettings();
+  const { settings, updateSettings, showSettings, setShowSettings, secretsReady } = useSettingsWithSecrets();
   const pipeline = usePipeline();
   const [detailExpert, setDetailExpert] = useState<ExpertCard | null>(null);
   /** llm-chunk 单例监听（H4：任何时刻最多一个，注册前先清旧的） */
@@ -199,10 +199,14 @@ export default function App() {
     setHistoryEntries(updated); saveHistory(updated);
   }, []);
 
-  const handleGenerate = useCallback(async (userInput: string) => {
+  const handleGenerate = useCallback(async (userInput: string, extra?: { originalLyrics: string }) => {
     const token = ++runTokenRef.current; // 作废旧 run（H4）
     setStatus("loading"); setStreamText(""); setErrorMessage("");
-    setLastUserInput(userInput);
+    // F12：mode_c 的 userInput 即新主题（原歌词走独立字段）；历史展示用拼接文本保留上下文
+    const displayInput = mode === "mode_c" && extra
+      ? `原歌词：\n${extra.originalLyrics}\n\n新主题：\n${userInput}`
+      : userInput;
+    setLastUserInput(displayInput);
     chatHistoryRef.current = [];
     speechLogRef.current = [];
     setConversation([]);
@@ -212,22 +216,14 @@ export default function App() {
     // 四模式统一走流水线（A/B/C/D）
     try {
       await ensureLlmListener(); // H5：失败抛错进 catch，不再卡死
-      // C 模式：从输入里拆出原歌词（"原歌词：...\n\n新主题：..."），extra 传原歌词
-      // P6：贪婪匹配到最后一个分隔符——原歌词内容里含"新主题："字样也安全
-      let extra: string | undefined;
-      let input = userInput;
-      if (mode === "mode_c") {
-        const m = userInput.match(/原歌词：\n([\s\S]*)\n\n新主题：\n([\s\S]*)$/);
-        if (m) {
-          extra = m[1];
-          input = m[2];
-        }
-      }
+      // F12：原歌词独立字段直传（旧字符串拼接+正则拆分+P6 补丁整条退役）
+      const originalLyrics = mode === "mode_c" ? extra?.originalLyrics : undefined;
       const raw = await pipeline.run({
         mode,
-        userInput: input,
+        userInput,
         settings,
-        extra,
+        extra: undefined,
+        originalLyrics,
         // 专家发言实时追加到对话流（记录进 speechLog，结束时合并，不进入 chatHistoryRef）
         onSpeech: (speech) => {
           // P5：阶段0流式结束后清空中间态流式文本（首个专家发言时），避免统领全文重复显示
@@ -238,17 +234,17 @@ export default function App() {
       });
       if (token !== runTokenRef.current) return; // 过期 run 的结果丢弃（H4）
       const allTurns: ChatTurn[] = [
-        { role: "user", content: userInput, timestamp: Date.now() },
+        { role: "user", content: displayInput, timestamp: Date.now() },
         ...speechLogRef.current,
         { role: "assistant", content: raw, timestamp: Date.now() },
       ];
       setConversation(allTurns);
       setStatus("done"); setStreamText("");
       chatHistoryRef.current = [
-        { role: "user", content: userInput },
+        { role: "user", content: displayInput },
         { role: "assistant", content: raw },
       ];
-      const entry: HistoryEntry = { id: newId(), mode, input: userInput, output: raw, conversation: allTurns, usage: { ...pipeline.usage }, timestamp: Date.now() };
+      const entry: HistoryEntry = { id: newId(), mode, input: displayInput, output: raw, conversation: allTurns, usage: { ...pipeline.usage }, timestamp: Date.now() };
       setCurrentHistoryId(entry.id);
       const updated = [entry, ...historyRef.current];
       setHistoryEntries(updated); saveHistory(updated);
@@ -271,13 +267,14 @@ export default function App() {
     let raw: string;
     try {
       await ensureLlmListener(); // H5：失败抛错进 catch，不再卡死
-      // C 模式：从原始输入里拆原歌词（P6：贪婪匹配最后一个分隔符）
-      let extra: string | undefined;
+      // F12：lastUserInput 是展示用拼接文本（原歌词+新主题），从中拆出两部分直传。
+      // 注意：这是展示文本的解析（用户可见格式，稳定），不是旧协议——新生成已不再依赖它。
+      let originalLyrics: string | undefined;
       let input = lastUserInput;
       if (mode === "mode_c") {
         const m = lastUserInput.match(/原歌词：\n([\s\S]*)\n\n新主题：\n([\s\S]*)$/);
         if (m) {
-          extra = m[1];
+          originalLyrics = m[1];
           input = m[2];
         }
       }
@@ -289,7 +286,8 @@ export default function App() {
         lastOutput,
         feedback,
         settings,
-        extra,
+        extra: undefined,
+        originalLyrics,
         onSpeech: (speech) => {
           // P5：阶段0流式结束后清空中间态流式文本（首个专家发言时）
           if (speechLogRef.current.length === 0) setStreamText("");
@@ -328,9 +326,16 @@ export default function App() {
     if (status === "error" && lastFeedback) {
       await handleRefine(lastFeedback);
     } else if (status === "error" && lastUserInput) {
-      await handleGenerate(lastUserInput);
+      // F12：重试走展示文本解析路径（handleGenerate 内部处理直传，此处传原始展示文本由其二次解析）
+      // 注意：mode_c 重试时 lastUserInput 为展示拼接文本，handleGenerate 会误判为新主题——
+      // 因此 mode_c 重试改走 refine 路径（带上次反馈），避免原歌词丢失
+      if (mode === "mode_c" && lastFeedback) {
+        await handleRefine(lastFeedback);
+      } else if (mode !== "mode_c") {
+        await handleGenerate(lastUserInput);
+      }
     }
-  }, [status, lastFeedback, lastUserInput, handleRefine, handleGenerate]);
+  }, [status, lastFeedback, lastUserInput, handleRefine, handleGenerate, mode]);
 
   const deleteHistory = (id: string) => { const u = historyEntries.filter(e => e.id !== id); setHistoryEntries(u); saveHistory(u); };
   const clearHistory = () => { setHistoryEntries([]); saveHistory([]); };
@@ -379,10 +384,11 @@ export default function App() {
             </div>
             <input type={showApiKey ? "text" : "password"} value={settings.apiKey}
               onChange={e => { updateSettings({ apiKey: e.target.value }); setTestResult(null); }}
+              disabled={!secretsReady}
               className="w-full bg-surface-0 border border-border/60 rounded-lg px-3 py-2 text-[13px]
                          text-text-1 placeholder:text-text-muted/30 focus:outline-none
                          focus:border-brand-500/40 focus:ring-1 focus:ring-brand-500/20
-                         transition-all duration-150" placeholder="sk-..." />
+                         transition-all duration-150 disabled:opacity-50" placeholder={secretsReady ? "sk-..." : "密钥加载中…"} />
           </div>
           <div className="flex gap-2">
             <div className="flex-1">
