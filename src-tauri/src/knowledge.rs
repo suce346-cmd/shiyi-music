@@ -317,7 +317,7 @@ impl KnowledgeBase {
     }
 
     /// 按"列名 → 候选值列表"过滤渲染（任一列任一候选 contains 命中即保留该行）。
-    /// 微观② 按需检索：命中时注入命中条目（max_rows 上限）；全部未命中时兜底注入前 3 条并标注。
+    /// 微观② 按需检索：命中时注入命中条目（max_rows 上限）；全部未命中时零行+无示例标注（M18，调用方走确定性默认）。
     /// cols：列投影（None=全列；角色裁剪字段用，过滤仍基于原表全列）。
     /// plan：当前方案文本——命中后按表路由多维排序（候选词命中数 + 能量距离/BPM/层级权重），
     /// 保证截断保留最相关条目（与 instruments 多维排序同一颗粒度）。
@@ -420,11 +420,12 @@ impl KnowledgeBase {
             .map(|(ri, _)| rows_all.get(*ri).cloned().unwrap_or_default())
             .collect();
         let hit = !matched.is_empty();
+        // M18：删随机兜底——未命中时不塞前 3 行，明确标注“无命中”，由调用方走确定性默认。
+        // 自矛盾指令“禁止照搬”同步删除，换成“按功能选用并说明理由”（M18，roles.rs 护栏同步）。
         let rows: Vec<&Vec<String>> = if hit {
             matched.iter().take(max_rows.unwrap_or(usize::MAX)).collect()
         } else {
-            // 兜底：示例特征（最多 3 条），明确标注未命中
-            rows_all.iter().take(3).collect()
+            Vec::new()
         };
         let mut out = String::new();
         out.push_str(&format!(
@@ -438,7 +439,7 @@ impl KnowledgeBase {
                     format!("按需命中 {} 条", matched.len())
                 }
             } else {
-                "未命中关键词，以下为示例特征（禁止照搬）".to_string()
+                "未命中关键词（无示例；请按功能选用并说明理由）".to_string()
             }
         ));
         out.push_str("| ");
@@ -459,7 +460,7 @@ impl KnowledgeBase {
 
     /// instruments 按能量区间过滤（数值比较）：energy_min ≤ e_max 且 energy_max ≥ e_min
     /// （与方案能量范围 [e_min, e_max] 有交集——覆盖情绪弧线两端，弱段低能量/强段高能量）。
-    /// 无交集时兜底前 3 条并标注。cols：列投影（None=全列；能量过滤基于原表列）。
+    /// 无交集时零行+无示例标注（M18）。cols：列投影（None=全列；能量过滤基于原表列）。
     pub fn render_instruments_by_energy(
         &self,
         e_min: u32,
@@ -478,7 +479,7 @@ impl KnowledgeBase {
         if e_min > e_max {
             let rows: Vec<&Vec<String>> = rows_all.iter().take(3).collect();
             return Ok(format!(
-                "## instruments 知识库（能量区间无效 {}~{}，以下为示例特征（禁止照搬））\n\n| {} |\n|{}|\n",
+                "## instruments 知识库（能量区间无效 {}~{}，无示例；请按功能选用并说明理由）\n\n| {} |\n|{}|\n",
                 e_min,
                 e_max,
                 headers.join(" | "),
@@ -536,10 +537,11 @@ impl KnowledgeBase {
             .map(|(ri, _)| rows_all.get(*ri).cloned().unwrap_or_default())
             .collect();
         let hit = !matched.is_empty();
+        // M18：删随机兜底——未命中时行数归零，只留标注；调用方走确定性默认
         let rows: Vec<&Vec<String>> = if hit {
             matched.iter().take(max_rows.unwrap_or(usize::MAX)).collect()
         } else {
-            rows_all.iter().take(3).collect()
+            Vec::new()
         };
         let mut out = String::new();
         out.push_str(&format!(
@@ -552,7 +554,7 @@ impl KnowledgeBase {
                     format!("按能量区间 {}~{} 命中 {} 件", e_min, e_max, matched.len())
                 }
             } else {
-                "未命中能量区间，以下为示例特征（禁止照搬）".to_string()
+                "未命中能量区间（无示例；请按功能选用并说明理由）".to_string()
             }
         ));
         out.push_str("| ");
@@ -1020,15 +1022,16 @@ mod tests {
         assert!(!out.contains("温柔"));
     }
 
-    /// 微观②：全部未命中 → 兜底前 3 条 + 未命中标注
+    /// 微观②改写（M18）：全部未命中 → 零行 + 无示例标注，由调用方走确定性默认
     #[test]
     fn render_filtered_any_no_match_fallback() {
         let t = parse_csv("t", "a,b\nx,1\ny,2\nz,3\nw,4\n").unwrap();
         let kb = KnowledgeBase { tables: [("t".to_string(), t)].into_iter().collect() };
         let out = kb.render_filtered_any("t", &[("a", &["zzz"])], None, "", None).unwrap();
         assert!(out.contains("未命中关键词"), "got: {}", out);
-        assert!(out.contains("| x | 1 |"));
-        assert!(!out.contains("| w | 4 |"), "兜底最多 3 条");
+        assert!(out.contains("无示例"), "未命中应明确无示例: {}", out);
+        assert!(out.contains("按功能选用并说明理由"), "未命中应给新指令: {}", out);
+        assert!(!out.contains("| x | 1 |"), "M18 后未命中不再塞随机行: {}", out);
     }
 
     /// 微观②：instruments 能量区间过滤（数值比较 + 上限）

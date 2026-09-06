@@ -323,7 +323,7 @@ fn matching_keywords(plan: &str, candidates: &[String]) -> Vec<String> {
 // - 关键词表（emotions/cliches/hooks）：命中 6 条封顶——主词 1-3 个 + 近邻，6 条覆盖完整
 // - 流派表：3 条封顶——方案通常命中 1-2 个流派，3 条少而准
 // - 乐器表：15 件封顶——能量区间覆盖弧线两端，"少而准"验证值
-// - 未命中兜底：3 条示例（渲染函数内建行为，无常量——见 render_filtered_any 内部）
+// - 未命中：零行+无示例标注（M18，调用方走确定性默认；见 render_filtered_any 内部）
 // - suno_rules：校验员全量（40 条 < 50 截断上限）；其他角色按规则子集过滤
 // - 单角色一次注入总字数封顶：预算按最坏情况实测标定（制作人最大 ≈ 3900 字，取 4000）
 // ---------------------------------------------------------------------------
@@ -1900,9 +1900,10 @@ mod tests {
         let out = inject_knowledge(&kb, &[("style_genre", &[], &[]), ("instruments", &[], &[]), ("suno_rules", &[], &[])], "深夜室内民谣 能量:3 Chorus 能量:8");
         assert!(out.contains("按需命中"), "style_genre 应命中: {}", &out[..out.len().min(200)]);
         assert!(out.contains("suno_rules 知识库"), "suno_rules 应全量注入");
-        // 情感分析师注入：方案无情绪词 → 兜底标注
+        // 情感分析师注入：方案无情绪词 → M18 无示例标注（调用方走确定性默认）
         let out2 = inject_knowledge(&kb, &[("emotions", &[], &[])], "纯粹描述画面没有情绪词");
-        assert!(out2.contains("未命中关键词"), "emotions 应兜底: {}", &out2[..out2.len().min(200)]);
+        assert!(out2.contains("未命中关键词"), "emotions 应标注无命中: {}", &out2[..out2.len().min(200)]);
+        assert!(out2.contains("无示例"), "emotions 无命中应明确无示例: {}", &out2[..out2.len().min(200)]);
         // 方案含情绪词 → 命中
         let out3 = inject_knowledge(&kb, &[("emotions", &[], &[])], "这首歌的情绪是孤独与自嘲");
         assert!(out3.contains("按需命中"), "emotions 应命中: {}", &out3[..out3.len().min(200)]);
