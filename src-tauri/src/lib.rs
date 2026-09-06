@@ -1,10 +1,10 @@
-mod budget;
-mod commands;
-mod energy;
-mod errors;
-mod knowledge;
-mod logging;
-mod models;
+pub mod budget;
+pub mod commands;
+pub mod energy;
+pub mod errors;
+pub mod knowledge;
+pub mod logging;
+pub mod models;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

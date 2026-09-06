@@ -1033,7 +1033,8 @@ pub async fn run_pipeline<R: Runtime>(app: AppHandle<R>, request: PipelineReques
 }
 
 /// run_pipeline 的可测形态：超时时长参数化（生产 15 分钟，测试注入极小值）
-pub(crate) async fn run_pipeline_with_timeout<R: Runtime>(
+/// pub 可见性供无头集成测试（tests/headless_modes.rs）直调；生产仍走 run_pipeline。
+pub async fn run_pipeline_with_timeout<R: Runtime>(
     app: AppHandle<R>,
     request: PipelineRequest,
     timeout: Duration,
@@ -1392,8 +1393,8 @@ pub async fn cancel_pipeline(app: tauri::AppHandle, run_id: Option<String>) {
 /// 从检查点续跑（前端"从上次继续"按钮调）——断点方案直接进终稿，不重跑讨论轮。
 /// 检查点缺失/损坏 → 明确报错（不静默全量重跑，避免用户误以为续跑实则从头来）。
 #[tauri::command]
-pub async fn pipeline_resume(
-    app: tauri::AppHandle,
+pub async fn pipeline_resume<R: Runtime>(
+    app: AppHandle<R>,
     request: PipelineRequest,
     run_id: String,
 ) -> Result<String, AppError> {

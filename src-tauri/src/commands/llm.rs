@@ -188,9 +188,11 @@ fn apply_thinking(body: &mut Value, model: &str, max_tokens: u32) {
     body["max_tokens"] = max_tokens.max(THINKING_MAX_TOKENS).into();
 }
 
-/// 截断判定——finish_reason == "length" 表示输出被 max_tokens 截断
+/// 截断判定——finish_reason == "length"（网关 max_tokens 截断）
+/// 或 "truncated_by_budget"（R8 保底断流：可用预算耗尽主动断开，内容不全）都算截断，
+/// 调用方按既有分级处置（阶段 0 报错、汇总继续、格式进 issue）。
 pub(crate) fn is_truncated(finish_reason: &Option<String>) -> bool {
-    finish_reason.as_deref() == Some("length")
+    matches!(finish_reason.as_deref(), Some("length") | Some("truncated_by_budget"))
 }
 
 /// 从非流式响应中提取（正文 content, finish_reason, usage）（纯函数，可测）。
@@ -230,21 +232,55 @@ async fn send_and_extract(
         reserve,
     )
     .await?;
-    let status = resp.status();
-    if !status.is_success() {
-        let err = resp
-            .text()
+    // R7：非流式 body 解码失败重试一次（网关抖动下 body 半截是常态；B/C/D 三挂全死在这里）。
+    // 仅解码路径重试：HTTP 状态错误仍直接分类返回，不碰 retry_plan 通道，避免双重退避。
+    // body 字节一次读完后解析，失败则同参重发一次（预算闸门同样生效）。
+    async fn extract_once(
+        client: &Client,
+        url: &str,
+        api_key: &str,
+        body: &Value,
+        budget: &SharedBudget,
+        run_id: &str,
+        reserve: std::time::Duration,
+    ) -> Result<LLMResponse, AppError> {
+        let r = send_with_retry(
+            client
+                .post(url)
+                .header("Authorization", format!("Bearer {}", api_key))
+                .header("Content-Type", "application/json")
+                .json(body),
+            budget,
+            run_id,
+            reserve,
+        )
+        .await?;
+        let status = r.status();
+        if !status.is_success() {
+            let err = r
+                .text()
+                .await
+                .unwrap_or_else(|_| "unknown error".to_string());
+            return Err(AppError::api_status(status.as_u16(), &truncate_err(&err)));
+        }
+        let bytes = r
+            .bytes()
             .await
-            .unwrap_or_else(|_| "unknown error".to_string());
-        return Err(AppError::api_status(status.as_u16(), &truncate_err(&err)));
+            .map_err(|e| AppError::new(ErrorKind::Network, format!("Stream error: {}", e)))?;
+        let json: Value = serde_json::from_slice(&bytes)
+            .map_err(|e| AppError::new(ErrorKind::Parse, format!("API response parse failed: {}", e)))?;
+        let (raw, finish_reason, usage) = extract_message(&json)
+            .ok_or_else(|| AppError::new(ErrorKind::Parse, "API response missing content".to_string()))?;
+        Ok(LLMResponse { raw, finish_reason, usage })
     }
-    let json: Value = resp
-        .json()
-        .await
-        .map_err(|e| AppError::new(ErrorKind::Parse, format!("API response parse failed: {}", e)))?;
-    let (raw, finish_reason, usage) = extract_message(&json)
-        .ok_or_else(|| AppError::new(ErrorKind::Parse, "API response missing content".to_string()))?;
-    Ok(LLMResponse { raw, finish_reason, usage })
+    match extract_once(client, url, api_key, body, budget, run_id, reserve).await {
+        Ok(resp) => Ok(resp),
+        Err(e) if e.kind == ErrorKind::Parse || e.message.starts_with("Stream error") => {
+            tracing::warn!(error = %e.message, "非流式响应解码失败，同参重发一次");
+            extract_once(client, url, api_key, body, budget, run_id, reserve).await
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// 无流式的单次 LLM 调用（流水线步骤用）。
@@ -339,7 +375,7 @@ pub(crate) async fn call_llm_stream<R: Runtime>(
     )
     .await?;
 
-    stream_response(app, response, run_id).await
+    stream_response(app, response, run_id, budget, reserve).await
 }
 
 /// 解析单行 SSE 数据（`data: ...` 前缀行，兼容 `data:{...}` 无空格变体，尾部行修复）。
@@ -379,10 +415,14 @@ fn parse_sse_line(
 
 /// 解析 SSE 流并逐 chunk 发送给前端。
 /// 维护跨 chunk 行缓冲区，确保被拆分的 JSON 行不会丢失。
+/// R8：按保底断流——可用预算（remaining - reserve）耗尽时不断死，
+/// 带着已收内容正常返回（finish_reason 记 truncated_by_budget，调用方按截断分级处置）。
 async fn stream_response<R: Runtime>(
     app: AppHandle<R>,
     response: reqwest::Response,
     run_id: &str,
+    budget: &SharedBudget,
+    reserve: std::time::Duration,
 ) -> Result<LLMResponse, AppError> {
     let status = response.status();
     if !status.is_success() {
@@ -401,11 +441,23 @@ async fn stream_response<R: Runtime>(
     let mut stream = response.bytes_stream();
     let started = std::time::Instant::now();
     let mut last_log = std::time::Instant::now();
+    // R8：是否触发过保底断流（触发后 finish_reason 记 truncated_by_budget）
+    let mut budget_cut = false;
 
     while let Some(chunk_result) = stream.next().await {
         // 取消检查点——按 run_id 隔离
         if crate::commands::cancel::is_cancelled(run_id) {
             return Err(AppError::cancelled());
+        }
+        // R8：保底断流——可用耗尽时不断死，带已收内容返回（空正文才报错）
+        if budget.remaining_for_discussion(reserve).is_zero() {
+            tracing::warn!(
+                elapsed_secs = started.elapsed().as_secs(),
+                chars = full_content.chars().count(),
+                "流式可用预算耗尽，保底断流（已收内容返回，调用方按截断处置）"
+            );
+            budget_cut = true;
+            break;
         }
         if last_log.elapsed().as_secs() >= 30 {
             tracing::info!(elapsed_secs = started.elapsed().as_secs(), chars = full_content.chars().count(), "流式进行中");
@@ -446,6 +498,12 @@ async fn stream_response<R: Runtime>(
             ErrorKind::Parse,
             "思考模式流式响应无正文（思维链可能耗尽预算）",
         ));
+    }
+    // R8：保底断流且网关没给 finish_reason（没发完）→ 记 truncated_by_budget；
+    // 网关给了（正常 stop/length）则保留网关的。调用方 is_truncated 认该标记，
+    // 按既有截断分级处置（阶段 0 报错、汇总继续、格式进 issue）。
+    if budget_cut && finish_reason.is_none() {
+        finish_reason = Some("truncated_by_budget".to_string());
     }
 
     Ok(LLMResponse {
@@ -732,6 +790,8 @@ mod tests {
     #[test]
     fn is_truncated_only_for_length() {
         assert!(is_truncated(&Some("length".to_string())));
+        // R8：保底断流标记同样算截断（调用方按既有分级处置）
+        assert!(is_truncated(&Some("truncated_by_budget".to_string())));
         assert!(!is_truncated(&Some("stop".to_string())));
         assert!(!is_truncated(&None));
         assert!(!is_truncated(&Some("tool_calls".to_string())));

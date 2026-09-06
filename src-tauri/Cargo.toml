@@ -19,6 +19,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dev-dependencies]
+# 无头实网测试用 mock_app（tauri test 特性仅 dev 期启用，不进生产包）
+tauri = { version = "2", features = ["custom-protocol", "test"] }
 
 [dependencies]
 tauri = { version = "2", features = ["custom-protocol"] }
