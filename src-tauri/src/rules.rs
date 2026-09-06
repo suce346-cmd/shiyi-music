@@ -38,11 +38,13 @@ pub const DOUYIN_DESC_LINE_MAX_CHARS: usize = 80;
 /// Mode C 尾部收尾允许行数
 pub const LYRIC_FILL_TAIL_ALLOW: usize = 2;
 
-/// 弧线参数区间（Weirdness min/max + Style Influence min/max），与 suno_rules.csv 同源。
+/// 弧线参数区间（Weirdness min/max + Style Influence min/max），以 suno_rules.csv 为真源。
+/// CSV 中 style_arc_high 的 Style Influence 上限为 90（非 95），此处与其对齐；
+/// 其余 9 条弧线 Weirdness 只散在 CSV 描述文本中，无结构化列，数值沿用既有 prose 共识。
 /// 顺序：标准叙事 / 全程高能 / 高开低走 / 平铺氛围 / 起伏戏剧 / 阶梯上升 / 渐进爆发 / U型 / 单峰 / 回环。
 pub const ARC_PARAMS: &[(&str, u32, u32, u32, u32)] = &[
     ("标准叙事", 22, 28, 78, 83),
-    ("全程高能", 10, 15, 85, 95),
+    ("全程高能", 10, 15, 85, 90),
     ("高开低走", 25, 35, 70, 80),
     ("平铺氛围", 15, 25, 80, 90),
     ("起伏戏剧", 28, 35, 75, 82),
@@ -74,7 +76,7 @@ pub fn checklist(mode: &str) -> &'static str {
     }
 }
 
-const CHECKLIST_AB: &str = "【校验清单 A/B·单源】Style Prompt≤350字符且≥30字符；结构标签≥2段；能量差≥3级（0-10）；配器差≥2件、单段3-7件、最弱段≥2件、最强段≥5件；弧线参数：标准叙事22-28/78-83、全程高能10-15/85-95、高开低走25-35/70-80、平铺氛围15-25/80-90、起伏戏剧28-35/75-82、阶梯上升20-28/78-88、渐进爆发15-25/80-90、U型25-35/70-82、单峰20-30/75-85、回环20-28/78-85；Audio Influence=0；断句单空格、禁/与、标点全半角。";
+const CHECKLIST_AB: &str = "【校验清单 A/B·单源】Style Prompt≤350字符且≥30字符；结构标签≥2段；能量差≥3级（0-10）；配器差≥2件、单段3-7件、最弱段≥2件、最强段≥5件；弧线参数：标准叙事22-28/78-83、全程高能10-15/85-90、高开低走25-35/70-80、平铺氛围15-25/80-90、起伏戏剧28-35/75-82、阶梯上升20-28/78-88、渐进爆发15-25/80-90、U型25-35/70-82、单峰20-30/75-85、回环20-28/78-85；Audio Influence=0；断句单空格、禁/与、标点全半角。";
 const CHECKLIST_C: &str = "【校验清单 C·单源】逐行等字数（差一字即失败，尾部≤2行收尾）；行数与原歌词一致；段落结构与原歌词一致（禁新增Hook/Chorus段）；韵脚位置与模式保留；说明行带方括号；Style Prompt≤350字符；断句单空格、禁/与、标点全半角。";
 const CHECKLIST_D: &str = "【校验清单 D·单源】Hook≥2次；单段Verse≤4行；每行≤10字；结尾骤停（一刀切，含abruptly/cut标识）；BPM≥90；Style Prompt≤350字符且≥30字符；说明行≤80字符；参数抖音12-20/85-95（叙事型结构可回落A/B弧线区间须说明理由）；Audio Influence=0；断句单空格、禁/与、标点全半角。";
 
@@ -148,5 +150,21 @@ mod tests {
             assert!(ab.contains(&frag), "清单缺区间 {}", frag);
             let _ = (smin, smax);
         }
+    }
+
+    #[test]
+    fn arc_high_matches_csv_structured_value() {
+        // Q1真源锁：全程高能 Style Influence 上限以 CSV style_arc_high 为准（85-90）。
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("knowledge");
+        let kb = crate::knowledge::KnowledgeBase::load(&dir).unwrap();
+        let table = kb.table("suno_rules").expect("suno_rules 缺失");
+        let rule_idx = table.header_index("rule").expect("缺 rule 列");
+        let min_idx = table.header_index("value_min").expect("缺 value_min 列");
+        let max_idx = table.header_index("value_max").expect("缺 value_max 列");
+        let row = table.rows.iter().find(|r| r.get(rule_idx).map(|s| s.as_str()) == Some("style_arc_high")).expect("缺 style_arc_high 行");
+        let csv_min: u32 = row[min_idx].parse().expect("value_min 非数字");
+        let csv_max: u32 = row[max_idx].parse().expect("value_max 非数字");
+        let (_, _, _, smin, smax) = ARC_PARAMS.iter().find(|(n, _, _, _, _)| *n == "全程高能").expect("缺全程高能");
+        assert_eq!((*smin, *smax), (csv_min, csv_max), "全程高能须与 CSV style_arc_high 同源");
     }
 }

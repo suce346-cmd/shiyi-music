@@ -251,7 +251,7 @@ pub fn mode_a_system_prompt() -> &'static str {
 ### 6. Suno 参数
 根据弧线类型选值：
 - 标准叙事型：Weirdness 22-28 | Style Influence 78-83
-- 全程高能型：Weirdness 10-15 | Style Influence 85-95
+- 全程高能型：Weirdness 10-15 | Style Influence 85-90
 - 高开低走型：Weirdness 25-35 | Style Influence 70-80
 - 平铺氛围型：Weirdness 15-25 | Style Influence 80-90
 - 起伏戏剧型：Weirdness 28-35 | Style Influence 75-82
