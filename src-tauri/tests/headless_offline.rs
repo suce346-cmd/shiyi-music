@@ -9,7 +9,7 @@ use suno_prompt_generator_lib::commands::validator::{
 };
 use suno_prompt_generator_lib::models::{Mode, PipelineRole};
 
-/// R6：四模式座位含主持/校验落座（A=4、B=5、C=4、D=6）
+/// R6：四模式座位含主持/校验落座（A=4、B=5、C=3、D=6；Q6：C 摘制作人）
 #[test]
 fn seats_include_host_and_auditor() {
     let a = seats_for_mode(&Mode::ModeA);
@@ -21,19 +21,19 @@ fn seats_include_host_and_auditor() {
     assert_eq!(b.len(), 5, "Mode B 座位应为 5，实际 {:?}", b);
 
     let c = seats_for_mode(&Mode::ModeC);
-    assert_eq!(c.len(), 4, "Mode C 座位应为 4（改词+制作+主持+校验），实际 {:?}", c);
+    assert_eq!(c.len(), 3, "Mode C 座位应为 3（改词+主持+校验），实际 {:?}", c);
 
     let d = seats_for_mode(&Mode::ModeD);
     assert_eq!(d.len(), 6, "Mode D 座位应为 6，实际 {:?}", d);
     assert!(d.contains(&PipelineRole::StyleAnalyst), "Mode D 座位缺流行风格分析师");
 }
 
-/// steps 语义不变：讨论轮只跑动态角色（A=2、B=3、C=2、D=4，不含主持/校验）
+/// steps 语义不变：讨论轮只跑动态角色（A=2、B=3、C=1、D=4，不含主持/校验；Q6：C 只留改词）
 #[test]
 fn steps_exclude_host_and_auditor() {
     assert_eq!(steps_for_mode(&Mode::ModeA).len(), 2);
     assert_eq!(steps_for_mode(&Mode::ModeB).len(), 3);
-    assert_eq!(steps_for_mode(&Mode::ModeC).len(), 2);
+    assert_eq!(steps_for_mode(&Mode::ModeC).len(), 1);
     assert_eq!(steps_for_mode(&Mode::ModeD).len(), 4);
     for mode in [Mode::ModeA, Mode::ModeB, Mode::ModeC, Mode::ModeD] {
         let roles: Vec<_> = steps_for_mode(&mode).iter().map(|s| s.role).collect();

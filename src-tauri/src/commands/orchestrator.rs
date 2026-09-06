@@ -28,8 +28,8 @@ pub fn steps_for_mode(mode: &Mode) -> Vec<PipelineStep> {
         Mode::ModeB => vec![Emotion, Lyricist, Producer],
         // 歌词模式（ModeA）：情感 → 制作（跳过作词）
         Mode::ModeA => vec![Emotion, Producer],
-        // 改写模式（ModeC）：改词 → 制作
-        Mode::ModeC => vec![Reviser, Producer],
+        // 改写模式（ModeC）：只留改词（Q6：C 初稿无 Style Prompt 可审，制作人每轮空转；改词线由改词+校验收口）
+        Mode::ModeC => vec![Reviser],
         // 抖音（ModeD）：情感 → 作词 → 流行 → 制作
         Mode::ModeD => vec![Emotion, Lyricist, StyleAnalyst, Producer],
     }
@@ -1556,7 +1556,8 @@ mod tests {
     fn steps_for_mode_c_starts_with_reviser() {
         let steps = steps_for_mode(&Mode::ModeC);
         assert!(steps.first().unwrap().role == PipelineRole::Reviser);
-        assert_eq!(steps.len(), 2);
+        // Q6：C 只留改词（制作人无 Style Prompt 可审已摘除），steps=1
+        assert_eq!(steps.len(), 1);
     }
 
     #[test]
@@ -2129,6 +2130,8 @@ mod tests {
         })
         .collect();
         assert_eq!(meta_modes["mode_a"], vec![PipelineRole::Emotion, PipelineRole::Producer, PipelineRole::Host, PipelineRole::Auditor]);
+        // Q6：C 只留改词（制作人无 Style Prompt 可审已摘除），座位=3
+        assert_eq!(meta_modes["mode_c"], vec![PipelineRole::Reviser, PipelineRole::Host, PipelineRole::Auditor]);
         assert_eq!(
             meta_modes["mode_d"],
             vec![PipelineRole::Emotion, PipelineRole::Lyricist, PipelineRole::StyleAnalyst, PipelineRole::Producer, PipelineRole::Host, PipelineRole::Auditor]

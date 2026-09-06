@@ -29,10 +29,9 @@ export const MODE_EXPERTS: Record<Mode, Omit<ExpertCard, "status" | "note">[]> =
     { id: "host", name: "主持人", emoji: "👑", color: "#f59e0b", knowledge: [] },
     { id: "auditor", name: "校验员", emoji: "🔍", color: "#a3a3a3", knowledge: ["suno_rules"] },
   ],
-  // 改写模式(C)：改词 → 制作 + 固定
+  // 改写模式(C)：改词 + 固定（Q6：制作人无 Style Prompt 可审，已摘除）
   mode_c: [
     { id: "reviser", name: "改词人", emoji: "✍️", color: "#7ec8a0", knowledge: ["cliches"] },
-    { id: "producer", name: "制作人", emoji: "🎤", color: "#f5b35c", knowledge: ["style_genre", "instruments", "suno_rules"] },
     { id: "host", name: "主持人", emoji: "👑", color: "#f59e0b", knowledge: [] },
     { id: "auditor", name: "校验员", emoji: "🔍", color: "#a3a3a3", knowledge: ["suno_rules"] },
   ],
