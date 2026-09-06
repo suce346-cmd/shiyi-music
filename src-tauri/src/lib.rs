@@ -5,6 +5,7 @@ pub mod errors;
 pub mod knowledge;
 pub mod logging;
 pub mod models;
+pub mod rules;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

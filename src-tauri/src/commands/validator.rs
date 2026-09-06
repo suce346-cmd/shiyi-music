@@ -3,12 +3,15 @@
 //! 不信任 LLM 的自检（同一模型自审有盲区），格式类规则由代码裁决。
 //! 校验失败时返回具体问题清单供主持人重收口。
 //!
-//! ⚠️ 双源维护提醒：本文件的规则阈值（≤350/断句/骤停/参数区间/字数）与
-//! `roles.rs` 中校验员 prompt 的格式规范**同步维护**——改任一处必须改另一处，
+//! ⚠️ 双源维护提醒：本文件的规则阈值引用 `crate::rules` 单源常量
+//! （STYLE_PROMPT_MAX_CHARS/MIN_ENERGY_GAP/MIN_INSTRUMENT_GAP 等），
+//! `roles.rs` 校验员 prompt 的格式规范通过 `rules::checklist` 同源拼接——
+//! 改数值只改 `rules.rs`，改任一处必须跑单源一致单测，
 //! 否则会出现「prompt 说合规、代码说不合规」的漂移。
 
 // 能量解析唯一实现在 energy.rs（原先 validator/knowledge 各持一份拷贝）
 use crate::energy::extract_energy_values;
+use crate::rules;
 
 /// 校验结果
 #[derive(Debug, Clone, PartialEq)]
@@ -105,52 +108,52 @@ fn extract_section_instrument_counts(text: &str) -> Vec<(String, usize)> {
 pub fn validate_production(mode: &str, text: &str) -> ValidationResult {
     let mut issues = Vec::new();
 
-    // 1. Style Prompt 长度 < 350
+    // 1. Style Prompt 长度 ≤ 单源上限
     match extract_style_prompt(text) {
         Some(sp) => {
             let len = sp.chars().count();
-            if len > 350 {
-                issues.push(format!("Style Prompt 长度 {} 超限（> 350）", len));
+            if len > rules::STYLE_PROMPT_MAX_CHARS {
+                issues.push(format!("Style Prompt 长度 {} 超限（> {}）", len, rules::STYLE_PROMPT_MAX_CHARS));
             }
         }
         None => issues.push("未找到 Style Prompt 字段".to_string()),
     }
 
-    // 2. 结构标签必须存在（至少 2 个段落）
+    // 2. 结构标签必须存在（至少单源段落数）
     let tags = extract_section_tags(text);
-    if tags.len() < 2 {
-        issues.push(format!("结构标签不足 2 个（当前 {}）", tags.len()));
+    if tags.len() < rules::MIN_SECTION_TAGS {
+        issues.push(format!("结构标签不足 {} 个（当前 {}）", rules::MIN_SECTION_TAGS, tags.len()));
     }
 
-    // 3. 能量差 >= 3 级（真解析数值，而非仅看关键词）
+    // 3. 能量差 ≥ 单源下限（真解析数值，而非仅看关键词）
     let energy = extract_energy_values(text);
     if energy.is_empty() {
         issues.push("未发现能量标注（应包含 0-10 能量值）".to_string());
     } else {
         let min = energy.iter().min().copied().unwrap_or(0);
         let max = energy.iter().max().copied().unwrap_or(0);
-        if max.saturating_sub(min) < 3 {
+        if max.saturating_sub(min) < rules::MIN_ENERGY_GAP {
             issues.push(format!(
-                "能量差不足: 最弱 {} vs 最强 {}（要求差 >= 3 级）",
-                min, max
+                "能量差不足: 最弱 {} vs 最强 {}（要求差 >= {} 级）",
+                min, max, rules::MIN_ENERGY_GAP
             ));
         }
     }
 
-    // 4. 配器差 >= 2 件：解析每段说明行乐器数（Mode A/B 都校验，低危修复）
+    // 4. 配器差 ≥ 单源下限：解析每段说明行乐器数（Mode A/B 都校验，低危修复）
     if mode == "mode_a" || mode == "mode_b" {
         let counts = extract_section_instrument_counts(text);
         if !counts.is_empty() {
             let min_count = counts.iter().map(|(_, c)| *c).min().unwrap_or(0);
             let max_count = counts.iter().map(|(_, c)| *c).max().unwrap_or(0);
-            if max_count.saturating_sub(min_count) < 2 {
+            if max_count.saturating_sub(min_count) < rules::MIN_INSTRUMENT_GAP {
                 issues.push(format!(
-                    "配器差不足: 最少 {} 件 / 最多 {} 件（要求差 >= 2 件）",
-                    min_count, max_count
+                    "配器差不足: 最少 {} 件 / 最多 {} 件（要求差 >= {} 件）",
+                    min_count, max_count, rules::MIN_INSTRUMENT_GAP
                 ));
             }
-            if max_count > 7 {
-                issues.push(format!("配器过多: 最多 {} 件（要求 <= 7）", max_count));
+            if max_count > rules::INSTRUMENT_MAX {
+                issues.push(format!("配器过多: 最多 {} 件（要求 <= {}）", max_count, rules::INSTRUMENT_MAX));
             }
         } else {
             issues.push("未找到任何说明行（每段应含 [乐器1+行为, ...] 说明行）".to_string());
@@ -236,7 +239,7 @@ pub fn validate_lyric_fill(original: &str, new: &str) -> ValidationResult {
             n,
             new_lines.len()
         ));
-    } else if new_lines.len() > n + 2 {
+    } else if new_lines.len() > n + rules::LYRIC_FILL_TAIL_ALLOW {
         issues.push(format!(
             "歌词行数过多: 原 {} 行 vs 新 {} 行（仅允许尾部 ≤2 行收尾）",
             n,
@@ -252,13 +255,13 @@ pub fn validate_douyin(text: &str) -> ValidationResult {
     let mut issues = Vec::new();
     let tags = extract_section_tags(text);
 
-    // 1. 至少 2 次 Hook
+    // 1. 至少单源 Hook 次数
     let hook_count = tags.iter().filter(|t| t.contains("Hook")).count();
-    if hook_count < 2 {
-        issues.push(format!("Hook 出现 {} 次（要求 >= 2）", hook_count));
+    if hook_count < rules::HOOK_MIN_COUNT {
+        issues.push(format!("Hook 出现 {} 次（要求 >= {}）", hook_count, rules::HOOK_MIN_COUNT));
     }
 
-    // 2. Verse 不超过 4 行（逐段结算——旧实现每遇新 Verse 重置计数，
+    // 2. Verse 不超过单源行数（逐段结算——旧实现每遇新 Verse 重置计数，
     //    多段 Verse 只检查了最后一段，前面段落超行漏检）
     let lines: Vec<&str> = text.lines().collect();
     let mut verse_counts: Vec<(String, usize)> = Vec::new();
@@ -288,8 +291,8 @@ pub fn validate_douyin(text: &str) -> ValidationResult {
         verse_counts.push((label, verse_line_count));
     }
     for (label, count) in &verse_counts {
-        if *count > 4 {
-            issues.push(format!("{} 行数 {} 超限（要求 <= 4）", label, count));
+        if *count > rules::VERSE_MAX_LINES {
+            issues.push(format!("{} 行数 {} 超限（要求 <= {}）", label, count, rules::VERSE_MAX_LINES));
         }
     }
 
@@ -303,7 +306,7 @@ pub fn validate_douyin(text: &str) -> ValidationResult {
         issues.push("缺少骤停标记（结尾应一刀切）".to_string());
     }
 
-    // 4. 每行歌词 <= 10 字（排除结构标签/说明行/Style Prompt/参数行）
+    // 4. 每行歌词 ≤ 单源字数（排除结构标签/说明行/Style Prompt/参数行）
     let lyric_lines: Vec<&str> = text
         .lines()
         .map(|l| l.trim())
@@ -331,15 +334,15 @@ pub fn validate_douyin(text: &str) -> ValidationResult {
             .filter(|c| !c.is_ascii_punctuation() && !c.is_whitespace())
             .collect();
         let count = chars.chars().count();
-        if count > 10 {
+        if count > rules::DOUYIN_LINE_MAX_CHARS {
             overlong += 1;
             if overlong <= 3 {
-                issues.push(format!("歌词行超 10 字（{} 字）: {}", count, line));
+                issues.push(format!("歌词行超 {} 字（{} 字）: {}", rules::DOUYIN_LINE_MAX_CHARS, count, line));
             }
         }
     }
     if overlong > 3 {
-        issues.push(format!("共 {} 行歌词超 10 字", overlong));
+        issues.push(format!("共 {} 行歌词超 {} 字", overlong, rules::DOUYIN_LINE_MAX_CHARS));
     }
 
     if issues.is_empty() { ValidationResult::ok() } else { ValidationResult::fail(issues) }
@@ -349,8 +352,8 @@ pub fn validate_douyin(text: &str) -> ValidationResult {
 /// mode_a/b 的调性节奏块（:94/:1009）无区间要求——不设代码区间，避免误杀原指令合法输出，
 /// BPM 合理性由制作人讨论轮审查兜底）
 pub fn check_bpm_range(mode: &str, bpm: u32) -> Option<String> {
-    if mode == "mode_d" && bpm < 90 {
-        Some(format!("BPM {} 低于抖音模式要求 90（原指令 BPM>=90）", bpm))
+    if mode == "mode_d" && bpm < rules::DOUYIN_BPM_MIN {
+        Some(format!("BPM {} 低于抖音模式要求 {}（原指令 BPM>=90）", bpm, rules::DOUYIN_BPM_MIN))
     } else {
         None
     }
@@ -363,7 +366,7 @@ pub fn check_bpm_range(mode: &str, bpm: u32) -> Option<String> {
 pub fn check_style_prompt_blocks(style_prompt: &str) -> Vec<String> {
     let mut issues = Vec::new();
     let chars = style_prompt.chars().count();
-    if chars < 30 {
+    if chars < rules::STYLE_PROMPT_MIN_CHARS {
         issues.push(format!("Style Prompt 过短（{} 字符），缺少信息块", chars));
     }
     issues

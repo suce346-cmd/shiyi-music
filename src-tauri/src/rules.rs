@@ -1,0 +1,152 @@
+//! 规则单源（P4 / 知识质量方案 C1 共用）：阈值只定义一次。
+//!
+//! - 本文件是数字的唯一 Rust 真源：`validator.rs` 的硬校验必须引用此处常量，
+//!   不得再手写 350/3/2/7/2/4/10/90 等裸数字（防 drift）。
+//! - `checklist(mode)` 是数字的唯一 prose 载体：校验员/审改提示词中重复的
+//!   参数区间数字已删，改为拼接本清单（M4）。清单文本与常量同文件手写一次，
+//!   由本文件单测锁 verbatim 一致。
+//! - `host_primer(mode)` 是阶段 0 地基：模式专属、每模式 ≤800 字、只读裁剪，
+//!   顺序按 M9（受众→物件→约束→旋律）排段。主持人保持零 CSV 检索语义，仅加静态地基。
+//! - 无新增依赖，无网络调用，无凭据改动。
+
+/// Style Prompt 上限字符数（含空格）
+pub const STYLE_PROMPT_MAX_CHARS: usize = 350;
+/// Style Prompt 过短告警下限（极端缺失提示）
+pub const STYLE_PROMPT_MIN_CHARS: usize = 30;
+/// 结构标签最少段落数
+pub const MIN_SECTION_TAGS: usize = 2;
+/// 最弱 vs 最强能量差下限（0-10 标尺）
+pub const MIN_ENERGY_GAP: u32 = 3;
+/// 最弱 vs 最强配器件数差下限
+pub const MIN_INSTRUMENT_GAP: usize = 2;
+/// 全曲核心乐器上限
+pub const INSTRUMENT_MAX: usize = 7;
+/// 最弱段至少件数
+pub const MIN_INSTRUMENT_WEAK: usize = 2;
+/// 最强段至少件数
+pub const MIN_INSTRUMENT_STRONG: usize = 5;
+/// D 模式 Hook 最少次数
+pub const HOOK_MIN_COUNT: usize = 2;
+/// D 模式单段 Verse 上限行数
+pub const VERSE_MAX_LINES: usize = 4;
+/// D 模式每行歌词上限字数（去空白与半角标点后计数）
+pub const DOUYIN_LINE_MAX_CHARS: usize = 10;
+/// D 模式 BPM 下限
+pub const DOUYIN_BPM_MIN: u32 = 90;
+/// D 模式说明行上限字符数（auditor 格式规范；代码校验未强制，讨论轮把关）
+pub const DOUYIN_DESC_LINE_MAX_CHARS: usize = 80;
+/// Mode C 尾部收尾允许行数
+pub const LYRIC_FILL_TAIL_ALLOW: usize = 2;
+
+/// 弧线参数区间（Weirdness min/max + Style Influence min/max），与 suno_rules.csv 同源。
+/// 顺序：标准叙事 / 全程高能 / 高开低走 / 平铺氛围 / 起伏戏剧 / 阶梯上升 / 渐进爆发 / U型 / 单峰 / 回环。
+pub const ARC_PARAMS: &[(&str, u32, u32, u32, u32)] = &[
+    ("标准叙事", 22, 28, 78, 83),
+    ("全程高能", 10, 15, 85, 95),
+    ("高开低走", 25, 35, 70, 80),
+    ("平铺氛围", 15, 25, 80, 90),
+    ("起伏戏剧", 28, 35, 75, 82),
+    ("阶梯上升", 20, 28, 78, 88),
+    ("渐进爆发", 15, 25, 80, 90),
+    ("U型", 25, 35, 70, 82),
+    ("单峰", 20, 30, 75, 85),
+    ("回环", 20, 28, 78, 85),
+];
+/// 抖音默认参数区间（叙事型结构可回落 A/B 弧线区间，须说明理由）
+pub const DOUYIN_WEIRD_MIN: u32 = 12;
+pub const DOUYIN_WEIRD_MAX: u32 = 20;
+pub const DOUYIN_STYLE_MIN: u32 = 85;
+pub const DOUYIN_STYLE_MAX: u32 = 95;
+/// B 模式参数区间
+pub const MODE_B_WEIRD_MIN: u32 = 20;
+pub const MODE_B_WEIRD_MAX: u32 = 35;
+pub const MODE_B_STYLE_MIN: u32 = 75;
+pub const MODE_B_STYLE_MAX: u32 = 85;
+
+/// 模式校验清单（数字唯一 prose 载体；与上方常量同文件维护）。
+/// 入参为 `Mode::to_str_name()`（mode_a/mode_b/mode_c/mode_d），未知模式回退通用清单。
+pub fn checklist(mode: &str) -> &'static str {
+    match mode {
+        "mode_a" | "mode_b" => CHECKLIST_AB,
+        "mode_c" => CHECKLIST_C,
+        "mode_d" => CHECKLIST_D,
+        _ => CHECKLIST_AB,
+    }
+}
+
+const CHECKLIST_AB: &str = "【校验清单 A/B·单源】Style Prompt≤350字符且≥30字符；结构标签≥2段；能量差≥3级（0-10）；配器差≥2件、单段3-7件、最弱段≥2件、最强段≥5件；弧线参数：标准叙事22-28/78-83、全程高能10-15/85-95、高开低走25-35/70-80、平铺氛围15-25/80-90、起伏戏剧28-35/75-82、阶梯上升20-28/78-88、渐进爆发15-25/80-90、U型25-35/70-82、单峰20-30/75-85、回环20-28/78-85；Audio Influence=0；断句单空格、禁/与、标点全半角。";
+const CHECKLIST_C: &str = "【校验清单 C·单源】逐行等字数（差一字即失败，尾部≤2行收尾）；行数与原歌词一致；段落结构与原歌词一致（禁新增Hook/Chorus段）；韵脚位置与模式保留；说明行带方括号；Style Prompt≤350字符；断句单空格、禁/与、标点全半角。";
+const CHECKLIST_D: &str = "【校验清单 D·单源】Hook≥2次；单段Verse≤4行；每行≤10字；结尾骤停（一刀切，含abruptly/cut标识）；BPM≥90；Style Prompt≤350字符且≥30字符；说明行≤80字符；参数抖音12-20/85-95（叙事型结构可回落A/B弧线区间须说明理由）；Audio Influence=0；断句单空格、禁/与、标点全半角。";
+
+/// 阶段 0 地基 primer（模式专属，每模式≤800字；M9 顺序：受众→物件→约束→旋律）。
+/// 主持人零 CSV 语义不变，仅拼接本静态文本；缺失回退无 primer（旧行为）。
+pub fn host_primer(mode: &str) -> Option<&'static str> {
+    match mode {
+        "mode_a" | "mode_b" => Some(PRIMER_AB),
+        "mode_c" => Some(PRIMER_C),
+        "mode_d" => Some(PRIMER_D),
+        _ => None,
+    }
+}
+
+// A/B：受众一句话 + 画面清单模板 + 借体要求 + 弧线能量标尺。
+const PRIMER_AB: &str = "【阶段0地基·A/B】受众：先一句话定对象阅历与时机（写给谁听、何时听），不到不写。物件：先建时空物件清单（≥5件具体物，禁抽象词开局），再定意象家族（一首歌一个系统）与声学映射（每个意象写出乐器/音色对应）。约束：声调服从旋律走向（硬门），韵脚密度为软优化；Verse2须新增信息；借体覆盖：每个抽象词配具体物象，禁裸奔。旋律骨架：先定弧线10选1与能量标尺（0-2静止/3-4铺垫/5-6推进/7-8爆发/9-10用尽全力），弱强差≥3级，配器差≥2件，全曲≤7件。";
+// C：对齐铁律 + 节奏保留 + 借体。
+const PRIMER_C: &str = "【阶段0地基·C】对齐铁律：逐行等字数（差一字即失败）、行数与原歌词一致、段落结构与原歌词一致（禁新增段）。节奏保留：词组切分与原歌词一致（3+4、2+2+3等），呼吸点位置一致，韵脚位置与模式保留。借体：新意象转译原意象叙事功能（非替换），意象家族统一，抽象词每个有借体，套话具体化。";
+// D：前3秒画面 + 道具刻度 + 骤停提醒 + 字数提醒。
+const PRIMER_D: &str = "【阶段0地基·D】前3秒：开场3秒内建钩子或强画面，直接进内容不慢铺垫。道具刻度：核心情感绑有世俗重量的具体物（物作刻度），金句短、魔性、可独立传播，Hook≥2次。约束：Verse≤4行，每行≤10字，说明行≤80字符，BPM≥90。收尾：结尾骤停一刀切（不渐弱），动态标签用对，骤停后无乐器残留。";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn primer_within_800_chars_per_mode() {
+        for m in ["mode_a", "mode_b", "mode_c", "mode_d"] {
+            let p = host_primer(m).expect("四模式 primer 缺失");
+            let n = p.chars().count();
+            assert!(n <= 800, "{} primer {} 字超 800", m, n);
+            assert!(n > 30, "{} primer 过短", m);
+        }
+    }
+
+    #[test]
+    fn primer_m9_order_ab() {
+        // M9：受众→物件→约束→旋律
+        let p = PRIMER_AB;
+        let i_aud = p.find("受众").expect("缺受众段");
+        let i_obj = p.find("物件").expect("缺物件段");
+        let i_con = p.find("约束").expect("缺约束段");
+        let i_arc = p.find("弧线").expect("缺旋律/弧线段");
+        assert!(i_aud < i_obj && i_obj < i_con && i_con < i_arc, "primer 段落顺序须为受众→物件→约束→旋律");
+    }
+
+    #[test]
+    fn checklist_contains_single_source_numbers() {
+        // 清单数字必须与常量一致（verbatim 锁）
+        let ab = checklist("mode_a");
+        assert!(ab.contains(&format!("≤{}", STYLE_PROMPT_MAX_CHARS)), "缺350");
+        assert!(ab.contains(&format!("≥{}", MIN_ENERGY_GAP)), "缺能量差3");
+        assert!(ab.contains(&format!("≥{}件", MIN_INSTRUMENT_GAP)), "缺配器差2");
+        assert!(ab.contains("7件"), "缺7件上限");
+        let d = checklist("mode_d");
+        assert!(d.contains(&format!("≥{}次", HOOK_MIN_COUNT)), "缺Hook2");
+        assert!(d.contains(&format!("≤{}行", VERSE_MAX_LINES)), "缺Verse4");
+        assert!(d.contains(&format!("≤{}字", DOUYIN_LINE_MAX_CHARS)), "缺10字");
+        assert!(d.contains(&format!("≥{}", DOUYIN_BPM_MIN)), "缺BPM90");
+        let c = checklist("mode_c");
+        assert!(c.contains(&format!("≤{}行", LYRIC_FILL_TAIL_ALLOW)), "缺尾部2行");
+    }
+
+    #[test]
+    fn arc_params_cover_ten_arcs() {
+        assert_eq!(ARC_PARAMS.len(), 10, "弧线须10种");
+        let ab = checklist("mode_a");
+        for (name, wmin, wmax, smin, smax) in ARC_PARAMS {
+            let frag = format!("{}-{}", wmin, wmax);
+            assert!(ab.contains(name), "清单缺弧线 {}", name);
+            assert!(ab.contains(&frag), "清单缺区间 {}", frag);
+            let _ = (smin, smax);
+        }
+    }
+}

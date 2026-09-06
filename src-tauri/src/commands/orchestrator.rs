@@ -484,6 +484,9 @@ async fn execute_review<R: Runtime>(
     system.push_str(&format!("{}\n", r.system_prompt));
     // 微观②：按需检索注入——按角色绑定表 + 当前方案关键词过滤，只注入命中条目（suno_rules 规则全量）
     system.push_str(&inject_knowledge(&kb, r.knowledge_tables, current_plan));
+    // P4：单源校验清单（数字唯一 prose 载体；审改口径与硬校验同源）
+    system.push_str(crate::rules::checklist(req.mode.to_str_name()));
+    system.push('\n');
     system.push_str("\n输出 JSON（严格符合格式，不输出其他内容）：\n");
     system.push_str(r.output_schema);
 
@@ -641,6 +644,9 @@ async fn execute_audit_review<R: Runtime>(
         system.push_str(&rendered);
         system.push('\n');
     }
+    // P4：单源校验清单（校验员审查口径与硬校验同源）
+    system.push_str(crate::rules::checklist(req.mode.to_str_name()));
+    system.push('\n');
     system.push_str("\n输出 JSON（严格符合格式，不输出其他内容）：\n");
     system.push_str(roles::REVIEW_SCHEMA_AUDITOR);
 
@@ -712,7 +718,12 @@ async fn run_host_initial<R: Runtime>(
         let _ = app.emit("pipeline", PipelineEnvelope::new(run_id.to_string(), event));
     };
     let _ = emit(PipelineEvent::HostStart { stage: HostStage::Initial });
-    let system = prompt_for_mode(&req.mode);
+    let mut system = prompt_for_mode(&req.mode);
+    // P4：阶段 0 地基 primer（模式专属静态文本；缺失回退无 primer 旧行为；主持人仍零 CSV）
+    if let Some(primer) = crate::rules::host_primer(req.mode.to_str_name()) {
+        system.push_str("\n\n");
+        system.push_str(primer);
+    }
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Host);
     let mut user = format!("用户输入：\n{}\n\n请按上述方法论直接输出完整方案。", req.user_input);
     // Mode C：原歌词在 extra，指令期望"原歌词 + 新主题"
