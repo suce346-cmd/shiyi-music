@@ -507,6 +507,7 @@ async fn execute_review<R: Runtime>(
         budget,
         &gen,
         &run_id,
+        llm::FINAL_STAGE_RESERVE,
     )
     .await?;
     // （上限放开后简化）：30000 上限下截断极罕见，观测记录即可——JSON 已完整时仍可正常解析
@@ -525,6 +526,7 @@ async fn execute_review<R: Runtime>(
             budget,
             &gen,
             &run_id,
+            llm::FINAL_STAGE_RESERVE,
         )
         .await?;
         let result2 = parse_review(&resp2.raw);
@@ -641,6 +643,7 @@ async fn execute_audit_review<R: Runtime>(
         budget,
         &gen,
         &run_id,
+        llm::FINAL_STAGE_RESERVE,
     )
     .await?;
     // （上限放开后简化）：截断观测记录，JSON 完整时照常解析
@@ -659,6 +662,7 @@ async fn execute_audit_review<R: Runtime>(
             budget,
             &gen,
             &run_id,
+            llm::FINAL_STAGE_RESERVE,
         )
         .await?;
         let result2 = parse_review(&resp2.raw);
@@ -705,6 +709,7 @@ async fn run_host_initial<R: Runtime>(
         budget,
         &gen,
         &run_id,
+        llm::FINAL_STAGE_RESERVE,
     )
     .await?;
     // 流式截断直接报错——半截方案绝不允许进入讨论轮（用户可见明确错误，可简化输入后重试）
@@ -771,6 +776,7 @@ async fn run_host_summarize<R: Runtime>(
         budget,
         &gen,
         &run_id,
+        llm::FINAL_STAGE_RESERVE,
     )
     .await?;
     // （上限放开后简化）：截断观测记录，split_tasks 对无标记文本全文当方案，行为兼容
@@ -837,6 +843,7 @@ async fn run_audit_format<R: Runtime>(
         ));
     }
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Auditor);
+    // R1：阶段 2 保底解除——全额使用剩余预算，保证终稿至少有一次完整尝试 + 退避
     let resp = llm::call_llm_silent(
         &base_url, &api_key, &model,
         vec![json!({"role":"system","content":system}), json!({"role":"user","content":user})],
@@ -845,6 +852,7 @@ async fn run_audit_format<R: Runtime>(
         budget,
         &gen,
         &run_id,
+        std::time::Duration::ZERO,
     )
     .await?;
     emit_usage(app, PipelineRole::Auditor, &resp, run_id);

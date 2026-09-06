@@ -30,13 +30,20 @@ fn retry_plan(attempt: usize, status: Option<u16>, network_err: bool) -> Option<
     }
 }
 
+/// 终稿保底额度（R1）：讨论轮内每次尝试/等待最多花掉 remaining - 该值，
+/// 保证阶段 2（run_audit_format）至少有一次完整尝试 + 30s 退避的额度。
+/// 阶段 2 入口传 reserve=ZERO 即解除约束，全额使用剩余预算。
+pub(crate) const FINAL_STAGE_RESERVE: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// 带退避重试的请求发送：429/5xx/网络错误按 retry_plan 退避，最多 3 次（4xx 凭据类错误不重试）。
 /// 错误分类——reqwest 层失败=Network，重试耗尽=Network。
 /// 每次尝试前查共享预算——剩余不足则跳过重试直接 Timeout；退避等待可被预算到期中断。
+/// R1：讨论轮传 reserve=FINAL_STAGE_RESERVE 预留终稿额度；阶段 2 传 reserve=ZERO 全额使用。
 async fn send_with_retry(
     req: reqwest::RequestBuilder,
     budget: &SharedBudget,
     run_id: &str,
+    reserve: std::time::Duration,
 ) -> Result<reqwest::Response, AppError> {
     /// 预算不足以再尝试一次的最低门槛（一次 HTTP 往返的悲观下限）
     const MIN_ATTEMPT_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
@@ -47,11 +54,19 @@ async fn send_with_retry(
             return Err(AppError::cancelled());
         }
         // 预算闸门——不够一次尝试就直接失败，不再烧钱等超时强杀
-        if !budget.has(MIN_ATTEMPT_BUDGET) {
-            return Err(AppError::new(
-                ErrorKind::Timeout,
-                format!("流水线预算不足（剩余 {:?}），停止重试", budget.remaining()),
-            ));
+        // R1：讨论轮按 remaining - 保底判定，终稿（reserve=ZERO）按全额判定
+        if budget.remaining_for_discussion(reserve) < MIN_ATTEMPT_BUDGET {
+            // 终稿保底已解除仍不足：如实报全额剩余；讨论轮被保底拦：明示保底存在
+            let hint = if reserve.is_zero() {
+                format!("流水线预算不足（剩余 {:?}），停止重试", budget.remaining())
+            } else {
+                format!(
+                    "讨论轮预算不足（可用 {:?}，已预留终稿 {:?}），停止重试",
+                    budget.remaining_for_discussion(reserve),
+                    reserve
+                )
+            };
+            return Err(AppError::new(ErrorKind::Timeout, hint));
         }
         let builder = req.try_clone().ok_or_else(|| AppError::new(ErrorKind::Internal, "请求无法克隆（重试不可用）"))?;
         match builder.send().await {
@@ -62,11 +77,20 @@ async fn send_with_retry(
                         last_err = format!("{} 错误", status);
                         tracing::warn!(status = %status, wait_secs = wait, attempt = attempt + 1, "LLM 请求错误，退避重试");
                         // 退避等待可被预算到期中断——不等满，只等到 deadline
-                        let wait_dur = std::time::Duration::from_secs(wait);
+                        // R1：讨论轮等待上限为 remaining - 保底，不等满时按保底直接进终稿
+                        let wait_dur = std::time::Duration::from_secs(wait)
+                            .min(budget.remaining_for_discussion(reserve));
                         if tokio::time::timeout(budget.remaining(), tokio::time::sleep(wait_dur)).await.is_err() {
                             return Err(AppError::new(
                                 ErrorKind::Timeout,
                                 "等待重试时流水线预算耗尽".to_string(),
+                            ));
+                        }
+                        // 保底截断了等待：不等满直接进终稿，不再消耗本轮
+                        if wait_dur < std::time::Duration::from_secs(wait) {
+                            return Err(AppError::new(
+                                ErrorKind::Timeout,
+                                format!("讨论轮退避被终稿保底截断（已等 {:?}，计划 {}s），转入终稿", wait_dur, wait),
                             ));
                         }
                         continue;
@@ -79,11 +103,19 @@ async fn send_with_retry(
                 if let Some(wait) = retry_plan(attempt, None, true) {
                     last_err = format!("网络错误: {}", e);
                     tracing::warn!(wait_secs = wait, attempt = attempt + 1, error = %e, "LLM 网络错误，退避重试");
-                    let wait_dur = std::time::Duration::from_secs(wait);
+                    // R1：同 HTTP 分支，等待按保底截断
+                    let wait_dur = std::time::Duration::from_secs(wait)
+                        .min(budget.remaining_for_discussion(reserve));
                     if tokio::time::timeout(budget.remaining(), tokio::time::sleep(wait_dur)).await.is_err() {
                         return Err(AppError::new(
                             ErrorKind::Timeout,
                             "等待重试时流水线预算耗尽".to_string(),
+                        ));
+                    }
+                    if wait_dur < std::time::Duration::from_secs(wait) {
+                        return Err(AppError::new(
+                            ErrorKind::Timeout,
+                            format!("讨论轮退避被终稿保底截断（已等 {:?}，计划 {}s），转入终稿", wait_dur, wait),
                         ));
                     }
                     continue;
@@ -172,6 +204,7 @@ async fn send_and_extract(
     body: &Value,
     budget: &SharedBudget,
     run_id: &str,
+    reserve: std::time::Duration,
 ) -> Result<LLMResponse, AppError> {
     let resp = send_with_retry(
         client
@@ -181,6 +214,7 @@ async fn send_and_extract(
             .json(body),
         budget,
         run_id,
+        reserve,
     )
     .await?;
     let status = resp.status();
@@ -215,6 +249,7 @@ pub(crate) async fn call_llm_silent(
     budget: &SharedBudget,
     gen: &crate::models::GenerationConfig,
     run_id: &str,
+    reserve: std::time::Duration,
 ) -> Result<LLMResponse, AppError> {
     // 单调用超时取 min(场景默认, 剩余预算)——预算不足时 reqwest 层即快速失败
     let client_timeout = budget.remaining().as_secs().min(if thinking { 300 } else { 120 }).max(10);
@@ -233,7 +268,7 @@ pub(crate) async fn call_llm_silent(
     if thinking {
         apply_thinking(&mut body, model, max_tokens);
     }
-    match send_and_extract(&client, &url, &api_key, &body, budget, run_id).await {
+    match send_and_extract(&client, &url, &api_key, &body, budget, run_id, reserve).await {
         Ok(resp) => Ok(resp),
         Err(e) if thinking && e.message.contains("missing content") => {
             // 降级：去掉思考参数重试一次（同一 prompt 无思考直接输出，必有正文）
@@ -245,7 +280,7 @@ pub(crate) async fn call_llm_silent(
                 "temperature": temperature,
                 "max_tokens": max_tokens,
             });
-            send_and_extract(&client, &url, &api_key, &fallback, budget, run_id).await
+            send_and_extract(&client, &url, &api_key, &fallback, budget, run_id, reserve).await
         }
         Err(e) => Err(e),
     }
@@ -262,6 +297,7 @@ pub(crate) async fn call_llm_stream<R: Runtime>(
     budget: &SharedBudget,
     gen: &crate::models::GenerationConfig,
     run_id: &str,
+    reserve: std::time::Duration,
 ) -> Result<LLMResponse, AppError> {
     let client_timeout = budget.remaining().as_secs().min(if thinking { 300 } else { 120 }).max(10);
     let client = build_client(client_timeout)?;
@@ -286,6 +322,7 @@ pub(crate) async fn call_llm_stream<R: Runtime>(
             .json(&body),
         budget,
         run_id,
+        reserve,
     )
     .await?;
 
@@ -607,13 +644,31 @@ mod tests {
         // 预算已耗尽（0ms）：必须直接 Timeout，不得尝试发送
         let spent = Arc::new(Budget::with_timeout(std::time::Duration::from_millis(0)));
         std::thread::sleep(std::time::Duration::from_millis(5));
-        let err = send_with_retry(req, &spent, "").await.unwrap_err();
+        let err = send_with_retry(req, &spent, "", std::time::Duration::ZERO).await.unwrap_err();
         assert_eq!(err.kind, ErrorKind::Timeout, "预算耗尽应直接 Timeout: {:?}", err);
         // 预算充足时同样不可达地址应走 Network 路径（证明闸门是预算触发的，不是地址问题）
         let rich = Arc::new(Budget::unlimited());
         let req2 = build_client(2).unwrap().get("http://127.0.0.1:1/unreachable");
-        let err2 = send_with_retry(req2, &rich, "").await.unwrap_err();
+        let err2 = send_with_retry(req2, &rich, "", std::time::Duration::ZERO).await.unwrap_err();
         assert_eq!(err2.kind, ErrorKind::Network, "预算充足时应尝试发送并报 Network: {:?}", err2);
+    }
+
+    /// R1：讨论轮保底——剩余刚好等于保底时，可用归零，门直接拦（终稿靠全额续命）
+    #[tokio::test]
+    async fn send_with_retry_reserve_blocks_discussion_but_not_final() {
+        use crate::budget::Budget;
+        use std::sync::Arc;
+        let client = build_client(10).unwrap();
+        // 剩余 130s，保底 120s：可用 10s < 15s 门 → 讨论轮被拦，文案明示保底
+        let tight = Arc::new(Budget::with_timeout(std::time::Duration::from_secs(130)));
+        let req = client.get("http://127.0.0.1:1/unreachable");
+        let err = send_with_retry(req, &tight, "", FINAL_STAGE_RESERVE).await.unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Timeout);
+        assert!(err.message.contains("终稿"), "讨论轮被拦文案应明示保底，实际: {}", err.message);
+        // 同一预算终稿（reserve=ZERO）按全额判定：130s 充足 → 放行尝试（不可达地址走 Network）
+        let req2 = build_client(2).unwrap().get("http://127.0.0.1:1/unreachable");
+        let err2 = send_with_retry(req2, &tight, "", std::time::Duration::ZERO).await.unwrap_err();
+        assert_eq!(err2.kind, ErrorKind::Network, "终稿全额下应放行尝试: {:?}", err2);
     }
 
     /// 非流式 usage 提取——正常返回 Some，缺字段/全零为 None
