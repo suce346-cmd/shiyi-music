@@ -204,7 +204,7 @@ pub fn warm_knowledge(app_data_dir: &std::path::Path) {
         return;
     }
     match KnowledgeBase::load(&dir) {
-        Ok(kb) if kb.table_names().len() == 6 => {
+        Ok(kb) if kb.table_names().len() == 8 => {
             let _ = SHARED_KB.get_or_init(|| kb.clone());
             // get_or_init 已初始化时上面的 clone 白做但无害；来源标记尝试设置
             let _ = KB_SOURCE.set("override".to_string());
@@ -213,7 +213,7 @@ pub fn warm_knowledge(app_data_dir: &std::path::Path) {
         Ok(kb) => {
             tracing::warn!(
                 tables = kb.table_names().len(),
-                "覆盖目录表不全（需 6 张），回退嵌入版"
+                "覆盖目录表不全（需 8 张），回退嵌入版"
             );
             let _ = KB_SOURCE.set("embedded".to_string());
             let _ = SHARED_KB.get_or_init(|| {
@@ -234,13 +234,16 @@ pub fn warm_knowledge(app_data_dir: &std::path::Path) {
 fn load_embedded_internal() -> Result<KnowledgeBase, String> {
     let mut kb = KnowledgeBase::default();
     // 名称必须与 knowledge/ 目录下文件名一致（不含扩展名）
-    let files: [(&str, &str); 6] = [
+    let files: [(&str, &str); 8] = [
         ("instruments", include_str!("../knowledge/instruments.csv")),
         ("emotions", include_str!("../knowledge/emotions.csv")),
         ("style_genre", include_str!("../knowledge/style_genre.csv")),
         ("suno_rules", include_str!("../knowledge/suno_rules.csv")),
         ("cliches", include_str!("../knowledge/cliches.csv")),
         ("hooks", include_str!("../knowledge/hooks.csv")),
+        // P0 思维资产表（8 Skill 去指纹全量融合，不压缩）
+        ("lyric_craft", include_str!("../knowledge/lyric_craft.csv")),
+        ("compose_craft", include_str!("../knowledge/compose_craft.csv")),
     ];
     let mut loaded = 0usize;
     for (name, content) in files {
@@ -705,17 +708,17 @@ fn split_csv_line(line: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
-    /// load() 整组有效则可用作覆盖源（6 张 mini 表）；调用方按组切换
+    /// load() 整组有效则可用作覆盖源（8 张 mini 表）；调用方按组切换
     #[test]
     fn load_override_dir_semantics() {
         let dir = std::env::temp_dir().join(format!("kb_override_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        for name in ["instruments", "emotions", "style_genre", "suno_rules", "cliches", "hooks"] {
+        for name in ["instruments", "emotions", "style_genre", "suno_rules", "cliches", "hooks", "lyric_craft", "compose_craft"] {
             std::fs::write(dir.join(format!("{}.csv", name)), "a,b\n1,2\n").unwrap();
         }
         let kb = KnowledgeBase::load(&dir).unwrap();
-        assert_eq!(kb.table_names().len(), 6);
+        assert_eq!(kb.table_names().len(), 8);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -798,6 +801,9 @@ mod tests {
         assert!(names.contains(&"style_genre".to_string()));
         assert!(names.contains(&"suno_rules".to_string()));
         assert!(names.contains(&"cliches".to_string()));
+        // P0 思维资产表（8 Skill 去指纹全量融合）
+        assert!(names.contains(&"lyric_craft".to_string()));
+        assert!(names.contains(&"compose_craft".to_string()));
     }
 
     #[test]
@@ -847,6 +853,46 @@ mod tests {
         sorted.sort();
         assert_eq!(names, sorted);
         assert!(names.contains(&"instruments".to_string()));
+    }
+
+    /// P0 验收门：两思维资产表行数 + 严格指纹零命中 + 可检索。
+    /// 行数：lyric_craft 32 行（LC-01..32），compose_craft 30 行（CC-01..30），不压缩。
+    /// 指纹：人物姓名零命中（宽泛词如留白/概念先行是通用中文词，不在门内）。
+    #[test]
+    fn craft_tables_row_counts_and_fingerprint_clean() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("knowledge");
+        let kb = KnowledgeBase::load(&dir).unwrap();
+        let lyric = kb.table("lyric_craft").expect("lyric_craft 表缺失");
+        let compose = kb.table("compose_craft").expect("compose_craft 表缺失");
+        assert_eq!(lyric.rows.len(), 32, "lyric_craft 应为 32 行，实际 {}", lyric.rows.len());
+        assert_eq!(compose.rows.len(), 30, "compose_craft 应为 30 行，实际 {}", compose.rows.len());
+        // id 连续性
+        assert_eq!(lyric.rows[0][0], "LC-01");
+        assert_eq!(lyric.rows[31][0], "LC-32");
+        assert_eq!(compose.rows[0][0], "CC-01");
+        assert_eq!(compose.rows[29][0], "CC-30");
+        // 严格指纹：人物姓名零命中
+        let person_names = [
+            "方文山", "林夕", "黄霑", "黄伟文", "罗大佑", "陈其钢",
+            "坂本龙一", "坂本", "久石让", "久石",
+        ];
+        for table in [&lyric, &compose] {
+            for row in &table.rows {
+                for cell in row {
+                    for name in &person_names {
+                        assert!(
+                            !cell.contains(name),
+                            "思维资产表含人物指纹 [{}]：{}",
+                            name,
+                            cell.chars().take(60).collect::<String>()
+                        );
+                    }
+                }
+            }
+        }
+        // 可检索：按 module 列过滤有结果
+        let out = lyric.render_filtered(&[("module", "画面")], None);
+        assert!(out.contains("LC-01"), "lyric_craft 应可按 module 检索：{}", &out[..out.chars().count().min(200)]);
     }
 
     #[test]
