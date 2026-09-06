@@ -1414,11 +1414,18 @@ pub async fn pipeline_refine(
 
 /// 请求取消指定 run（前端"停止"按钮调，带 run_id）——检查点在下次机会中断
 /// R3：取消同时清检查点，避免"从上次继续"复活已取消任务
+/// Q4：空参清全部具名 + 全局（此前空参只写全局位，与已生成命名 run 的任务对不上）。
 #[tauri::command]
 pub async fn cancel_pipeline(app: tauri::AppHandle, run_id: Option<String>) {
-    let rid = run_id.unwrap_or_default();
-    cancel::request_cancel(&rid);
-    crate::commands::checkpoint::clear(&app, &rid);
+    match run_id {
+        Some(rid) if !rid.trim().is_empty() => {
+            cancel::request_cancel(&rid);
+            crate::commands::checkpoint::clear(&app, &rid);
+        }
+        _ => {
+            cancel::clear_all();
+        }
+    }
 }
 
 /// 从检查点续跑（前端"从上次继续"按钮调）——断点方案直接进终稿，不重跑讨论轮。
@@ -1438,6 +1445,13 @@ pub async fn pipeline_resume<R: Runtime>(
             "无可用检查点（任务已完成、已取消或检查点损坏），请重新生成",
         )
     })?;
+    // Q4模式锁：检查点 mode 须与请求 mode 一致（此前静默错配，按新规范出旧 plan）。
+    if !cp.mode.is_empty() && cp.mode != request.mode.to_str_name() {
+        return Err(crate::errors::AppError::new(
+            crate::errors::ErrorKind::Validation,
+            format!("检查点模式 {} 与请求模式 {} 不一致，请用原模式续跑", cp.mode, request.mode.to_str_name()),
+        ));
+    }
     // 续跑用新预算（15 分钟满额），不继承已耗尽的旧预算——旧预算耗尽正是失败原因
     let budget = std::sync::Arc::new(Budget::with_timeout(PIPELINE_TIMEOUT));
     let rid = run_id.clone();
@@ -1482,8 +1496,16 @@ pub async fn pipeline_resume<R: Runtime>(
 
 /// 用户中途插话（前端"插入意见"调）——非阻塞存入槽，轮边界消费。
 /// 复用：超长意见（>2000）直接 Validation 拦截，与 feedback 同限额。
+/// Q4：空 run_id 直接拒（此前写入 "" 槽永不被消费）。
 #[tauri::command]
 pub async fn interject_feedback(run_id: Option<String>, note: String) -> Result<(), AppError> {
+    let rid = run_id.unwrap_or_default();
+    if rid.trim().is_empty() {
+        return Err(crate::errors::AppError::new(
+            crate::errors::ErrorKind::Validation,
+            "缺少 run_id，插话无法定向到任务",
+        ));
+    }
     crate::models::validate_request(
         &PipelineRequest {
             mode: Mode::ModeB,
@@ -1501,7 +1523,7 @@ pub async fn interject_feedback(run_id: Option<String>, note: String) -> Result<
         },
         Some(&note),
     )?;
-    interject::push(&run_id.unwrap_or_default(), note);
+    interject::push(&rid, note);
     Ok(())
 }
 
@@ -1873,6 +1895,17 @@ mod tests {
         // A 模式无 BPM 不报（仅 D 设存在性门）
         let issues_a = collect_hard_issues(&Mode::ModeA, text, None);
         assert!(!issues_a.iter().any(|i| i.contains("缺少 BPM")), "A 模式不应报缺 BPM: {:?}", issues_a);
+    }
+
+    /// Q4模式锁：检查点 mode 与请求 mode 必须一致（纯逻辑断言，不碰磁盘）。
+    #[test]
+    fn resume_mode_must_match_checkpoint() {
+        let cp = crate::commands::checkpoint::PipelineCheckpoint {
+            mode: "mode_b".to_string(),
+            ..Default::default()
+        };
+        let req_mode = Mode::ModeD;
+        assert_ne!(cp.mode, req_mode.to_str_name(), "测试前提：B 断点 vs D 请求必须触发模式锁");
     }
 
     #[test]

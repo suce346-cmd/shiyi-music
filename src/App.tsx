@@ -13,7 +13,7 @@ import { useQueue, queueLabel, dequeueNext } from "./hooks/useQueue";
 import QueuePanel from "./components/QueuePanel";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import type { Mode, ChatMessage, ChatTurn, HistoryEntry, LLMStatus, ExpertCard, PipelineRoleKey } from "./types";
-import { MODE_LABELS, errText } from "./types";
+import { MODE_LABELS, errText, isCancelledError } from "./types";
 import { t } from "./i18n";
 
 const HISTORY_KEY = "suno-prompt-history";
@@ -393,7 +393,12 @@ export default function App() {
       }
     } catch (e) {
       if (token !== runTokenRef.current) return; // 过期 run 的错误丢弃
-      setStatus("error"); setErrorMessage(errText(e));
+      // Q4：取消走空闲通道（不标红、不写历史）；失败才走 error
+      if (isCancelledError(e)) {
+        setStatus("idle"); setErrorMessage("已取消");
+      } else {
+        setStatus("error"); setErrorMessage(errText(e));
+      }
       // 队列项失败标记（用户可从队列点击查看错误态，点击删除清理）
       if (queue.peek().some((q) => q.id === runId)) {
         queue.mark(runId, "error");
@@ -474,7 +479,12 @@ export default function App() {
       });
     } catch (e) {
       if (token !== runTokenRef.current) return; // 过期 run 的错误丢弃
-      setStatus("error"); setErrorMessage(errText(e));
+      // Q4：取消走空闲通道
+      if (isCancelledError(e)) {
+        setStatus("idle"); setErrorMessage("已取消");
+      } else {
+        setStatus("error"); setErrorMessage(errText(e));
+      }
       return;
     }
     if (token !== runTokenRef.current) return; // 过期 run 的结果丢弃
@@ -559,7 +569,12 @@ export default function App() {
       }
     } catch (e) {
       if (token !== runTokenRef.current) return; // 过期 run 的错误丢弃
-      setStatus("error"); setErrorMessage(errText(e));
+      // Q4：取消走空闲通道
+      if (isCancelledError(e)) {
+        setStatus("idle"); setErrorMessage("已取消");
+      } else {
+        setStatus("error"); setErrorMessage(errText(e));
+      }
     }
   }, [status, mode, lastUserInput, conversation, saveToHistory, currentHistoryId, updateHistoryEntry, pipeline, ensureLlmListener]);
 

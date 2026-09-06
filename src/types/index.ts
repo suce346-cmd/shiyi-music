@@ -131,6 +131,13 @@ export function errText(e: unknown): string {
   return String(e);
 }
 
+/** 是否取消错误（Q4：取消走空闲通道，不标红；结构化 kind 与文案双认） */
+export function isCancelledError(e: unknown): boolean {
+  if (e && typeof e === "object" && (e as AppError).kind === "cancelled") return true;
+  const msg = errText(e);
+  return msg.includes("取消") || msg.includes("cancel");
+}
+
 /** 流水线请求 */
 export interface PipelineRequest {
   mode: Mode;
