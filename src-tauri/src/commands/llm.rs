@@ -177,16 +177,23 @@ pub(crate) fn thinking_params(model: &str) -> Option<Value> {
     }
 }
 
-/// 开思考时：注入厂商思考参数 + 抬升 max_tokens 防思维链挤占输出空间（只抬不降）
-fn apply_thinking(body: &mut Value, model: &str, max_tokens: u32) {
+/// 开思考时：注入厂商思考参数；仅思考模式抬升 max_tokens 防思维链挤占输出（Q5：此前无条件抬升，
+/// 非思考用户设 1000 也被抬到 30000；现非思考尊重用户值，思考才抬）
+fn apply_thinking(body: &mut Value, model: &str, max_tokens: u32, thinking: bool) {
     if let Some(params) = thinking_params(model) {
-        if let Value::Object(map) = params {
-            for (k, v) in map {
-                body[k] = v;
+        if thinking {
+            if let Value::Object(map) = params {
+                for (k, v) in map {
+                    body[k] = v;
+                }
             }
         }
     }
-    body["max_tokens"] = max_tokens.max(THINKING_MAX_TOKENS).into();
+    if thinking {
+        body["max_tokens"] = max_tokens.max(THINKING_MAX_TOKENS).into();
+    } else {
+        body["max_tokens"] = max_tokens.into();
+    }
 }
 
 /// 截断判定——finish_reason == "length"（网关 max_tokens 截断）
@@ -326,7 +333,7 @@ pub(crate) async fn call_llm_silent(
         "max_tokens": max_tokens,
     });
     if thinking {
-        apply_thinking(&mut body, model, max_tokens);
+        apply_thinking(&mut body, model, max_tokens, true);
     }
     match send_and_extract(&client, &url, &api_key, &body, budget, run_id, reserve).await {
         Ok(resp) => Ok(resp),
@@ -371,7 +378,7 @@ pub(crate) async fn call_llm_stream<R: Runtime>(
         "max_tokens": gen.max_tokens(),
     });
     if thinking {
-        apply_thinking(&mut body, model, gen.max_tokens());
+        apply_thinking(&mut body, model, gen.max_tokens(), true);
     }
 
     let response = send_with_retry(
@@ -687,17 +694,22 @@ mod tests {
         }
     }
 
-    /// 开思考时 max_tokens 抬升到上限（防思维链挤占输出），且只抬不降
+    /// Q5：思考才抬升，非思考尊重用户值；思考参数仅思考模式注入
     #[test]
     fn apply_thinking_raises_max_tokens() {
         let mut body = serde_json::json!({"model": "xopdeepseekv4flash0731", "max_tokens": 3000});
-        apply_thinking(&mut body, "xopdeepseekv4flash0731", 3000);
+        apply_thinking(&mut body, "xopdeepseekv4flash0731", 3000, true);
         assert_eq!(body["max_tokens"], THINKING_MAX_TOKENS);
         assert_eq!(body["thinking"]["type"], "enabled");
         // 调用方 max_tokens 已超上限：保持原值不降低
         let mut body2 = serde_json::json!({"model": "xopdeepseekv4flash0731", "max_tokens": 32000});
-        apply_thinking(&mut body2, "xopdeepseekv4flash0731", 32000);
+        apply_thinking(&mut body2, "xopdeepseekv4flash0731", 32000, true);
         assert_eq!(body2["max_tokens"], 32000);
+        // 非思考：用户 1000 不被抬，且不注入思考参数
+        let mut body3 = serde_json::json!({"model": "xopdeepseekv4flash0731", "max_tokens": 1000});
+        apply_thinking(&mut body3, "xopdeepseekv4flash0731", 1000, false);
+        assert_eq!(body3["max_tokens"], 1000);
+        assert!(body3.get("thinking").is_none(), "非思考不得注入思考参数");
     }
 
     /// 正文与 finish_reason 联合提取——正常 / 缺失 / 空字符串（思考模式思维链吃满预算）都要正确判定

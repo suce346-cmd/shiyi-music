@@ -189,9 +189,12 @@ mod tests {
         assert_eq!(d.stream_temperature(), 0.7);
         assert_eq!(d.max_tokens(), 30000);
         assert!(d.validate().is_ok());
-        // 钳制：超 32000 收敛到 32000
+        // 钳制：超 30000 收敛到 30000（Q5：与 MAX_TOKENS_CAP 对齐）
         let big = GenerationConfig { temperature: None, max_tokens: Some(99999) };
-        assert_eq!(big.max_tokens(), 32000);
+        assert_eq!(big.max_tokens(), 30000);
+        // 32000 已越界（Q5：上限 30000）
+        let over = GenerationConfig { temperature: None, max_tokens: Some(32000) };
+        assert_eq!(over.validate().unwrap_err().kind, ErrorKind::Validation);
         // 越界
         let bad_t = GenerationConfig { temperature: Some(2.5), max_tokens: None };
         assert_eq!(bad_t.validate().unwrap_err().kind, ErrorKind::Validation);
@@ -429,11 +432,11 @@ impl GenerationConfig {
     pub fn stream_temperature(&self) -> f32 {
         self.temperature.unwrap_or(0.7)
     }
-    /// max_tokens（缺省 30000，上限钳制 32000）
+    /// max_tokens（缺省 30000，上限钳制 30000，与 MAX_TOKENS_CAP 对齐；Q5：此前 32000 可发出，与统一上限打架）
     pub fn max_tokens(&self) -> u32 {
-        self.max_tokens.unwrap_or(30000).min(32000)
+        self.max_tokens.unwrap_or(30000).min(30000)
     }
-    /// 扩展：范围校验（temperature 0~2，max_tokens 1000~32000）
+    /// 扩展：范围校验（temperature 0~2，max_tokens 1000~30000）
     pub fn validate(&self) -> Result<(), AppError> {
         if let Some(t) = self.temperature {
             if !(0.0..=2.0).contains(&t) {
@@ -444,10 +447,10 @@ impl GenerationConfig {
             }
         }
         if let Some(m) = self.max_tokens {
-            if !(1000..=32000).contains(&m) {
+            if !(1000..=30000).contains(&m) {
                 return Err(AppError::new(
                     ErrorKind::Validation,
-                    format!("max_tokens 越界（{}，允许 1000~32000）", m),
+                    format!("max_tokens 越界（{}，允许 1000~30000）", m),
                 ));
             }
         }
