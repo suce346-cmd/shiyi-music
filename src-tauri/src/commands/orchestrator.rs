@@ -1159,9 +1159,34 @@ async fn run_pipeline_inner<R: Runtime>(
             });
         }
         // ① 动态角色并发审改（同轮角色互相无依赖，join_all 并发；顺序收敛保证 revisions_log 确定性）
+        // R4：同轮 staggered 启动（index * 2s 错峰，人为岔开四路请求；可被取消打断，不阻塞停止）
         let review_futs: Vec<_> = roles
             .iter()
-            .map(|role| execute_review(&app, *role, &current_plan, &revisions_log, &next_tasks, &request, &budget, &run_id))
+            .enumerate()
+            .map(|(idx, role)| {
+                let app = app.clone();
+                let current_plan = current_plan.clone();
+                let revisions_log = revisions_log.clone();
+                let next_tasks = next_tasks.clone();
+                let request = request.clone();
+                let budget = budget.clone();
+                let run_id = run_id.clone();
+                async move {
+                    if idx > 0 {
+                        let stagger = std::time::Duration::from_secs((idx as u64) * 2);
+                        // 错峰等待可被取消打断——不等满，只等预算允许
+                        let _ = tokio::time::timeout(
+                            budget.remaining(),
+                            tokio::time::sleep(stagger),
+                        )
+                        .await;
+                        if cancel::is_cancelled(&run_id) {
+                            return Err(crate::errors::AppError::cancelled());
+                        }
+                    }
+                    execute_review(&app, *role, &current_plan, &revisions_log, &next_tasks, &request, &budget, &run_id).await
+                }
+            })
             .collect();
         let review_results = futures_util::future::join_all(review_futs).await;
         for (role, result) in roles.iter().zip(review_results) {

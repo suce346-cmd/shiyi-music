@@ -30,6 +30,15 @@ fn retry_plan(attempt: usize, status: Option<u16>, network_err: bool) -> Option<
     }
 }
 
+/// R4：退避抖动 0–5 秒（无 rand 依赖，用纳秒取模；纯函数阈值不动，抖动包在外面）。
+/// 四角色并发同时 429 时错峰重发，避免同秒齐射撞出第二波 60s。
+fn backoff_jitter_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64 % 6)
+        .unwrap_or(0)
+}
+
 /// 终稿保底额度（R1）：讨论轮内每次尝试/等待最多花掉 remaining - 该值，
 /// 保证阶段 2（run_audit_format）至少有一次完整尝试 + 30s 退避的额度。
 /// 阶段 2 入口传 reserve=ZERO 即解除约束，全额使用剩余预算。
@@ -75,10 +84,12 @@ async fn send_with_retry(
                 match retry_plan(attempt, Some(status.as_u16()), false) {
                     Some(wait) => {
                         last_err = format!("{} 错误", status);
-                        tracing::warn!(status = %status, wait_secs = wait, attempt = attempt + 1, "LLM 请求错误，退避重试");
+                        // R4：计划等待 + 0–5s 抖动，四路并发错峰（阈值不动，离散包在外面）
+                        let planned = wait + backoff_jitter_secs();
+                        tracing::warn!(status = %status, wait_secs = planned, attempt = attempt + 1, "LLM 请求错误，退避重试");
                         // 退避等待可被预算到期中断——不等满，只等到 deadline
                         // R1：讨论轮等待上限为 remaining - 保底，不等满时按保底直接进终稿
-                        let wait_dur = std::time::Duration::from_secs(wait)
+                        let wait_dur = std::time::Duration::from_secs(planned)
                             .min(budget.remaining_for_discussion(reserve));
                         if tokio::time::timeout(budget.remaining(), tokio::time::sleep(wait_dur)).await.is_err() {
                             return Err(AppError::new(
@@ -87,10 +98,10 @@ async fn send_with_retry(
                             ));
                         }
                         // 保底截断了等待：不等满直接进终稿，不再消耗本轮
-                        if wait_dur < std::time::Duration::from_secs(wait) {
+                        if wait_dur < std::time::Duration::from_secs(planned) {
                             return Err(AppError::new(
                                 ErrorKind::Timeout,
-                                format!("讨论轮退避被终稿保底截断（已等 {:?}，计划 {}s），转入终稿", wait_dur, wait),
+                                format!("讨论轮退避被终稿保底截断（已等 {:?}，计划 {}s），转入终稿", wait_dur, planned),
                             ));
                         }
                         continue;
@@ -102,9 +113,11 @@ async fn send_with_retry(
                 // 网络层错误（连接失败/超时/断流）：可重试
                 if let Some(wait) = retry_plan(attempt, None, true) {
                     last_err = format!("网络错误: {}", e);
-                    tracing::warn!(wait_secs = wait, attempt = attempt + 1, error = %e, "LLM 网络错误，退避重试");
+                    // R4：同 HTTP 分支叠加抖动
+                    let planned = wait + backoff_jitter_secs();
+                    tracing::warn!(wait_secs = planned, attempt = attempt + 1, error = %e, "LLM 网络错误，退避重试");
                     // R1：同 HTTP 分支，等待按保底截断
-                    let wait_dur = std::time::Duration::from_secs(wait)
+                    let wait_dur = std::time::Duration::from_secs(planned)
                         .min(budget.remaining_for_discussion(reserve));
                     if tokio::time::timeout(budget.remaining(), tokio::time::sleep(wait_dur)).await.is_err() {
                         return Err(AppError::new(
@@ -112,10 +125,10 @@ async fn send_with_retry(
                             "等待重试时流水线预算耗尽".to_string(),
                         ));
                     }
-                    if wait_dur < std::time::Duration::from_secs(wait) {
+                    if wait_dur < std::time::Duration::from_secs(planned) {
                         return Err(AppError::new(
                             ErrorKind::Timeout,
-                            format!("讨论轮退避被终稿保底截断（已等 {:?}，计划 {}s），转入终稿", wait_dur, wait),
+                            format!("讨论轮退避被终稿保底截断（已等 {:?}，计划 {}s），转入终稿", wait_dur, planned),
                         ));
                     }
                     continue;
@@ -511,6 +524,14 @@ mod tests {
         assert_eq!(retry_plan(0, Some(404), false), None);
         // 成功响应无需重试决策（调用方直接返回）
         assert_eq!(retry_plan(0, Some(200), false), None);
+    }
+
+    /// R4：退避抖动恒在 0–5s（阈值不动，离散包在外面；多次采样不越界）
+    #[test]
+    fn backoff_jitter_within_five_secs() {
+        for _ in 0..50 {
+            assert!(backoff_jitter_secs() <= 5, "抖动必须在 0–5s 内");
+        }
     }
 
     #[test]
