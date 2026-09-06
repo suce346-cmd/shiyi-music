@@ -33,7 +33,7 @@ pub const VERSE_MAX_LINES: usize = 4;
 pub const DOUYIN_LINE_MAX_CHARS: usize = 10;
 /// D 模式 BPM 下限
 pub const DOUYIN_BPM_MIN: u32 = 90;
-/// D 模式说明行上限字符数（auditor 格式规范；代码校验未强制，讨论轮把关）
+/// D 模式说明行上限字符数（Q2 起代码已硬门：validator.rs 说明行检查；checklist 同口径）
 pub const DOUYIN_DESC_LINE_MAX_CHARS: usize = 80;
 /// Mode C 尾部收尾允许行数
 pub const LYRIC_FILL_TAIL_ALLOW: usize = 2;

@@ -732,9 +732,10 @@ async fn run_host_initial<R: Runtime>(
     }
     let messages = vec![json!({"role":"system","content":system}), json!({"role":"user","content":user})];
     // R2/R2b：流式 body 中断重试——整流同参最多重发 3 次。
-    // Q3分流：内层 send_with_retry 已对 429/5xx/网络退避，外层只管流解析类错误（Parse/Stream error/空正文）；
-    // RateLimit/Network/Timeout（含保底截断）直接透出，不再叠加等待——避免 3x3 双重计费烧预算。
-    // 取消与截断同样不重试（取消是用户主动停止；截断是成功返回走不到这里）。
+    // Q3分流（已修正）：只对流解析类错误重试——Parse 或 "Stream error" 文案（流 body 中断是
+    // Network("Stream error...") 形态，按文案挑出来，与非流式 R9 同口径）；
+    // 取消/预算/限流/鉴权/内层已退避过的其他网络错误直接透出，避免 3x3 双重计费烧预算。
+    // 截断是成功返回走不到这里。
     let mut resp: Result<crate::models::LLMResponse, crate::errors::AppError> =
         Err("阶段 0 未执行".into());
     for attempt in 0..3 {
@@ -759,15 +760,13 @@ async fn run_host_initial<R: Runtime>(
         .await
         {
             Ok(r) => { resp = Ok(r); break; }
-            // 取消/预算/限流/网络不重试：取消是主动停止；后三者内层已退避或已明示，直接透出
-            Err(e) if e.kind == crate::errors::ErrorKind::Cancelled
-                || e.kind == crate::errors::ErrorKind::Timeout
-                || e.kind == crate::errors::ErrorKind::RateLimit
-                || e.kind == crate::errors::ErrorKind::Network => { resp = Err(e); break; }
-            Err(e) => {
+            // Q3分流：Parse 或 "Stream error" 文案才重发（流 body 中断形态）；
+            // Cancelled/Timeout/RateLimit/Auth/其他 Network（内层已退避）直接透出。
+            Err(e) if e.kind == crate::errors::ErrorKind::Parse || e.message.starts_with("Stream error") => {
                 tracing::warn!(attempt = attempt + 1, error = %e.message, "阶段 0 流式中断，整流重发");
                 resp = Err(e);
             }
+            Err(e) => { resp = Err(e); break; }
         }
     }
     let resp = resp?;
@@ -1414,7 +1413,8 @@ pub async fn pipeline_refine(
 
 /// 请求取消指定 run（前端"停止"按钮调，带 run_id）——检查点在下次机会中断
 /// R3：取消同时清检查点，避免"从上次继续"复活已取消任务
-/// Q4：空参清全部具名 + 全局（此前空参只写全局位，与已生成命名 run 的任务对不上）。
+/// Q4修正：空参只置全局位（停空 id 遗留任务）+ 清具名检查点无从谈起故跳过；
+/// 具名任务必须带 id 取消（前端恒传 run_id，此分支仅兼容旧调用）。
 #[tauri::command]
 pub async fn cancel_pipeline(app: tauri::AppHandle, run_id: Option<String>) {
     match run_id {
@@ -1423,7 +1423,7 @@ pub async fn cancel_pipeline(app: tauri::AppHandle, run_id: Option<String>) {
             crate::commands::checkpoint::clear(&app, &rid);
         }
         _ => {
-            cancel::clear_all();
+            cancel::request_cancel("");
         }
     }
 }

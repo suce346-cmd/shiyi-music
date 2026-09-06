@@ -40,15 +40,6 @@ pub(crate) fn reset(run_id: &str) {
     CANCELLED_GLOBAL.store(false, std::sync::atomic::Ordering::SeqCst);
 }
 
-/// Q4：空参取消清全部（具名集合 + 全局位）——此前空参只写全局位，
-/// 与后端已生成命名 run_id 的任务对不上号，导致旧无 run 调用停不掉。
-pub(crate) fn clear_all() {
-    if let Ok(mut set) = CANCELLED_RUNS.lock() {
-        set.clear();
-    }
-    CANCELLED_GLOBAL.store(false, std::sync::atomic::Ordering::SeqCst);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -74,13 +65,14 @@ mod tests {
         reset("");
     }
 
-    /// Q4：clear_all 清全部具名 + 全局
+    /// Q4：空参只置全局位（停空 id 遗留任务）；具名任务必须带 id 停
     #[test]
-    fn clear_all_clears_named_and_global() {
-        request_cancel("qx1");
+    fn empty_cancel_only_sets_global() {
+        reset("qx1");
+        CANCELLED_GLOBAL.store(false, std::sync::atomic::Ordering::SeqCst);
         request_cancel("");
-        clear_all();
-        assert!(!is_cancelled("qx1"));
-        assert!(!is_cancelled(""));
+        assert!(is_cancelled(""));
+        assert!(!is_cancelled("qx1"), "空参不污染具名 run；具名任务须带 id 取消");
+        reset("");
     }
 }
