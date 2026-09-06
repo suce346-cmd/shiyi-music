@@ -29,11 +29,13 @@ interface Props {
 /** 围坐位置：以舞台容器中心为圆心（桌子居中），角色中心在圆桌外沿。
  *  半径 = 桌半宽/半高(110/75) + 角色半宽/半高(20/45, 对应 size=72 立绘) + 间距(6)，
  *  用 calc(50% ± Npx) 表达，窗口高度变化时自动保持围绕桌子。
+ *  R6：人数自适应——4人(A/C)小圈，5人(B)中圈，6人(D)大圈，上下不挤出舞台。
  */
 function seatPosition(index: number, total: number) {
   const angle = (index / total) * Math.PI * 2 - Math.PI / 2;
-  const rx = 136; // 110 + 20 + 6
-  const ry = 126; // 75 + 45 + 6
+  const scale = total <= 4 ? 0.82 : total === 5 ? 0.92 : 1.0;
+  const rx = 136 * scale; // 110 + 20 + 6
+  const ry = 126 * scale; // 75 + 45 + 6
   const dx = Math.cos(angle) * rx;
   const dy = Math.sin(angle) * ry;
   return {

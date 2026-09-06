@@ -12,9 +12,9 @@ import type {
 } from "../types";
 import { errText } from "../types";
 
-/** 各模式的流水线角色阵容（与后端 orchestrator.rs steps_for_mode 对齐） */
+/** 各模式的流水线角色阵容（与后端 orchestrator.rs seats_for_mode 对齐：动态角色 + 主持 + 校验落座） */
 export const MODE_EXPERTS: Record<Mode, Omit<ExpertCard, "status" | "note">[]> = {
-  // 想法模式(B)：情感 → 作词 → 制作 + 固定（主持/校验）
+  // 想法模式(B)：情感 → 作词 → 制作 + 落座（主持/校验）
   mode_b: [
     { id: "emotion", name: "情感分析师", emoji: "🎭", color: "#f5a3b7", knowledge: ["emotions"] },
     { id: "lyricist", name: "作词人", emoji: "📝", color: "#a78bfa", knowledge: ["cliches", "hooks"] },
@@ -22,7 +22,7 @@ export const MODE_EXPERTS: Record<Mode, Omit<ExpertCard, "status" | "note">[]> =
     { id: "host", name: "主持人", emoji: "👑", color: "#f59e0b", knowledge: [] },
     { id: "auditor", name: "校验员", emoji: "🔍", color: "#a3a3a3", knowledge: ["suno_rules"] },
   ],
-  // 歌词模式(A)：情感 → 制作 + 固定（无作词）
+  // 歌词模式(A)：情感 → 制作 + 落座（无作词）
   mode_a: [
     { id: "emotion", name: "情感分析师", emoji: "🎭", color: "#f5a3b7", knowledge: ["emotions"] },
     { id: "producer", name: "制作人", emoji: "🎤", color: "#f5b35c", knowledge: ["style_genre", "instruments", "suno_rules"] },

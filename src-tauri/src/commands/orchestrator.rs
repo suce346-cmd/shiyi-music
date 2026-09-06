@@ -38,6 +38,18 @@ pub fn steps_for_mode(mode: &Mode) -> Vec<PipelineStep> {
     .collect()
 }
 
+/// 各模式的圆桌座位（含固定主持/校验——R6：主持校验落座）。
+/// 与 steps_for_mode 的区别：steps 只含动态审改角色（讨论轮只跑这些）；
+/// seats 另加 Host + Auditor（阶段条 chip 与事件点亮早已覆盖，主持/校验只是缺座位）。
+/// get_pipeline_meta 下发 seats，前端按此摆座；讨论轮/增量过滤仍用 steps，语义不变。
+pub fn seats_for_mode(mode: &Mode) -> Vec<PipelineRole> {
+    use PipelineRole::*;
+    let mut seats: Vec<PipelineRole> = steps_for_mode(mode).iter().map(|s| s.role).collect();
+    seats.push(Host);
+    seats.push(Auditor);
+    seats
+}
+
 /// 按优化反馈关键词路由重跑角色（纯函数，可测）。
 /// 规则：歌词类→作词/改词；编曲类→制作；情绪类→情感；抖音类→流行风格；参数类→制作+情感。
 /// 无命中 → 空（调用方回落全量，安全默认不猜）；ModeC 的歌词类映射 Reviser 而非 Lyricist。
@@ -101,7 +113,7 @@ fn prompt_for_mode(mode: &Mode) -> String {
     }
 }
 
-/// 流水线元数据（单一真源下发）——modes 阵容来自 steps_for_mode，
+/// 流水线元数据（单一真源下发）——modes 座位来自 seats_for_mode（含主持/校验落座），
 /// roles 元数据来自 role_for（name/emoji/knowledge 表名；prompt 文本不下发）。
 /// 前端启动获取一次，本地三张表（MODE_EXPERTS/ROLE_NAMES/ROLE_EMOJIS）由它驱动；
 /// 一致性由 pipeline_meta_matches_sources 测试锁定。
@@ -132,7 +144,7 @@ pub async fn get_pipeline_meta() -> Result<PipelineMeta, crate::errors::AppError
     ] {
         modes.insert(
             key.to_string(),
-            steps_for_mode(&mode).iter().map(|s| s.role).collect(),
+            seats_for_mode(&mode),
         );
     }
     let mut roles = std::collections::HashMap::new();
@@ -2021,11 +2033,11 @@ mod tests {
         }
     }
 
-    /// meta 与真源一致——modes 阵容 == steps_for_mode；roles 元数据 == role_for
+    /// meta 与真源一致——modes 座位 == seats_for_mode（含主持/校验）；动态审改 == steps_for_mode
     #[test]
     fn pipeline_meta_matches_sources() {
         use crate::models::Mode;
-        // modes：四模式阵容与 steps_for_mode 逐位一致
+        // modes：四模式座位与 seats_for_mode 逐位一致（动态角色 + 主持 + 校验）
         let meta_modes: std::collections::HashMap<String, Vec<PipelineRole>> = [
             ("mode_a", Mode::ModeA),
             ("mode_b", Mode::ModeB),
@@ -2034,14 +2046,16 @@ mod tests {
         ]
         .iter()
         .map(|(k, m)| {
-            (k.to_string(), steps_for_mode(m).iter().map(|s| s.role).collect())
+            (k.to_string(), seats_for_mode(m))
         })
         .collect();
-        assert_eq!(meta_modes["mode_a"], vec![PipelineRole::Emotion, PipelineRole::Producer]);
+        assert_eq!(meta_modes["mode_a"], vec![PipelineRole::Emotion, PipelineRole::Producer, PipelineRole::Host, PipelineRole::Auditor]);
         assert_eq!(
             meta_modes["mode_d"],
-            vec![PipelineRole::Emotion, PipelineRole::Lyricist, PipelineRole::StyleAnalyst, PipelineRole::Producer]
+            vec![PipelineRole::Emotion, PipelineRole::Lyricist, PipelineRole::StyleAnalyst, PipelineRole::Producer, PipelineRole::Host, PipelineRole::Auditor]
         );
+        // steps 语义不变：讨论轮只跑动态角色（主持/校验由各自阶段独家执行）
+        assert_eq!(steps_for_mode(&Mode::ModeA).iter().map(|s| s.role).collect::<Vec<_>>(), vec![PipelineRole::Emotion, PipelineRole::Producer]);
         // roles：name/emoji/knowledge 与 role_for 一致（抽查三角色）
         let emo = roles::role_for(PipelineRole::Emotion);
         assert_eq!(emo.name, "情感分析师");
