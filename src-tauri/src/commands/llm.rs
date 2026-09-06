@@ -97,11 +97,12 @@ async fn send_with_retry(
                                 "等待重试时流水线预算耗尽".to_string(),
                             ));
                         }
-                        // 保底截断了等待：不等满直接进终稿，不再消耗本轮
+                        // 保底截断了等待：不等满直接中止本轮，不再消耗（Q3：此前文案写“转入终稿”，
+                        // 实际讨论轮 Timeout 经 .await? 直接中止整线，无跳终稿分支；文案如实改中止）。
                         if wait_dur < std::time::Duration::from_secs(planned) {
                             return Err(AppError::new(
                                 ErrorKind::Timeout,
-                                format!("讨论轮退避被终稿保底截断（已等 {:?}，计划 {}s），转入终稿", wait_dur, planned),
+                                format!("讨论轮退避被终稿保底截断（已等 {:?}，计划 {}s），中止本轮", wait_dur, planned),
                             ));
                         }
                         continue;
@@ -128,7 +129,7 @@ async fn send_with_retry(
                     if wait_dur < std::time::Duration::from_secs(planned) {
                         return Err(AppError::new(
                             ErrorKind::Timeout,
-                            format!("讨论轮退避被终稿保底截断（已等 {:?}，计划 {}s），转入终稿", wait_dur, planned),
+                            format!("讨论轮退避被终稿保底截断（已等 {:?}，计划 {}s），中止本轮", wait_dur, planned),
                         ));
                     }
                     continue;
@@ -271,8 +272,10 @@ async fn send_and_extract(
             tracing::warn!(error = %e.message, "非流式响应解码失败，进入重发循环");
             let mut last = e;
             for attempt in 1..3 {
+                // Q3：等待按 remaining - 保底截断，不吃终稿额度（与 send_with_retry 同口径）。
                 let wait = std::time::Duration::from_secs(if attempt == 1 { 5 } else { 10 });
-                if tokio::time::timeout(budget.remaining(), tokio::time::sleep(wait)).await.is_err() {
+                let wait_capped = wait.min(budget.remaining_for_discussion(reserve));
+                if wait_capped.is_zero() || tokio::time::timeout(budget.remaining(), tokio::time::sleep(wait_capped)).await.is_err() {
                     tracing::warn!("非流式重发等待被预算打断，不再重试");
                     break;
                 }

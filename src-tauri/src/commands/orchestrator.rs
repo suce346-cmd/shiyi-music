@@ -731,15 +731,18 @@ async fn run_host_initial<R: Runtime>(
         user = format!("原歌词：\n{}\n\n新主题/故事：\n{}\n\n请按上述方法论直接输出完整改词方案。", original, req.user_input);
     }
     let messages = vec![json!({"role":"system","content":system}), json!({"role":"user","content":user})];
-    // R2/R2b：流式 body 中断重试——整流同参最多重发 3 次（仅抛错路径；截断仍直接报错，取消不重试）。
-    // send_with_retry 只保"请求发出去"，stream_response 内 chunk 中断此前直接死；
-    // 实网重跑证明网关抖动下连续断流是常态，一次不够。等待 5s/10s，可被预算打断。
+    // R2/R2b：流式 body 中断重试——整流同参最多重发 3 次。
+    // Q3分流：内层 send_with_retry 已对 429/5xx/网络退避，外层只管流解析类错误（Parse/Stream error/空正文）；
+    // RateLimit/Network/Timeout（含保底截断）直接透出，不再叠加等待——避免 3x3 双重计费烧预算。
+    // 取消与截断同样不重试（取消是用户主动停止；截断是成功返回走不到这里）。
     let mut resp: Result<crate::models::LLMResponse, crate::errors::AppError> =
         Err("阶段 0 未执行".into());
     for attempt in 0..3 {
         if attempt > 0 {
+            // Q3：等待按 remaining - 保底截断，不吃终稿 120s（与 llm.rs 内层同口径）。
             let wait = std::time::Duration::from_secs(if attempt == 1 { 5 } else { 10 });
-            if tokio::time::timeout(budget.remaining(), tokio::time::sleep(wait)).await.is_err() {
+            let wait_capped = wait.min(budget.remaining_for_discussion(llm::FINAL_STAGE_RESERVE));
+            if wait_capped.is_zero() || tokio::time::timeout(budget.remaining(), tokio::time::sleep(wait_capped)).await.is_err() {
                 tracing::warn!("阶段 0 重发等待被预算打断，不再重试");
                 break;
             }
@@ -756,8 +759,11 @@ async fn run_host_initial<R: Runtime>(
         .await
         {
             Ok(r) => { resp = Ok(r); break; }
-            // 取消不重试（用户主动停止）；截断是成功返回走不到这里
-            Err(e) if e.kind == crate::errors::ErrorKind::Cancelled => { resp = Err(e); break; }
+            // 取消/预算/限流/网络不重试：取消是主动停止；后三者内层已退避或已明示，直接透出
+            Err(e) if e.kind == crate::errors::ErrorKind::Cancelled
+                || e.kind == crate::errors::ErrorKind::Timeout
+                || e.kind == crate::errors::ErrorKind::RateLimit
+                || e.kind == crate::errors::ErrorKind::Network => { resp = Err(e); break; }
             Err(e) => {
                 tracing::warn!(attempt = attempt + 1, error = %e.message, "阶段 0 流式中断，整流重发");
                 resp = Err(e);
@@ -992,6 +998,10 @@ fn collect_hard_issues(mode: &Mode, final_text: &str, extra: Option<&str>) -> Ve
     if let Some(style_prompt) = validator::extract_style_prompt(final_text) {
         issues.extend(validator::check_style_prompt_blocks(&style_prompt));
         // BPM 模式感知检查（对齐原指令：仅 mode_d 要求 BPM>=90）
+        // Q3存在性门：D 终稿无 BPM 标注直接打回（此前缺标注一路放行）；显式-only 语义不变。
+        if mode.to_str_name() == "mode_d" && crate::knowledge::plan_bpm_value(&style_prompt).is_none() {
+            issues.push("缺少 BPM 标注（抖音模式须写明 BPM≥90 数值）".to_string());
+        }
         if let Some(bpm) = crate::knowledge::plan_bpm_value(&style_prompt) {
             if let Some(msg) = validator::check_bpm_range(mode.to_str_name(), bpm) {
                 issues.push(msg);
@@ -1852,6 +1862,17 @@ mod tests {
             "显式 68BPM 应报 BPM 不足: {:?}",
             issues
         );
+    }
+
+    /// Q3存在性门：Mode D 终稿无 BPM 标注直接打回（此前一路放行）
+    #[test]
+    fn bpm_missing_in_mode_d_reported() {
+        let text = "**Style Prompt**: 抖音神曲基调, 律动铜管, 痞气男声, 拥挤商场混响, 高能持续\n[Hook]\n[suona, 808]\n我 真的 会谢\n[Hook]\n我 真的 会谢\n[Hook]\n[all instruments cut abruptly]";
+        let issues = collect_hard_issues(&Mode::ModeD, text, None);
+        assert!(issues.iter().any(|i| i.contains("缺少 BPM")), "无 BPM 应报缺标注: {:?}", issues);
+        // A 模式无 BPM 不报（仅 D 设存在性门）
+        let issues_a = collect_hard_issues(&Mode::ModeA, text, None);
+        assert!(!issues_a.iter().any(|i| i.contains("缺少 BPM")), "A 模式不应报缺 BPM: {:?}", issues_a);
     }
 
     #[test]
