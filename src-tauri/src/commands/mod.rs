@@ -8,3 +8,4 @@ pub mod interject;
 pub mod keychain;
 pub mod history;
 pub mod logdir;
+pub mod checkpoint;

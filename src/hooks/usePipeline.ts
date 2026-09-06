@@ -522,6 +522,49 @@ export function usePipeline() {
   /** 当前 run_id 读取（插话命令定向用） */
   const getRunId = useCallback(() => runIdRef.current, []);
 
-  // 保留 run/refine/reset 命名（App 调用不变）+ B3 的 cancel + A9 的 getRunId
-  return { ...state, run, refine, reset, cancel, getRunId };
+  /** R3：从检查点续跑（断点方案直接进终稿；复用同一 runId 让检查点对上） */
+  const resume = useCallback(
+    async (opts: PipelineRunOptions): Promise<string> => {
+      const token = ++runTokenRef.current; // 作废旧 run
+      // 续跑不换 runId：检查点按 runId 存取，换了就对不上
+      const runId = runIdRef.current;
+      if (!runId) throw new Error("无可续跑的任务（run_id 为空）");
+      speechCbRef.current = opts.onSpeech ?? null;
+      setState((prev) => ({ ...prev, active: true, error: null }));
+      try {
+        await startListening(token, runId);
+      } catch (e) {
+        setState((prev) => ({ ...prev, active: false, phase: "done", error: errText(e) }));
+        throw e;
+      }
+      const request: PipelineRequest = {
+        mode: opts.mode,
+        user_input: opts.userInput,
+        model: opts.settings.model,
+        api_key: opts.settings.apiKey,
+        base_url: opts.settings.baseUrl,
+        extra: opts.extra,
+        original_lyrics: opts.originalLyrics,
+        thinking: opts.settings.thinking ?? false,
+        role_overrides: buildRoleOverrides(opts.settings),
+        refine_targets: undefined,
+        generation: opts.settings.generation,
+        run_id: runId,
+      };
+      try {
+        const text = await invoke<string>("pipeline_resume", { request, runId });
+        finishRun();
+        return text;
+      } catch (e) {
+        setState((prev) => ({ ...prev, active: false, phase: "done", error: errText(e) }));
+        throw e;
+      } finally {
+        cleanup();
+      }
+    },
+    [startListening, finishRun, cleanup]
+  );
+
+  // 保留 run/refine/reset 命名（App 调用不变）+ B3 的 cancel + A9 的 getRunId + R3 的 resume
+  return { ...state, run, refine, reset, cancel, getRunId, resume };
 }

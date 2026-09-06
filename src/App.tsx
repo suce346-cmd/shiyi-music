@@ -514,6 +514,55 @@ export default function App() {
     }
   }, [status, lastFeedback, lastUserInput, handleRefine, handleGenerate, mode]);
 
+  /** R3：从上次继续（检查点续跑；无检查点时后端明确报错展示，不静默从头来） */
+  const handleResume = useCallback(async () => {
+    if (status !== "error") return;
+    const token = ++runTokenRef.current; // 作废旧 run
+    setStatus("loading"); setStreamText(""); setErrorMessage("");
+    speechLogRef.current = [];
+    try {
+      await ensureLlmListener();
+      const originalLyrics = mode === "mode_c"
+        ? lastUserInput.match(/原歌词：\n([\s\S]*)\n\n新主题：\n([\s\S]*)$/)?.[1]
+        : undefined;
+      const input = mode === "mode_c"
+        ? (lastUserInput.match(/原歌词：\n([\s\S]*)\n\n新主题：\n([\s\S]*)$/)?.[2] ?? lastUserInput)
+        : lastUserInput;
+      const raw = await pipeline.resume({
+        mode,
+        userInput: input,
+        settings,
+        extra: undefined,
+        originalLyrics,
+        onSpeech: (speech) => {
+          if (speechLogRef.current.length === 0) setStreamText("");
+          speechLogRef.current.push(speech);
+          setConversation((prev) => [...prev, speech]);
+        },
+      });
+      if (token !== runTokenRef.current) return; // 过期 run 的结果丢弃
+      const allTurns: ChatTurn[] = [
+        ...conversation,
+        ...speechLogRef.current,
+        { role: "assistant", content: raw, timestamp: Date.now() },
+      ];
+      setConversation(allTurns);
+      setStatus("done"); setStreamText("");
+      chatHistoryRef.current = [
+        ...chatHistoryRef.current,
+        { role: "assistant", content: raw },
+      ];
+      if (currentHistoryId) {
+        updateHistoryEntry(currentHistoryId, raw, allTurns, { ...pipeline.usage });
+      } else {
+        saveToHistory(conversation[0]?.content || lastUserInput, raw, allTurns, mode, { ...pipeline.usage });
+      }
+    } catch (e) {
+      if (token !== runTokenRef.current) return; // 过期 run 的错误丢弃
+      setStatus("error"); setErrorMessage(errText(e));
+    }
+  }, [status, mode, lastUserInput, conversation, saveToHistory, currentHistoryId, updateHistoryEntry, pipeline, ensureLlmListener]);
+
   const deleteHistory = (id: string) => { const u = historyEntries.filter(e => e.id !== id); setHistoryEntries(u); scheduleSave(u); };
   const clearHistory = () => { setHistoryEntries([]); scheduleSave([]); };
   const selectHistory = (entry: HistoryEntry) => { setHistoryView(entry); setShowHistory(false); };
@@ -850,7 +899,7 @@ export default function App() {
           <div className="flex-1 flex flex-col overflow-hidden">
             {status !== "idle" && (
               <div className="shrink-0">
-                <StatusIndicator status={status} errorMessage={errorMessage} onRetry={handleRetry} onCancel={handleCancelCurrent} getRunId={pipeline.getRunId} locale={settings.language} />
+                <StatusIndicator status={status} errorMessage={errorMessage} onRetry={handleRetry} onResume={handleResume} onCancel={handleCancelCurrent} getRunId={pipeline.getRunId} locale={settings.language} />
                 {/* 生成队列面板（等待项列表；完成项点击查看） */}
                 <QueuePanel
                   queue={queue.queue}

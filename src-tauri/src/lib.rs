@@ -41,7 +41,8 @@ pub fn run() {
             commands::history::history_save,
             commands::history::history_export_text,
             commands::logdir::open_log_dir,
-            commands::logdir::open_config_dir
+            commands::logdir::open_config_dir,
+            commands::orchestrator::pipeline_resume
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

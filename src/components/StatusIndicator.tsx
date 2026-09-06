@@ -9,6 +9,8 @@ interface Props {
   status: LLMStatus;
   errorMessage?: string;
   onRetry?: () => void;
+  /** R3：从上次继续（检查点续跑；无检查点时后端明确报错） */
+  onResume?: () => void;
   /** 生成中显示"停止"按钮 */
   onCancel?: () => void;
   /** 当前 run_id 读取（插话命令定向用） */
@@ -34,7 +36,7 @@ const config: Record<LLMStatus, { icon: typeof IconLoader; color: string; bg: st
   error: { icon: IconAlertTriangle, color: "text-danger", bg: "bg-danger/8" },
 };
 
-export default function StatusIndicator({ status, errorMessage, onRetry, onCancel, getRunId, locale }: Props) {
+export default function StatusIndicator({ status, errorMessage, onRetry, onResume, onCancel, getRunId, locale }: Props) {
   /** 插话输入展开态 + 发送中 + 结果提示 */
   const [showInterject, setShowInterject] = useState(false);
   const [note, setNote] = useState("");
@@ -80,6 +82,16 @@ export default function StatusIndicator({ status, errorMessage, onRetry, onCance
                        transition-all duration-150 active:scale-95 shrink-0">
             <IconRefresh size={12} />
             {t(locale, "status.retry")}
+          </button>
+        )}
+        {/* R3：从上次继续（不断点重跑讨论轮，直接进终稿） */}
+        {status === "error" && onResume && (
+          <button onClick={onResume}
+            className="flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-medium
+                       bg-brand-500/10 hover:bg-brand-500/20 border border-brand-500/30 text-brand-400
+                       transition-all duration-150 active:scale-95 shrink-0">
+            <IconRefresh size={12} />
+            {t(locale, "status.resume")}
           </button>
         )}
         {onCancel && running && (

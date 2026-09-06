@@ -1218,9 +1218,45 @@ async fn run_pipeline_inner<R: Runtime>(
                 .collect::<Vec<_>>()
                 .join("；"),
         });
+        // R3：每轮汇总后落检查点（失败可续跑；写失败只记 warn，不阻断流水线）
+        {
+            let cp = crate::commands::checkpoint::PipelineCheckpoint {
+                mode: mode.to_str_name().to_string(),
+                user_input: request.user_input.clone(),
+                current_plan: current_plan.clone(),
+                revisions_log: revisions_log.clone(),
+                round,
+                next_tasks: next_tasks.clone(),
+                updated_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0),
+            };
+            if let Err(e) = crate::commands::checkpoint::save(&app, &run_id, &cp) {
+                tracing::warn!(error = %e.message, "检查点落盘失败（不阻断）");
+            }
+        }
     }
 
     // ---- 阶段 2：校验员按标准格式输出最终提示词包（硬校验失败打回重格式化 ≤2 次）----
+    // R3：阶段 2 入口同样落检查点（含收敛后的 current_plan），终稿失败可直接续终稿
+    {
+        let cp = crate::commands::checkpoint::PipelineCheckpoint {
+            mode: format!("{:?}", mode).to_lowercase().replace("mode", "mode_"),
+            user_input: request.user_input.clone(),
+            current_plan: current_plan.clone(),
+            revisions_log: revisions_log.clone(),
+            round: MAX_DISCUSSION_ROUNDS,
+            next_tasks: next_tasks.clone(),
+            updated_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0),
+        };
+        if let Err(e) = crate::commands::checkpoint::save(&app, &run_id, &cp) {
+            tracing::warn!(error = %e.message, "阶段 2 检查点落盘失败（不阻断）");
+        }
+    }
     let (mut final_text, mut truncated) = run_audit_format(&app, &current_plan, None, &request, &budget, &run_id).await?;
     let mut issues = Vec::new();
     for _ in 0..2 {
@@ -1262,6 +1298,8 @@ async fn run_pipeline_inner<R: Runtime>(
             "硬校验打回耗尽，降级返回最后一次方案"
         );
     }
+    // R3：终稿成功（即使降级也是产出）→ 删除检查点，不留残留
+    crate::commands::checkpoint::clear(&app, &run_id);
 
     Ok(final_text)
 }
@@ -1306,9 +1344,71 @@ pub async fn pipeline_refine(
 }
 
 /// 请求取消指定 run（前端"停止"按钮调，带 run_id）——检查点在下次机会中断
+/// R3：取消同时清检查点，避免"从上次继续"复活已取消任务
 #[tauri::command]
-pub async fn cancel_pipeline(run_id: Option<String>) {
-    cancel::request_cancel(&run_id.unwrap_or_default());
+pub async fn cancel_pipeline(app: tauri::AppHandle, run_id: Option<String>) {
+    let rid = run_id.unwrap_or_default();
+    cancel::request_cancel(&rid);
+    crate::commands::checkpoint::clear(&app, &rid);
+}
+
+/// 从检查点续跑（前端"从上次继续"按钮调）——断点方案直接进终稿，不重跑讨论轮。
+/// 检查点缺失/损坏 → 明确报错（不静默全量重跑，避免用户误以为续跑实则从头来）。
+#[tauri::command]
+pub async fn pipeline_resume(
+    app: tauri::AppHandle,
+    request: PipelineRequest,
+    run_id: String,
+) -> Result<String, AppError> {
+    use crate::budget::Budget;
+    use crate::models::PipelineEnvelope;
+    crate::models::validate_request(&request, None)?;
+    let cp = crate::commands::checkpoint::load(&app, &run_id).ok_or_else(|| {
+        crate::errors::AppError::new(
+            crate::errors::ErrorKind::Validation,
+            "无可用检查点（任务已完成、已取消或检查点损坏），请重新生成",
+        )
+    })?;
+    // 续跑用新预算（15 分钟满额），不继承已耗尽的旧预算——旧预算耗尽正是失败原因
+    let budget = std::sync::Arc::new(Budget::with_timeout(PIPELINE_TIMEOUT));
+    let rid = run_id.clone();
+    let emit = |event: PipelineEvent| {
+        let _ = app.emit("pipeline", PipelineEnvelope::new(rid.clone(), event));
+    };
+    // 断点方案直接进阶段 2（校验员格式输出 + 硬校验打回 ≤2 次），与主流程同语义
+    let mode = &request.mode;
+    let (mut final_text, mut truncated) =
+        run_audit_format(&app, &cp.current_plan, None, &request, &budget, &run_id).await?;
+    let mut issues = Vec::new();
+    for _ in 0..2 {
+        issues = collect_hard_issues(mode, &final_text, request.original_lyrics_text());
+        if truncated {
+            issues.insert(0, TRUNCATION_ISSUE.to_string());
+        }
+        if issues.is_empty() {
+            break;
+        }
+        let _ = emit(PipelineEvent::Retry {
+            role: PipelineRole::Auditor,
+            reason: issues.join("；"),
+        });
+        let (text, t) =
+            run_audit_format(&app, &cp.current_plan, Some(&issues), &request, &budget, &run_id).await?;
+        final_text = text;
+        truncated = t;
+    }
+    if !issues.is_empty() {
+        issues = collect_hard_issues(mode, &final_text, request.original_lyrics_text());
+        if truncated {
+            issues.insert(0, TRUNCATION_ISSUE.to_string());
+        }
+    }
+    let _ = emit(PipelineEvent::AuditResult {
+        pass: issues.is_empty(),
+        findings: issues.clone(),
+    });
+    crate::commands::checkpoint::clear(&app, &run_id);
+    Ok(final_text)
 }
 
 /// 用户中途插话（前端"插入意见"调）——非阻塞存入槽，轮边界消费。
