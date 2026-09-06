@@ -759,17 +759,26 @@ pub async fn test_api(
     api_key: String,
     model: String,
 ) -> Result<String, AppError> {
+    // R5：改走 send_with_retry（间歇 429 自动退避重试，不再一次定胜负误报）。
+    // 预算独立 120s（不占流水线 15 分钟池，天然隔离）；成功判定与失败分类原样保留。
+    use crate::budget::Budget;
+    use std::sync::Arc;
     let client = build_client(120)?;
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let body = test_api_body(&model);
-    let resp = client
-        .post(&url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| AppError::new(ErrorKind::Network, format!("请求失败: {}", truncate_err(&e.to_string()))))?;
+    let budget = Arc::new(Budget::with_timeout(std::time::Duration::from_secs(120)));
+    let resp = send_with_retry(
+        client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .json(&body),
+        &budget,
+        "",
+        std::time::Duration::ZERO,
+    )
+    .await
+    .map_err(|e| AppError::new(ErrorKind::Network, format!("请求失败: {}", truncate_err(&e.message))))?;
     let status = resp.status();
     if status.is_success() {
         Ok("连接成功".into())
