@@ -715,32 +715,37 @@ async fn run_host_initial<R: Runtime>(
         user = format!("原歌词：\n{}\n\n新主题/故事：\n{}\n\n请按上述方法论直接输出完整改词方案。", original, req.user_input);
     }
     let messages = vec![json!({"role":"system","content":system}), json!({"role":"user","content":user})];
-    // R2：流式 body 解码错误零重试补齐——整流同参重发一次（仅抛错路径；截断仍直接报错，取消不重试）。
-    // send_with_retry 只保"请求发出去"，stream_response 内 chunk 中断（llm.rs:364-367）此前直接死。
-    let mut resp = llm::call_llm_stream(
-        app.clone(), &base_url, &api_key, &model,
-        messages.clone(),
-        req.thinking,
-        budget,
-        &gen,
-        &run_id,
-        llm::FINAL_STAGE_RESERVE,
-    )
-    .await;
-    if let Err(e) = &resp {
-        // 取消不重试（用户主动停止）；截断是成功返回走不到这里
-        if e.kind != crate::errors::ErrorKind::Cancelled {
-            tracing::warn!(error = %e.message, "阶段 0 流式中断，整流重发一次");
-            resp = llm::call_llm_stream(
-                app.clone(), &base_url, &api_key, &model,
-                messages,
-                req.thinking,
-                budget,
-                &gen,
-                &run_id,
-                llm::FINAL_STAGE_RESERVE,
-            )
-            .await;
+    // R2/R2b：流式 body 中断重试——整流同参最多重发 3 次（仅抛错路径；截断仍直接报错，取消不重试）。
+    // send_with_retry 只保"请求发出去"，stream_response 内 chunk 中断此前直接死；
+    // 实网重跑证明网关抖动下连续断流是常态，一次不够。等待 5s/10s，可被预算打断。
+    let mut resp: Result<crate::models::LLMResponse, crate::errors::AppError> =
+        Err("阶段 0 未执行".into());
+    for attempt in 0..3 {
+        if attempt > 0 {
+            let wait = std::time::Duration::from_secs(if attempt == 1 { 5 } else { 10 });
+            if tokio::time::timeout(budget.remaining(), tokio::time::sleep(wait)).await.is_err() {
+                tracing::warn!("阶段 0 重发等待被预算打断，不再重试");
+                break;
+            }
+        }
+        match llm::call_llm_stream(
+            app.clone(), &base_url, &api_key, &model,
+            messages.clone(),
+            req.thinking,
+            budget,
+            &gen,
+            &run_id,
+            llm::FINAL_STAGE_RESERVE,
+        )
+        .await
+        {
+            Ok(r) => { resp = Ok(r); break; }
+            // 取消不重试（用户主动停止）；截断是成功返回走不到这里
+            Err(e) if e.kind == crate::errors::ErrorKind::Cancelled => { resp = Err(e); break; }
+            Err(e) => {
+                tracing::warn!(attempt = attempt + 1, error = %e.message, "阶段 0 流式中断，整流重发");
+                resp = Err(e);
+            }
         }
     }
     let resp = resp?;

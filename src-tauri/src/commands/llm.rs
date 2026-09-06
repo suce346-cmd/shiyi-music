@@ -276,8 +276,26 @@ async fn send_and_extract(
     match extract_once(client, url, api_key, body, budget, run_id, reserve).await {
         Ok(resp) => Ok(resp),
         Err(e) if e.kind == ErrorKind::Parse || e.message.starts_with("Stream error") => {
-            tracing::warn!(error = %e.message, "非流式响应解码失败，同参重发一次");
-            extract_once(client, url, api_key, body, budget, run_id, reserve).await
+            // R9：解码失败提到最多 3 次（首次 + 2 次重发，等待 5s/10s，可被预算打断）。
+            // 实网重跑证明连续半截 body 是常态，一次不够。
+            tracing::warn!(error = %e.message, "非流式响应解码失败，进入重发循环");
+            let mut last = e;
+            for attempt in 1..3 {
+                let wait = std::time::Duration::from_secs(if attempt == 1 { 5 } else { 10 });
+                if tokio::time::timeout(budget.remaining(), tokio::time::sleep(wait)).await.is_err() {
+                    tracing::warn!("非流式重发等待被预算打断，不再重试");
+                    break;
+                }
+                match extract_once(client, url, api_key, body, budget, run_id, reserve).await {
+                    Ok(resp) => return Ok(resp),
+                    Err(e2) if e2.kind == ErrorKind::Parse || e2.message.starts_with("Stream error") => {
+                        tracing::warn!(attempt = attempt + 1, error = %e2.message, "非流式响应解码失败，重发");
+                        last = e2;
+                    }
+                    Err(e2) => return Err(e2),
+                }
+            }
+            Err(last)
         }
         Err(e) => Err(e),
     }
