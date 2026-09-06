@@ -140,7 +140,8 @@ pub fn validate_production(mode: &str, text: &str) -> ValidationResult {
         }
     }
 
-    // 4. 配器差 ≥ 单源下限：解析每段说明行乐器数（Mode A/B 都校验，低危修复）
+    // 4. 配器差 ≥ 单源下限 + 弱强段下限：解析每段说明行乐器数（Mode A/B 都校验）
+    // Q2：此前只查差值与上限，弱段 1 件/强段 4 件可蒙混过关；现补 MIN_INSTRUMENT_WEAK/STRONG 两条下限。
     if mode == "mode_a" || mode == "mode_b" {
         let counts = extract_section_instrument_counts(text);
         if !counts.is_empty() {
@@ -152,6 +153,12 @@ pub fn validate_production(mode: &str, text: &str) -> ValidationResult {
                     min_count, max_count, rules::MIN_INSTRUMENT_GAP
                 ));
             }
+            if min_count < rules::MIN_INSTRUMENT_WEAK {
+                issues.push(format!("最弱段配器 {} 件（要求 >= {} 件）", min_count, rules::MIN_INSTRUMENT_WEAK));
+            }
+            if max_count < rules::MIN_INSTRUMENT_STRONG {
+                issues.push(format!("最强段配器 {} 件（要求 >= {} 件）", max_count, rules::MIN_INSTRUMENT_STRONG));
+            }
             if max_count > rules::INSTRUMENT_MAX {
                 issues.push(format!("配器过多: 最多 {} 件（要求 <= {}）", max_count, rules::INSTRUMENT_MAX));
             }
@@ -161,6 +168,28 @@ pub fn validate_production(mode: &str, text: &str) -> ValidationResult {
     }
 
     if issues.is_empty() { ValidationResult::ok() } else { ValidationResult::fail(issues) }
+}
+
+/// Mode C 字数计数：去空白 + 去标点（Q2：与 prompts.rs“标点不计入字数”同口径；
+/// 此前仅去空白，带问号/感叹号的行会被误报字数不符）。
+fn count_lyric_chars(s: &str) -> usize {
+    s.chars().filter(|c| !c.is_whitespace() && !is_lyric_punct(*c)).count()
+}
+
+/// 歌词标点表（半角标点 + 中日韩常用标点；断句空格已由空白分支处理）。
+fn is_lyric_punct(c: char) -> bool {
+    c.is_ascii_punctuation() || matches!(c, '，' | '。' | '？' | '！' | '、' | '；' | '：' | '「' | '」' | '『' | '』' | '（' | '）' | '《' | '》' | '〈' | '〉' | '…' | '"' | '\'')
+}
+
+/// 裸包装行判定（Q2收窄：此前仅“半角逗号+>15字”，合法歌词长句可被吞；
+/// 现加关键词双条件：含配器/空间/人声/能量词才算包装行）。
+fn is_bare_package_line(l: &str) -> bool {
+    let n = l.chars().filter(|c| !c.is_whitespace()).count();
+    if !(l.contains(',') && n > 15) {
+        return false;
+    }
+    let ll = l.to_lowercase();
+    ["voice", "vocal", "人声", "room", "空间", "hall", "能量", "energy", "混响", "reverb", "氛围", "atmosphere", "guitar", "piano", "cello", "drums", "bass", "synth"].iter().any(|k| ll.contains(k))
 }
 
 /// Mode C：校验填词（字数对齐）
@@ -187,27 +216,22 @@ pub fn validate_lyric_fill(original: &str, new: &str) -> ValidationResult {
                 && !l.starts_with("参数")
                 && !l.starts_with("Weirdness")
         })
-        // 裸说明行识别：含逗号且去空白 >15 字视为说明行（与 Mode D 同一规则；歌词行 6-13 字，
-        // 但原歌词长句可能 >15 字——只用逗号+长度判定，不按字数一刀切过滤歌词行）
-        .filter(|l| {
-            let n = l.chars().filter(|c| !c.is_whitespace()).count();
-            !(l.contains(',') && n > 15)
-        })
+        // 裸说明行识别（Q2收窄：逗号+长度+关键词三条件，防吞真歌词）
+        .filter(|l| !is_bare_package_line(l))
         .collect();
 
     if orig_lines.is_empty() || new_lines.is_empty() {
         return ValidationResult::fail(vec!["原歌词或新歌词为空".to_string()]);
     }
 
-    // 字数逐行对比：前 N 行（N=原歌词行数）逐行等字数（去空白计数，历史修复）。
+    // 字数逐行对比：前 N 行（N=原歌词行数）逐行等字数（去空白+去标点，Q2 与 prompt 同口径）。
     // 允许尾部 ≤2 行收尾（如 Outro 一句）；超过报"多余歌词行"。
-    let count_chars = |s: &str| s.chars().filter(|c| !c.is_whitespace()).count();
     let n = orig_lines.len();
     let max_lines = n.min(new_lines.len());
     let mut mismatches = 0usize;
     for i in 0..max_lines {
-        let oc = count_chars(orig_lines[i]);
-        let nc = count_chars(new_lines[i]);
+        let oc = count_lyric_chars(orig_lines[i]);
+        let nc = count_lyric_chars(new_lines[i]);
         if oc != nc {
             mismatches += 1;
             if mismatches <= 3 {
@@ -226,8 +250,8 @@ pub fn validate_lyric_fill(original: &str, new: &str) -> ValidationResult {
             issues.push(format!("共 {} 行字数不符", mismatches));
         }
         // 打回信息可执行化：期望 vs 实际逐行对照，auditor 按数字逐行对齐
-        let expect: Vec<usize> = orig_lines.iter().map(|l| count_chars(l)).collect();
-        let actual: Vec<usize> = new_lines.iter().take(n).map(|l| count_chars(l)).collect();
+        let expect: Vec<usize> = orig_lines.iter().map(|l| count_lyric_chars(l)).collect();
+        let actual: Vec<usize> = new_lines.iter().take(n).map(|l| count_lyric_chars(l)).collect();
         issues.push(format!(
             "字数对照——原歌词每行期望字数: {:?}；当前新歌词每行实际字数: {:?}；请逐行调整至期望字数（用同字数的短句替换，宁短勿长）",
             expect, actual
@@ -279,9 +303,8 @@ pub fn validate_douyin(text: &str) -> ValidationResult {
                 current_verse = Some(t.trim_matches(|c| c == '[' || c == ']').to_string());
             }
         } else if current_verse.is_some() && !t.is_empty() && !(t.starts_with('[') && t.ends_with(']')) {
-            // 排除说明行（[乐器, 空间] 含逗号，历史修复）与裸包装行（含逗号且 >15 字）
-            let n = t.chars().filter(|c| !c.is_whitespace()).count();
-            if !(t.contains(',') && n > 15) {
+            // 排除说明行与裸包装行（Q2收窄判定，防吞真歌词）
+            if !is_bare_package_line(t) {
                 verse_line_count += 1;
             }
         }
@@ -306,6 +329,15 @@ pub fn validate_douyin(text: &str) -> ValidationResult {
         issues.push("缺少骤停标记（结尾应一刀切）".to_string());
     }
 
+    // 3b. 说明行 ≤ 单源上限（Q2：此前仅 prompt/checklist 声称，代码零执行；现补硬门）。
+    for line in text.lines().map(|l| l.trim()).filter(|l| l.starts_with('[') && l.ends_with(']') && l.contains(',')) {
+        let n = line.chars().count();
+        if n > rules::DOUYIN_DESC_LINE_MAX_CHARS {
+            issues.push(format!("说明行超 {} 字符（{} 字符）: {}", rules::DOUYIN_DESC_LINE_MAX_CHARS, n, line.chars().take(30).collect::<String>()));
+            break;
+        }
+    }
+
     // 4. 每行歌词 ≤ 单源字数（排除结构标签/说明行/Style Prompt/参数行）
     let lyric_lines: Vec<&str> = text
         .lines()
@@ -319,12 +351,8 @@ pub fn validate_douyin(text: &str) -> ValidationResult {
         .filter(|l| !l.starts_with("风格"))
         .filter(|l| !l.starts_with("参数"))
         .filter(|l| !l.starts_with("Weirdness"))
-        // 裸 Style Prompt/裸说明行长行识别：含逗号且去空白 >15 字的行是包装行（信息块分隔）；
-        // 无逗号的超长行仍视为歌词行（由下方 ≤10 字检测报错）
-        .filter(|l| {
-            let n = l.chars().filter(|c| !c.is_whitespace()).count();
-            !(l.contains(',') && n > 15)
-        })
+        // 裸 Style Prompt/裸说明行识别（Q2收窄判定；无逗号超长行仍视为歌词行，由下方字数门报错）
+        .filter(|l| !is_bare_package_line(l))
         .collect();
     let mut overlong = 0usize;
     for line in lyric_lines {
@@ -499,18 +527,77 @@ mod tests {
         assert!(!r.issues.iter().any(|i| i.contains("超限")), "4 行 Verse 不应报超限: {:?}", r.issues);
     }
 
-    /// 一份合规的 Mode A 产出应能通过（正样）
+    /// 一份合规的 Mode A 产出应能通过（正样：弱段 2 件、强段 5 件，满足 Q2 下限）
     #[test]
     fn production_valid_passes() {
         let text = r#"**Style Prompt**: dark indie folk 60BPM F#小调
 [Verse 1]
-[acoustic guitar fingerpicked, intimate room]
+[acoustic guitar fingerpicked, cello soft pads, intimate room]
 我们 很早前 就 谋过面
 [Chorus]
-[acoustic guitar strummed, cello dark bowing, warm piano cushions, light drums, wide hall]
+[acoustic guitar strummed, cello dark bowing, warm piano cushions, light drums, deep bass pulses, wide hall]
 我梦过 你的未来
 能量轨迹：Verse 1 能量 3，Chorus 能量 8"#;
         let r = validate_production("mode_a", text);
+        assert!(r.passed, "issues: {:?}", r.issues);
+    }
+
+    /// Q2：最弱段 1 件必须被揪出（此前只查差值可蒙混）
+    #[test]
+    fn production_weak_floor_fails() {
+        let text = r#"**Style Prompt**: dark indie folk
+[Verse 1]
+[acoustic guitar fingerpicked, intimate room]
+歌词行
+[Chorus]
+[acoustic guitar strummed, cello dark bowing, warm piano cushions, light drums, deep bass pulses, wide hall]
+能量轨迹：Verse 1 能量 3，Chorus 能量 8"#;
+        let r = validate_production("mode_a", text);
+        assert!(!r.passed);
+        assert!(r.issues.iter().any(|i| i.contains("最弱段配器")), "issues: {:?}", r.issues);
+    }
+
+    /// Q2：最强段 4 件必须被揪出（差值够、上限够也不行）
+    #[test]
+    fn production_strong_floor_fails() {
+        let text = r#"**Style Prompt**: dark indie folk
+[Verse 1]
+[acoustic guitar fingerpicked, cello soft pads, intimate room]
+歌词行
+[Chorus]
+[acoustic guitar strummed, cello bowing, warm piano, light drums, wide hall]
+歌词行
+能量轨迹：Verse 1 能量 3，Chorus 能量 8"#;
+        let r = validate_production("mode_a", text);
+        assert!(!r.passed);
+        assert!(r.issues.iter().any(|i| i.contains("最强段配器")), "issues: {:?}", r.issues);
+    }
+
+    /// Q2：Mode D 说明行超 80 字必须被揪出
+    #[test]
+    fn douyin_desc_line_over_80_fails() {
+        let long_desc = format!("[{}, wide hall, aggressive male voice]", "acoustic guitar strummed, cello dark bowing, warm piano cushions, light drums, deep bass pulses");
+        let text = format!("[Hook]\n我 真的 会谢\n我 真的 会谢\n[Hook]\n{}\n我 真的 会谢\n[Verse]\n一行\n[Hook]\n[all instruments cut abruptly]", long_desc);
+        let r = validate_douyin(&text);
+        assert!(!r.passed);
+        assert!(r.issues.iter().any(|i| i.contains("说明行超")), "issues: {:?}", r.issues);
+    }
+
+    /// Q2：标点不计字数——带问号的对齐行不应误报
+    #[test]
+    fn lyric_fill_punct_ignored() {
+        let original = "我们 很早前 就 谋过面？\n我一直 带给你 麻烦不断！";
+        let new = "你们 很晚后 也 想过我\n她总是 送给你 快乐满满";
+        let r = validate_lyric_fill(original, new);
+        assert!(r.passed, "issues: {:?}", r.issues);
+    }
+
+    /// Q2：含半角逗号但无关键词的长歌词行不得被吞
+    #[test]
+    fn lyric_fill_long_line_with_comma_kept() {
+        let original = "这是一个很长很长的歌词行，中间有个逗号但没有乐器词";
+        let new = "这是另一句很长很长歌词行，中间有个逗号但没有配器词";
+        let r = validate_lyric_fill(original, new);
         assert!(r.passed, "issues: {:?}", r.issues);
     }
 
