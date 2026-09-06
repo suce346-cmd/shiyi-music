@@ -17,20 +17,20 @@ export interface AppSettings {
   thinking: boolean;
   /** 角色级 API 覆盖（可选）：某角色配了就用配的，空字段继承全局；不配 = 全用全局 */
   roleOverrides?: Partial<Record<PipelineRoleKey, RoleApiOverride>>;
-  /** A11：生成参数覆盖（缺省走后端内置默认；旧数据无此字段） */
+  /** 生成参数覆盖（缺省走后端内置默认；旧数据无此字段） */
   generation?: GenerationConfig;
-  /** F7：主题（缺省跟随系统；旧数据无此字段） */
+  /** 主题（缺省跟随系统；旧数据无此字段） */
   theme?: ThemeMode;
-  /** F8：界面语言（缺省中文；旧数据无此字段） */
+  /** 界面语言（缺省中文；旧数据无此字段） */
   language?: Locale;
 }
 
-/** F7：主题模式 */
+/** 主题模式 */
 export type ThemeMode = "system" | "light" | "dark";
-/** F8：界面语言 */
+/** 界面语言 */
 export type Locale = "zh" | "en";
 
-/** A11：生成参数（全字段可选，与后端 GenerationConfig 对齐） */
+/** 生成参数（全字段可选，与后端 GenerationConfig 对齐） */
 export interface GenerationConfig {
   temperature?: number;
   max_tokens?: number;
@@ -57,7 +57,7 @@ export interface HistoryEntry {
   output: string;
   /** 完整对话流（含原始输入 + 每轮优化）。旧记录可能没有此字段 */
   conversation?: ChatTurn[];
-  /** F4：该次生成的累计 token 用量。旧记录没有此字段 */
+  /** 该次生成的累计 token 用量。旧记录没有此字段 */
   usage?: { prompt_tokens: number; completion_tokens: number };
   timestamp: number;
 }
@@ -110,19 +110,19 @@ export type PipelineEvent =
   | { type: "cancelled" }
   | { type: "step_usage"; role: PipelineRoleKey; prompt_tokens: number; completion_tokens: number };
 
-/** A9：事件信封（后端统一包 envelope 传输；run_id 归属，旧裸事件不再出现） */
+/** 事件信封（后端统一包 envelope 传输；run_id 归属，旧裸事件不再出现） */
 export interface PipelineEnvelope {
   run_id: string;
   event: PipelineEvent;
 }
 
-/** A5：后端结构化错误 {kind, message}。command 失败时 Tauri 返回该对象（非字符串）。 */
+/** 后端结构化错误 {kind, message}。command 失败时 Tauri 返回该对象（非字符串）。 */
 export interface AppError {
   kind: "network" | "auth" | "rate_limit" | "timeout" | "cancelled" | "parse" | "validation" | "internal";
   message: string;
 }
 
-/** A5：错误取文案——对象取 message，字符串原样（双形态兼容过渡期）。 */
+/** 错误取文案——对象取 message，字符串原样（双形态兼容过渡期）。 */
 export function errText(e: unknown): string {
   if (typeof e === "string") return e;
   if (e && typeof e === "object" && typeof (e as AppError).message === "string") {
@@ -139,16 +139,16 @@ export interface PipelineRequest {
   api_key: string;
   base_url: string;
   extra?: string;
-  /** F12：Mode C 原歌词独立字段（替代 extra 字符串拼接协议；旧后端无此字段时回退 extra） */
+  /** Mode C 原歌词独立字段（替代 extra 字符串拼接协议；旧后端无此字段时回退 extra） */
   original_lyrics?: string;
   /** 思考模式：后端按模型能力路由表注入厂商思考参数（与 AppSettings.thinking 对齐） */
   thinking: boolean;
   /** 角色级 API 覆盖（可选）：某角色配了就用配的，空字段继承全局 */
   role_overrides?: Partial<Record<PipelineRoleKey, RoleApiOverride>>;
-  /** F1：增量优化目标角色（缺省=后端按反馈自动路由；旧后端忽略） */
+  /** 增量优化目标角色（缺省=后端按反馈自动路由；旧后端忽略） */
   refine_targets?: PipelineRoleKey[];
-  /** A9：任务归属 id（后端 envelope/取消/插话定向；旧后端忽略未知字段） */
+  /** 任务归属 id（后端 envelope/取消/插话定向；旧后端忽略未知字段） */
   run_id?: string;
-  /** A11：生成参数覆盖（缺省走后端默认；旧后端忽略） */
+  /** 生成参数覆盖（缺省走后端默认；旧后端忽略） */
   generation?: GenerationConfig;
 }

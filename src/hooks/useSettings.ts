@@ -3,9 +3,9 @@ import { invoke } from "@tauri-apps/api/core";
 import type { AppSettings, RoleApiOverride } from "../types";
 
 const STORAGE_KEY = "suno-prompt-settings";
-/** A12：localStorage 中的明文 key 哨兵——该字段在钥匙串，本地只存标记 */
+/** localStorage 中的明文 key 哨兵——该字段在钥匙串，本地只存标记 */
 const KEYCHAIN_SENTINEL = "__keychain__";
-/** A12：迁移标记（localStorage 明文 → 钥匙串一次性迁移，防止重复执行） */
+/** 迁移标记（localStorage 明文 → 钥匙串一次性迁移，防止重复执行） */
 const MIGRATED_KEY = "suno-prompt-keychain-migrated";
 
 const defaultSettings: AppSettings = {
@@ -19,8 +19,8 @@ const defaultSettings: AppSettings = {
 };
 
 /** 清洗 localStorage 旧数据：坏类型字段回退默认值，防透传后端 serde 反序列化失败。
- *  A12：apiKey 字段只接受哨兵或空——明文 key 不再从 localStorage 读取（走钥匙串迁移）。
- *  A13：export 供单测（纯函数）+ 导入配置清洗复用同一入口。 */
+ * apiKey 字段只接受哨兵或空——明文 key 不再从 localStorage 读取（走钥匙串迁移）。
+ * export 供单测（纯函数）+ 导入配置清洗复用同一入口。 */
 export function sanitizeStored(raw: unknown): AppSettings {
   const base = { ...defaultSettings };
   if (typeof raw !== "object" || raw === null) return base;
@@ -30,11 +30,11 @@ export function sanitizeStored(raw: unknown): AppSettings {
   if (typeof o.model === "string") base.model = o.model;
   if (typeof o.baseUrl === "string") base.baseUrl = o.baseUrl;
   if (typeof o.thinking === "boolean") base.thinking = o.thinking;
-  // F7：theme 清洗（非法值回退跟随系统）
+  // theme 清洗（非法值回退跟随系统）
   if (o.theme === "light" || o.theme === "dark" || o.theme === "system") base.theme = o.theme;
-  // F8：language 清洗（非法值回退中文）
+  // language 清洗（非法值回退中文）
   if (o.language === "zh" || o.language === "en") base.language = o.language;
-  // A11：generation 清洗（数值范围收敛，坏值丢弃走后端默认）
+  // generation 清洗（数值范围收敛，坏值丢弃走后端默认）
   if (typeof o.generation === "object" && o.generation !== null && !Array.isArray(o.generation)) {
     const g = o.generation as Record<string, unknown>;
     const cleaned: { temperature?: number; max_tokens?: number } = {};
@@ -50,7 +50,7 @@ export function sanitizeStored(raw: unknown): AppSettings {
   }
   if (typeof o.roleOverrides === "object" && o.roleOverrides !== null && !Array.isArray(o.roleOverrides)) {
     // 逐角色深校验：非对象条目丢弃；对象只保留 string 三字段
-    // A12：api_key 同 apiKey 处理——仅哨兵保留，明文待迁移
+    // api_key 同 apiKey 处理——仅哨兵保留，明文待迁移
     const cleaned: Record<string, RoleApiOverride> = {};
     for (const [k, v] of Object.entries(o.roleOverrides)) {
       if (v && typeof v === "object" && !Array.isArray(v)) {
@@ -100,12 +100,12 @@ export function useSettings() {
     }
   });
   const [showSettings, setShowSettings] = useState(false);
-  /** A12：钥匙串就绪前输入框禁用（防用户在回填前覆盖内存空值） */
+  /** 钥匙串就绪前输入框禁用（防用户在回填前覆盖内存空值） */
   const [secretsReady, setSecretsReady] = useState(false);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
 
-  /** A12：基础 updateSettings（只更新内存 + 本地非敏感字段；密钥同步由 useSettingsWithSecrets 包一层） */
+  /** 基础 updateSettings（只更新内存 + 本地非敏感字段；密钥同步由 useSettingsWithSecrets 包一层） */
   const updateSettings = useCallback((partial: Partial<AppSettings>) => {
     setSettings((prev) => {
       const next = { ...prev, ...partial };
@@ -114,7 +114,7 @@ export function useSettings() {
     });
   }, []);
 
-  /** A12：启动迁移 + 钥匙串回填（一次性） */
+  /** 启动迁移 + 钥匙串回填（一次性） */
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -175,7 +175,7 @@ export function useSettings() {
   return { settings, updateSettings, showSettings, setShowSettings, secretsReady };
 }
 
-/** A12：持久化非敏感字段——apiKey/api_key 写哨兵（真实值只在钥匙串） */
+/** 持久化非敏感字段——apiKey/api_key 写哨兵（真实值只在钥匙串） */
 function persistNonSecrets(s: AppSettings) {
   try {
     const scrubbed: AppSettings = {
@@ -192,7 +192,7 @@ function persistNonSecrets(s: AppSettings) {
   } catch { /* 配额等失败静默（与旧行为一致） */ }
 }
 
-/** A12：带密钥同步的设置更新（供 App 层调用处替换 updateSettings 用——本文件默认导出保持兼容） */
+/** 带密钥同步的设置更新（供 App 层调用处替换 updateSettings 用——本文件默认导出保持兼容） */
 export function useSettingsWithSecrets() {
   const base = useSettings();
   const updateSettings = useCallback(async (partial: Partial<AppSettings>) => {

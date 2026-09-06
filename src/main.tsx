@@ -5,7 +5,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import type { Locale } from "./types";
 import "./index.css";
 
-/** F8：崩溃屏语言（App 外层读不到 settings，直读 localStorage；解析失败回中文） */
+/** 崩溃屏语言（App 外层读不到 settings，直读 localStorage；解析失败回中文） */
 function initialLocale(): Locale {
   try {
     const raw = localStorage.getItem("suno-prompt-settings");

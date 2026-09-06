@@ -1,4 +1,4 @@
-/** F8：界面文案（中英双语；后端 prompt 与 AI 生成内容不翻译）。
+/** 界面文案（中英双语；后端 prompt 与 AI 生成内容不翻译）。
  *  类型锁：en 与 zh 必须 key 逐位一致（Record<Strings, string> 编译期保证，漏 key 即红灯）。 */
 import type { Locale } from "./types";
 

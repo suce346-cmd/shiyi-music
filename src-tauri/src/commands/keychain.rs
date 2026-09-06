@@ -1,4 +1,4 @@
-//! A12：API Key 系统钥匙串存储（macOS Keychain / Windows Credential Manager / Linux Secret Service）。
+//! API Key 系统钥匙串存储（macOS Keychain / Windows Credential Manager / Linux Secret Service）。
 //! service 固定；account="global"（全局）或 "role:{role}"（角色级）。
 //! 前端迁移策略见 useSettings.ts：localStorage 明文 → 钥匙串 → 删除明文（一次性）。
 

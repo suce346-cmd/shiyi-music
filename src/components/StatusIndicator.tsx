@@ -9,15 +9,15 @@ interface Props {
   status: LLMStatus;
   errorMessage?: string;
   onRetry?: () => void;
-  /** B3：生成中显示"停止"按钮 */
+  /** 生成中显示"停止"按钮 */
   onCancel?: () => void;
-  /** A9：当前 run_id 读取（插话命令定向用） */
+  /** 当前 run_id 读取（插话命令定向用） */
   getRunId?: () => string;
-  /** F8：界面语言（缺省中文） */
+  /** 界面语言（缺省中文） */
   locale?: Locale;
 }
 
-/** F8：状态文案 key（locale 运行时解析） */
+/** 状态文案 key（locale 运行时解析） */
 const STATUS_TEXT_KEY: Record<LLMStatus, string> = {
   idle: "",
   loading: "status.connecting",
@@ -35,7 +35,7 @@ const config: Record<LLMStatus, { icon: typeof IconLoader; color: string; bg: st
 };
 
 export default function StatusIndicator({ status, errorMessage, onRetry, onCancel, getRunId, locale }: Props) {
-  /** F10：插话输入展开态 + 发送中 + 结果提示 */
+  /** 插话输入展开态 + 发送中 + 结果提示 */
   const [showInterject, setShowInterject] = useState(false);
   const [note, setNote] = useState("");
   const [sending, setSending] = useState(false);
@@ -44,7 +44,7 @@ export default function StatusIndicator({ status, errorMessage, onRetry, onCance
   const c = config[status];
   const Icon = c.icon;
 
-  /** F10/A9：发送插话（按 run_id 定向，非阻塞存入后端槽，轮边界消费；超长由后端 Validation 拦截） */
+  /** 发送插话（按 run_id 定向，非阻塞存入后端槽，轮边界消费；超长由后端 Validation 拦截） */
   const sendInterject = async () => {
     const text = note.trim();
     if (!text || sending) return;
@@ -90,7 +90,7 @@ export default function StatusIndicator({ status, errorMessage, onRetry, onCance
             {t(locale, "status.stop")}
           </button>
         )}
-        {/* F10：运行中插入意见（非阻塞，轮边界消费） */}
+        {/* 运行中插入意见（非阻塞，轮边界消费） */}
         {running && (
           <button onClick={() => setShowInterject(!showInterject)}
             className="flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-medium
@@ -107,7 +107,7 @@ export default function StatusIndicator({ status, errorMessage, onRetry, onCance
           </div>
         )}
       </div>
-      {/* F10：插话输入区 */}
+      {/* 插话输入区 */}
       {showInterject && running && (
         <div className="mt-2 flex gap-1.5">
           <input value={note} onChange={e => setNote(e.target.value)}

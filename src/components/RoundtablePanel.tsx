@@ -13,9 +13,9 @@ interface Props {
   /** v2 流水线阶段 */
   currentStage?: string | null;
   doneStages?: string[];
-  /** F4：本轮累计 token 用量（无用量时不显示） */
+  /** 本轮累计 token 用量（无用量时不显示） */
   usage?: { prompt_tokens: number; completion_tokens: number } | null;
-  /** F8：界面语言（缺省中文） */
+  /** 界面语言（缺省中文） */
   locale?: Locale;
 }
 
@@ -187,7 +187,7 @@ export default function RoundtablePanel({
   const progressPct =
     phase === "discussing" ? 33 : phase === "synthesizing" ? 66 : phase === "validating" ? 88 : 100;
 
-  // 阶段条按当前模式阵容过滤（M17：不包含的角色不显示，固定主持/校验常显）
+  // 阶段条按当前模式阵容过滤（不包含的角色不显示，固定主持/校验常显）
   const activeExpertIds = useMemo(() => new Set(experts.map((e) => e.id)), [experts]);
   const stages = useMemo(() => {
     const all: { key: string; label: string }[] = [
@@ -277,7 +277,7 @@ export default function RoundtablePanel({
             ? t(locale, "round.tip.running")
             : t(locale, "round.tip.idle")}
         </span>
-        {/* F4：本轮累计 token 用量（有计数时显示，只计数不估算金额） */}
+        {/* 本轮累计 token 用量（有计数时显示，只计数不估算金额） */}
         {usage && (usage.prompt_tokens > 0 || usage.completion_tokens > 0) && (
           <span className="text-[9px] text-text-muted tabular-nums shrink-0">
             tokens {usage.prompt_tokens + usage.completion_tokens}

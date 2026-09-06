@@ -1,4 +1,4 @@
-/** F1：前端反馈关键词路由镜像（仅预估展示用，真源在后端 roles_for_feedback）。
+/** 前端反馈关键词路由镜像（仅预估展示用，真源在后端 roles_for_feedback）。
  *  双源同步：规则变更两端同 commit；后端为准，前端只做"将重跑"提示。
  *  ModeC 歌词类映射 reviser；抖音类非 D 模式回落 producer；无命中返回空（后端回落全量）。 */
 import type { Mode, PipelineRoleKey } from "../types";

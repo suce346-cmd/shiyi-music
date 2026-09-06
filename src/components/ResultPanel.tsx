@@ -8,12 +8,12 @@ interface Props {
   conversation: ChatTurn[];
   streamText: string;
   status: LLMStatus;
-  /** F1：双模式优化——feedback + 模式（fast=增量/full=全量） */
+  /** 双模式优化——feedback + 模式（fast=增量/full=全量） */
   onRefine: (feedback: string, refineMode: "fast" | "full") => void;
   readOnly?: boolean;
-  /** F1：预估展示用（当前模式；缺省不展示预估） */
+  /** 预估展示用（当前模式；缺省不展示预估） */
   mode?: Mode;
-  /** F8：界面语言（缺省中文） */
+  /** 界面语言（缺省中文） */
   locale?: Locale;
 }
 
@@ -86,9 +86,9 @@ export default function ResultPanel({ conversation, streamText, status, onRefine
   const [copied, setCopied] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [showRefine, setShowRefine] = useState(false);
-  /** F1：优化模式（fast=增量/full=全量），默认快速优化 */
+  /** 优化模式（fast=增量/full=全量），默认快速优化 */
   const [refineMode, setRefineMode] = useState<"fast" | "full">("fast");
-  /** F1：增量预估参跑角色（前端镜像，后端为准；无命中则后端回落全量） */
+  /** 增量预估参跑角色（前端镜像，后端为准；无命中则后端回落全量） */
   const estimated = mode && refineMode === "fast" && feedback.trim()
     ? estimateRefineTargets(feedback, mode)
     : [];
@@ -213,7 +213,7 @@ export default function ResultPanel({ conversation, streamText, status, onRefine
               text-text-1 placeholder:text-text-muted/30 resize-y focus:outline-none
               focus:border-brand-500/40 focus:ring-1 focus:ring-brand-500/20 transition-all duration-150"
             placeholder="比如：唢呐不够炸、人声太软、洗脑循环不明显..." />
-          {/* F1：双模式优化——快速（增量）/深度（全量） */}
+          {/* 双模式优化——快速（增量）/深度（全量） */}
           <div className="flex gap-2">
             {(["fast", "full"] as const).map((m) => (
               <button key={m} onClick={() => setRefineMode(m)}

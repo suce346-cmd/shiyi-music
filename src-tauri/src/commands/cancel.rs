@@ -1,6 +1,6 @@
-//! B3/A9：用户取消支持——按 run_id 隔离的取消注册表。
+//! 用户取消支持——按 run_id 隔离的取消注册表。
 //! 检查点：send_with_retry / stream_response / run_pipeline_inner 各阶段入口（均按 run_id 查询）。
-//! 单任务时代是全局标志；A9 起多任务并行互不干扰。空 run_id（旧内部调用）走全局兼容位。
+//! 单任务时代是全局标志；多任务并行互不干扰。空 run_id（旧内部调用）走全局兼容位。
 
 use std::collections::HashSet;
 use std::sync::Mutex;

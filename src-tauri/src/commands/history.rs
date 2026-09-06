@@ -1,4 +1,4 @@
-//! F3：历史记录文件持久化 + 导出（替代 localStorage 5MB 上限）。
+//! 历史记录文件持久化 + 导出（替代 localStorage 5MB 上限）。
 //! 路径约定：{app_data}/history.json（原子写 .tmp+rename）；损坏自动备份 .bak 不丢数据。
 //! HistoryEntry 与前端 types/index.ts 对齐（serde default 兼容旧记录缺字段）。
 

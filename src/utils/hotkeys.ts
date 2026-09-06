@@ -1,4 +1,4 @@
-/** F14：快捷键 / 拖拽导入 / 设置导入导出共用的纯函数（A13 单测覆盖）。 */
+/** 快捷键 / 拖拽导入 / 设置导入导出共用的纯函数。 */
 
 /** 快捷键判定：Cmd/Ctrl + Enter 提交 */
 export function isSubmitHotkey(e: { key: string; metaKey: boolean; ctrlKey: boolean }): boolean {
@@ -25,7 +25,7 @@ export function isImportableFile(fileName: string): boolean {
   return IMPORTABLE_EXTS.includes(fileName.slice(dot + 1).toLowerCase());
 }
 
-/** 设置导出清洗：移除密钥字段（A12 钥匙串分离后，导出文件不带密钥）。
+/** 设置导出清洗：移除密钥字段。
  *  输入为 AppSettings 形态的未知对象，输出不含 apiKey / roleOverrides[*].api_key。 */
 export function scrubSettingsForExport(settings: unknown): Record<string, unknown> {
   if (typeof settings !== "object" || settings === null) return {};

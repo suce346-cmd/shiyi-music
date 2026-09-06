@@ -10,11 +10,11 @@ interface Props {
   mode: Mode;
   disabled: boolean;
   settings: AppSettings;
-  /** F8：界面语言（缺省中文） */
+  /** 界面语言（缺省中文） */
   locale?: Locale;
-  /** F12：mode_c 时附带原歌词独立字段（不再拼字符串） */
+  /** mode_c 时附带原歌词独立字段（不再拼字符串） */
   onGenerate: (userInput: string, extra?: { originalLyrics: string }) => void;
-  /** F14：Cmd/Ctrl+K 聚焦时由 App 层调用 */
+  /** Cmd/Ctrl+K 聚焦时由 App 层调用 */
   inputRef?: React.RefObject<HTMLTextAreaElement | null>;
 }
 
@@ -23,16 +23,16 @@ export default function InputPanel({ mode, disabled, settings, onGenerate, input
   const [inspiration, setInspiration] = useState("");
   const [originalLyrics, setOriginalLyrics] = useState("");
   const [newTheme, setNewTheme] = useState("");
-  /** F14：拖拽提示（非文本文件/读取失败时显示） */
+  /** 拖拽提示（非文本文件/读取失败时显示） */
   const [dropMsg, setDropMsg] = useState("");
   const localRef = useRef<HTMLTextAreaElement | null>(null);
-  /** 当前模式主输入框（F14 聚焦 + 拖拽填充目标） */
+  /** 当前模式主输入框 */
   const mainRef = inputRef ?? localRef;
 
   const handleSubmit = () => {
     if (!settings.apiKey) return;
     let userInput = "";
-    // F12：mode_c 原歌词独立字段直传——新主题即 userInput，原歌词走 extra.originalLyrics
+    // mode_c 原歌词独立字段直传——新主题即 userInput，原歌词走 extra.originalLyrics
     let extra: { originalLyrics: string } | undefined;
     if (mode === "mode_a") {
       userInput = lyrics;
@@ -55,7 +55,7 @@ export default function InputPanel({ mode, disabled, settings, onGenerate, input
     return !!inspiration.trim();
   })();
 
-  /** F14：Cmd/Ctrl+Enter 提交（复用 handleSubmit 的全部校验） */
+  /** Cmd/Ctrl+Enter 提交（复用 handleSubmit 的全部校验） */
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (isSubmitHotkey(e) && canSubmit) {
       e.preventDefault();
@@ -63,7 +63,7 @@ export default function InputPanel({ mode, disabled, settings, onGenerate, input
     }
   };
 
-  /** F14：拖拽 .txt/.lrc 到输入区 → 读取并填入当前模式主输入框 */
+  /** 拖拽 .txt/.lrc 到输入区 → 读取并填入当前模式主输入框 */
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setDropMsg("");

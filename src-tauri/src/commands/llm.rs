@@ -6,7 +6,7 @@ use reqwest::Client;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Runtime};
 
-/// 截断错误响应体（防敏感信息/超长回显，M7 修复）
+/// 截断错误响应体（防敏感信息/超长回显，历史修复）
 pub(crate) fn truncate_err(s: &str) -> String {
     const MAX: usize = 300;
     if s.chars().count() > MAX {
@@ -31,8 +31,8 @@ fn retry_plan(attempt: usize, status: Option<u16>, network_err: bool) -> Option<
 }
 
 /// 带退避重试的请求发送：429/5xx/网络错误按 retry_plan 退避，最多 3 次（4xx 凭据类错误不重试）。
-/// A5：错误分类——reqwest 层失败=Network，重试耗尽=Network。
-/// A1：每次尝试前查共享预算——剩余不足则跳过重试直接 Timeout；退避等待可被预算到期中断。
+/// 错误分类——reqwest 层失败=Network，重试耗尽=Network。
+/// 每次尝试前查共享预算——剩余不足则跳过重试直接 Timeout；退避等待可被预算到期中断。
 async fn send_with_retry(
     req: reqwest::RequestBuilder,
     budget: &SharedBudget,
@@ -42,11 +42,11 @@ async fn send_with_retry(
     const MIN_ATTEMPT_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
     let mut last_err = "unknown".to_string();
     for attempt in 0..3 {
-        // B3/A9：取消检查优先于预算（按 run_id 隔离）
+        // 取消检查优先于预算（按 run_id 隔离）
         if crate::commands::cancel::is_cancelled(run_id) {
             return Err(AppError::cancelled());
         }
-        // A1：预算闸门——不够一次尝试就直接失败，不再烧钱等 B1 abort
+        // 预算闸门——不够一次尝试就直接失败，不再烧钱等超时强杀
         if !budget.has(MIN_ATTEMPT_BUDGET) {
             return Err(AppError::new(
                 ErrorKind::Timeout,
@@ -61,7 +61,7 @@ async fn send_with_retry(
                     Some(wait) => {
                         last_err = format!("{} 错误", status);
                         tracing::warn!(status = %status, wait_secs = wait, attempt = attempt + 1, "LLM 请求错误，退避重试");
-                        // A1：退避等待可被预算到期中断——不等满，只等到 deadline
+                        // 退避等待可被预算到期中断——不等满，只等到 deadline
                         let wait_dur = std::time::Duration::from_secs(wait);
                         if tokio::time::timeout(budget.remaining(), tokio::time::sleep(wait_dur)).await.is_err() {
                             return Err(AppError::new(
@@ -143,15 +143,15 @@ fn apply_thinking(body: &mut Value, model: &str, max_tokens: u32) {
     body["max_tokens"] = max_tokens.max(THINKING_MAX_TOKENS).into();
 }
 
-/// B4：截断判定——finish_reason == "length" 表示输出被 max_tokens 截断
+/// 截断判定——finish_reason == "length" 表示输出被 max_tokens 截断
 pub(crate) fn is_truncated(finish_reason: &Option<String>) -> bool {
     finish_reason.as_deref() == Some("length")
 }
 
 /// 从非流式响应中提取（正文 content, finish_reason, usage）（纯函数，可测）。
 /// content 缺失或空字符串都算"无正文"（思考模式下思维链吃满 max_tokens 时 content 可能为空）。
-/// B4：finish_reason 一并返回——"length"（截断）由调用方分级处置，不再静默丢弃。
-/// F4：usage 一并返回（网关不返回时为 None，不阻塞流程）。
+/// finish_reason 一并返回——"length"（截断）由调用方分级处置，不再静默丢弃。
+/// usage 一并返回（网关不返回时为 None，不阻塞流程）。
 fn extract_message(json: &Value) -> Option<(String, Option<String>, Option<TokenUsage>)> {
     let c = json["choices"][0]["message"]["content"].as_str()?;
     if c.trim().is_empty() { return None; }
@@ -163,8 +163,8 @@ fn extract_message(json: &Value) -> Option<(String, Option<String>, Option<Token
 }
 
 /// 发送请求并解析正文；无正文返回 Err（供思考模式降级重试判断）。
-/// A5：HTTP 状态分类（401/403=Auth，429=RateLimit，5xx/其他=Network）；解析失败=Parse。
-/// A1：budget 透传给 send_with_retry（预算闸门）。
+/// HTTP 状态分类（401/403=Auth，429=RateLimit，5xx/其他=Network）；解析失败=Parse。
+/// budget 透传给 send_with_retry（预算闸门）。
 async fn send_and_extract(
     client: &Client,
     url: &str,
@@ -201,10 +201,10 @@ async fn send_and_extract(
 }
 
 /// 无流式的单次 LLM 调用（流水线步骤用）。
-/// 返回 LLMResponse（B4：含 finish_reason，供调用方做截断分级处置）。
+/// 返回 LLMResponse（含 finish_reason，供调用方做截断分级处置）。
 /// 思考模式下若响应无正文（思维链偶发吃满预算），自动降级为无思考重试一次，保证流水线不中断。
-/// A1：budget 透传（单调用超时按剩余预算收紧，见 build_client_for_budget）。
-/// A11：gen 缺省走内置默认（temperature 0.6 / max_tokens=调用方传入值）。
+/// budget 透传（单调用超时按剩余预算收紧，见 build_client_for_budget）。
+/// gen 缺省走内置默认（temperature 0.6 / max_tokens=调用方传入值）。
 pub(crate) async fn call_llm_silent(
     base_url: &str,
     api_key: &str,
@@ -216,11 +216,11 @@ pub(crate) async fn call_llm_silent(
     gen: &crate::models::GenerationConfig,
     run_id: &str,
 ) -> Result<LLMResponse, AppError> {
-    // A1：单调用超时取 min(场景默认, 剩余预算)——预算不足时 reqwest 层即快速失败
+    // 单调用超时取 min(场景默认, 剩余预算)——预算不足时 reqwest 层即快速失败
     let client_timeout = budget.remaining().as_secs().min(if thinking { 300 } else { 120 }).max(10);
     let client = build_client(client_timeout)?;
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-    // A11：temperature 缺省 0.6；max_tokens 取 min(调用方, 配置)——配置只收紧不放宽旧行为
+    // temperature 缺省 0.6；max_tokens 取 min(调用方, 配置)——配置只收紧不放宽旧行为
     let temperature = gen.silent_temperature();
     let max_tokens = max_tokens.min(gen.max_tokens());
     let mut body = serde_json::json!({
@@ -251,7 +251,7 @@ pub(crate) async fn call_llm_silent(
     }
 }
 
-/// 调用 LLM 流式接口并逐 chunk 转发给前端（A1：budget 透传；A11：gen 缺省 temperature 0.7）
+/// 调用 LLM 流式接口并逐 chunk 转发给前端（budget 透传gen 缺省 temperature 0.7）
 pub(crate) async fn call_llm_stream<R: Runtime>(
     app: AppHandle<R>,
     base_url: &str,
@@ -292,9 +292,9 @@ pub(crate) async fn call_llm_stream<R: Runtime>(
     stream_response(app, response, run_id).await
 }
 
-/// 解析单行 SSE 数据（`data: ...` 前缀行，兼容 `data:{...}` 无空格变体，M8 修复）。
+/// 解析单行 SSE 数据（`data: ...` 前缀行，兼容 `data:{...}` 无空格变体，尾部行修复）。
 /// 返回本次解析出的增量内容（未 emit，由调用方决定是否转发）。
-/// F4：流式 usage 块（`{"choices":[],"usage":{...}}` 尾部形态）累加进 stream_usage。
+/// 流式 usage 块（`{"choices":[],"usage":{...}}` 尾部形态）累加进 stream_usage。
 /// 纯函数，可独立单测（不含网络）。
 fn parse_sse_line(
     line: &str,
@@ -309,7 +309,7 @@ fn parse_sse_line(
             return None;
         }
         if let Ok(parsed) = serde_json::from_str::<Value>(data) {
-            // F4：usage 块可能独立出现（choices 为空），先累加再处理 delta
+            // usage 块可能独立出现（choices 为空），先累加再处理 delta
             if let Some(u) = TokenUsage::from_json(&parsed) {
                 stream_usage.add(&u);
             }
@@ -345,7 +345,7 @@ async fn stream_response<R: Runtime>(
 
     let mut full_content = String::new();
     let mut finish_reason: Option<String> = None;
-    // F4：流式 usage 累加（尾部独立块形态）
+    // 流式 usage 累加（尾部独立块形态）
     let mut stream_usage = TokenUsage::default();
     let mut line_buf = String::new();
     let mut stream = response.bytes_stream();
@@ -353,7 +353,7 @@ async fn stream_response<R: Runtime>(
     let mut last_log = std::time::Instant::now();
 
     while let Some(chunk_result) = stream.next().await {
-        // B3/A9：取消检查点——按 run_id 隔离
+        // 取消检查点——按 run_id 隔离
         if crate::commands::cancel::is_cancelled(run_id) {
             return Err(AppError::cancelled());
         }
@@ -383,7 +383,7 @@ async fn stream_response<R: Runtime>(
         }
     }
 
-    // 流结束后 flush 残留的不完整行（M8 修复：尾部 data 行不再静默丢弃）
+    // 流结束后 flush 残留的不完整行（尾部行修复：尾部 data 行不再静默丢弃）
     if !line_buf.trim().is_empty() {
         if let Some(delta) = parse_sse_line(&line_buf, &mut full_content, &mut finish_reason, &mut stream_usage) {
             let _ = app.emit("llm-chunk", StreamChunk { content: delta });
@@ -401,7 +401,7 @@ async fn stream_response<R: Runtime>(
     Ok(LLMResponse {
         raw: full_content,
         finish_reason,
-        // F4：流式 usage 全零时记 None（与非流式宽容语义一致）
+        // 流式 usage 全零时记 None（与非流式宽容语义一致）
         usage: if stream_usage.prompt_tokens == 0 && stream_usage.completion_tokens == 0 {
             None
         } else {
@@ -573,7 +573,7 @@ mod tests {
         assert_eq!(body2["max_tokens"], 32000);
     }
 
-    /// B4：正文与 finish_reason 联合提取——正常 / 缺失 / 空字符串（思考模式思维链吃满预算）都要正确判定
+    /// 正文与 finish_reason 联合提取——正常 / 缺失 / 空字符串（思考模式思维链吃满预算）都要正确判定
     #[test]
     fn extract_message_handles_missing_and_empty() {
         // 正常：content + finish_reason 一起返回
@@ -597,7 +597,7 @@ mod tests {
         assert!(extract_message(&blank).is_none());
     }
 
-    /// A1：预算耗尽时 send_with_retry 不发起请求，直接 Timeout（用不可达地址验证：若发起请求会是 Network 错误）
+    /// 预算耗尽时 send_with_retry 不发起请求，直接 Timeout（用不可达地址验证：若发起请求会是 Network 错误）
     #[tokio::test]
     async fn send_with_retry_budget_exhausted_skips() {
         use crate::budget::Budget;
@@ -616,7 +616,7 @@ mod tests {
         assert_eq!(err2.kind, ErrorKind::Network, "预算充足时应尝试发送并报 Network: {:?}", err2);
     }
 
-    /// F4：非流式 usage 提取——正常返回 Some，缺字段/全零为 None
+    /// 非流式 usage 提取——正常返回 Some，缺字段/全零为 None
     #[test]
     fn extract_message_returns_usage() {
         let ok = serde_json::json!({
@@ -631,7 +631,7 @@ mod tests {
         assert!(u2.is_none());
     }
 
-    /// F4：流式 usage 尾部块（choices 为空）累加，不污染正文
+    /// 流式 usage 尾部块（choices 为空）累加，不污染正文
     #[test]
     fn sse_usage_block_accumulates() {
         let mut full = String::new();
@@ -643,7 +643,7 @@ mod tests {
         assert_eq!((usage.prompt_tokens, usage.completion_tokens), (200, 50));
     }
 
-    /// F11：test_api_body 组装——max_tokens=16（旧 1 会让思考模型误报），模型名透传
+    /// test_api_body 组装——max_tokens=16（旧 1 会让思考模型误报），模型名透传
     #[test]
     fn test_api_body_uses_16_tokens() {
         let b = test_api_body("my-model");
@@ -652,7 +652,7 @@ mod tests {
         assert_eq!(b["stream"], false);
     }
 
-    /// B4：截断判定——只有 finish_reason == "length" 算截断（stop/缺失/其他值都不算）
+    /// 截断判定——只有 finish_reason == "length" 算截断（stop/缺失/其他值都不算）
     #[test]
     fn is_truncated_only_for_length() {
         assert!(is_truncated(&Some("length".to_string())));
@@ -662,7 +662,7 @@ mod tests {
     }
 }
 
-/// F11：测试连接请求体组装（纯函数，可测）——max_tokens=16（足够返回 hi 级响应；
+/// 测试连接请求体组装（纯函数，可测）——max_tokens=16（足够返回 hi 级响应；
 /// 旧 max_tokens=1 会让思考型模型无正文/400 误报"连接失败"）
 fn test_api_body(model: &str) -> serde_json::Value {
     serde_json::json!({

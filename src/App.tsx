@@ -17,10 +17,10 @@ import { MODE_LABELS, errText } from "./types";
 import { t } from "./i18n";
 
 const HISTORY_KEY = "suno-prompt-history";
-/** F3：历史迁移标记（localStorage → 文件一次性迁移） */
+/** 历史迁移标记（localStorage → 文件一次性迁移） */
 const HISTORY_MIGRATED_KEY = "suno-prompt-history-migrated";
 
-/** F3：文件持久化写回（防抖由调用方控制；失败透出由调用方展示，不阻断生成） */
+/** 文件持久化写回（防抖由调用方控制；失败透出由调用方展示，不阻断生成） */
 async function saveHistoryFile(entries: HistoryEntry[]): Promise<void> {
   await invoke("history_save", { entries });
 }
@@ -37,17 +37,17 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState("");
   const [lastUserInput, setLastUserInput] = useState("");
   const [conversation, setConversation] = useState<ChatTurn[]>([]);
-  // F3：历史改走文件存储——初始空，启动 useEffect 从 history_load 回填 + 迁移旧 localStorage
+  // 历史改走文件存储——初始空，启动 useEffect 从 history_load 回填 + 迁移旧 localStorage
   const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>([]);
   const historyRef = useRef(historyEntries);
   historyRef.current = historyEntries;
-  /** F3：写入防抖 timer（500ms 合并连续写入） */
+  /** 写入防抖 timer（500ms 合并连续写入） */
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  /** F3：计划持久化（防抖写文件；失败静默，生成流程不受影响） */
+  /** 计划持久化（防抖写文件；失败静默，生成流程不受影响） */
   const scheduleSave = useCallback((entries: HistoryEntry[]) => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      saveHistoryFile(entries).catch(() => { /* 持久化失败静默（与旧 M9 语义一致） */ });
+      saveHistoryFile(entries).catch(() => { /* 持久化失败静默（与旧配额降级语义一致） */ });
     }, 500);
   }, []);
   const chatHistoryRef = useRef<ChatMessage[]>([]);
@@ -63,21 +63,21 @@ export default function App() {
   const [expandedRole, setExpandedRole] = useState<PipelineRoleKey | null>(null);
   const { settings, updateSettings, showSettings, setShowSettings, secretsReady } = useSettingsWithSecrets();
   const pipeline = usePipeline();
-  /** F9：生成队列（提交分流 + 顺序执行；后端零改动，纯前端调度） */
+  /** 生成队列（提交分流 + 顺序执行；后端零改动，纯前端调度） */
   const queue = useQueue();
-  /** F9：当前运行队列项 id（高亮 + 取消归属；直接生成时为 null） */
+  /** 当前运行队列项 id（高亮 + 取消归属；直接生成时为 null） */
   const [runningQueueId, setRunningQueueId] = useState<string | null>(null);
   const [detailExpert, setDetailExpert] = useState<ExpertCard | null>(null);
-  /** F14：Cmd/Ctrl+K 聚焦目标输入框 */
+  /** Cmd/Ctrl+K 聚焦目标输入框 */
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
-  /** llm-chunk 单例监听（H4：任何时刻最多一个，注册前先清旧的） */
+  /** llm-chunk 单例监听（任何时刻最多一个，注册前先清旧的） */
   const llmUnlistenRef = useRef<UnlistenFn | null>(null);
-  /** run 递增 token：切模式/新 run 后，过期 run 的结果一律丢弃（H4） */
+  /** run 递增 token：切模式/新 run 后，过期 run 的结果一律丢弃 */
   const runTokenRef = useRef(0);
   /** 本轮生成/优化的专家发言记录（生成结束时合并进对话流，避免被覆盖） */
   const speechLogRef = useRef<ChatTurn[]>([]);
 
-  /** 注册 llm-chunk 单例监听（失败抛错由调用方 catch，H5 修复：不卡死） */
+  /** 注册 llm-chunk 单例监听（失败抛错由调用方 catch，历史修复：不卡死） */
   const ensureLlmListener = useCallback(async () => {
     if (llmUnlistenRef.current) {
       await llmUnlistenRef.current();
@@ -92,7 +92,7 @@ export default function App() {
     llmUnlistenRef.current = un;
   }, []);
 
-  // 卸载时清理单例监听（H5）
+  // 卸载时清理单例监听
   useEffect(() => {
     return () => {
       runTokenRef.current++; // 作废在途 run
@@ -103,7 +103,7 @@ export default function App() {
     };
   }, []);
 
-  // F14：全局快捷键（输入框内 Enter 由 InputPanel 处理；这里处理 K/,(设置面板开关)）
+  // 全局快捷键（输入框内 Enter 由 InputPanel 处理；这里处理 K/,(设置面板开关)）
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
@@ -138,14 +138,14 @@ export default function App() {
     setTestResult(null);
   }, [settings, updateSettings]);
 
-  /** F14：设置导入导出结果提示 */
+  /** 设置导入导出结果提示 */
   const [settingsMsg, setSettingsMsg] = useState("");
   const flashSettingsMsg = useCallback((msg: string) => {
     setSettingsMsg(msg);
     setTimeout(() => setSettingsMsg(""), 4000);
   }, []);
 
-  /** F14：导出配置（排除密钥，经 dialog 选路径写文件） */
+  /** 导出配置（排除密钥，经 dialog 选路径写文件） */
   const handleExportSettings = useCallback(async () => {
     try {
       const { save } = await import("@tauri-apps/plugin-dialog");
@@ -163,7 +163,7 @@ export default function App() {
     }
   }, [settings, flashSettingsMsg]);
 
-  /** F14：导入配置（dialog 选文件 → sanitizeStored 清洗 → 全量替换；密钥需重新输入） */
+  /** 导入配置（dialog 选文件 → sanitizeStored 清洗 → 全量替换；密钥需重新输入） */
   const handleImportSettings = useCallback(async () => {
     try {
       const { open } = await import("@tauri-apps/plugin-dialog");
@@ -184,7 +184,7 @@ export default function App() {
     }
   }, [updateSettings, flashSettingsMsg]);
 
-  // F7：主题应用（system 跟随媒体查询；light/dark 强制）
+  // 主题应用（system 跟随媒体查询；light/dark 强制）
   useEffect(() => {
     const apply = () => {
       const theme = settings.theme ?? "system";
@@ -206,7 +206,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
-  // F3：启动回填 + 一次性迁移（localStorage → 文件）
+  // 启动回填 + 一次性迁移（localStorage → 文件）
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -259,7 +259,7 @@ export default function App() {
   /** 角色级测试状态（idle/testing/ok/fail） */
   const [roleTestStates, setRoleTestStates] = useState<Record<string, "idle" | "testing" | "ok" | "fail">>({});
 
-  /** A6：日志目录按钮文案（成功显示路径 4s，失败显示错误） */
+  /** 日志目录按钮文案（成功显示路径 4s，失败显示错误） */
   const [logDirMsg, setLogDirMsg] = useState("");
   const handleOpenLogDir = useCallback(async () => {
     try {
@@ -272,7 +272,7 @@ export default function App() {
     }
   }, []);
 
-  /** A10：配置目录按钮文案（同日志按钮模式） */
+  /** 配置目录按钮文案（同日志按钮模式） */
   const [configDirMsg, setConfigDirMsg] = useState("");
   const handleOpenConfigDir = useCallback(async () => {
     try {
@@ -332,16 +332,16 @@ export default function App() {
     setHistoryEntries(updated); scheduleSave(updated);
   }, []);
 
-  /** F9：实际执行一次生成（直接提交与队列调度共用；queueId 非空时归属队列项） */
+  /** 实际执行一次生成（直接提交与队列调度共用；queueId 非空时归属队列项） */
   const runGenerateNow = useCallback(async (
     runId: string,
     runMode: Mode,
     userInput: string,
     extra?: { originalLyrics: string },
   ) => {
-    const token = ++runTokenRef.current; // 作废旧 run（H4）
+    const token = ++runTokenRef.current; // 作废旧 run
     setStatus("loading"); setStreamText(""); setErrorMessage("");
-    // F12：mode_c 的 userInput 即新主题（原歌词走独立字段）；历史展示用拼接文本保留上下文
+    // mode_c 的 userInput 即新主题（原歌词走独立字段）；历史展示用拼接文本保留上下文
     const displayInput = runMode === "mode_c" && extra
       ? `原歌词：\n${extra.originalLyrics}\n\n新主题：\n${userInput}`
       : userInput;
@@ -354,8 +354,8 @@ export default function App() {
 
     // 四模式统一走流水线（A/B/C/D）
     try {
-      await ensureLlmListener(); // H5：失败抛错进 catch，不再卡死
-      // F12：原歌词独立字段直传（旧字符串拼接+正则拆分+P6 补丁整条退役）
+      await ensureLlmListener(); // 失败抛错进 catch，不再卡死
+      // 原歌词独立字段直传（旧字符串拼接+正则拆分整条退役）
       const originalLyrics = runMode === "mode_c" ? extra?.originalLyrics : undefined;
       const raw = await pipeline.run({
         mode: runMode,
@@ -365,13 +365,13 @@ export default function App() {
         originalLyrics,
         // 专家发言实时追加到对话流（记录进 speechLog，结束时合并，不进入 chatHistoryRef）
         onSpeech: (speech) => {
-          // P5：阶段0流式结束后清空中间态流式文本（首个专家发言时），避免统领全文重复显示
+          // 阶段0流式结束后清空中间态流式文本（首个专家发言时），避免统领全文重复显示
           if (speechLogRef.current.length === 0) setStreamText("");
           speechLogRef.current.push(speech);
           setConversation((prev) => [...prev, speech]);
         },
       });
-      if (token !== runTokenRef.current) return; // 过期 run 的结果丢弃（H4）
+      if (token !== runTokenRef.current) return; // 过期 run 的结果丢弃
       const allTurns: ChatTurn[] = [
         { role: "user", content: displayInput, timestamp: Date.now() },
         ...speechLogRef.current,
@@ -387,19 +387,19 @@ export default function App() {
       setCurrentHistoryId(entry.id);
       const updated = [entry, ...historyRef.current];
       setHistoryEntries(updated); scheduleSave(updated);
-      // F9：队列项完成归档（queueId 命中时标记 done + 关联 history id）
+      // 队列项完成归档（queueId 命中时标记 done + 关联 history id）
       if (queue.peek().some((q) => q.id === runId)) {
         queue.mark(runId, "done");
       }
     } catch (e) {
-      if (token !== runTokenRef.current) return; // 过期 run 的错误丢弃（H4）
+      if (token !== runTokenRef.current) return; // 过期 run 的错误丢弃
       setStatus("error"); setErrorMessage(errText(e));
-      // F9：队列项失败标记（用户可从队列点击查看错误态，点击删除清理）
+      // 队列项失败标记（用户可从队列点击查看错误态，点击删除清理）
       if (queue.peek().some((q) => q.id === runId)) {
         queue.mark(runId, "error");
       }
     } finally {
-      // F9：完成链——无论成败，取队首继续（取消走 cancel 流程同样经此处继续）
+      // 完成链——无论成败，取队首继续（取消走 cancel 流程同样经此处继续）
       setRunningQueueId(null);
       const next = dequeueNext(queue.peek());
       if (next) {
@@ -412,7 +412,7 @@ export default function App() {
   }, [settings, ensureLlmListener, pipeline]);
 
   const handleGenerate = useCallback(async (userInput: string, extra?: { originalLyrics: string }) => {
-    // F9：忙时入队（当前有运行项）——排队顺序执行，不作废在途任务
+    // 忙时入队（当前有运行项）——排队顺序执行，不作废在途任务
     if (pipeline.active) {
       queue.push({
         id: newId(),
@@ -428,7 +428,7 @@ export default function App() {
 
   const handleRefine = useCallback(async (feedback: string, refineMode: "fast" | "full" = "fast") => {
     if (!feedback.trim()) return;
-    const token = ++runTokenRef.current; // 作废旧 run（H4）
+    const token = ++runTokenRef.current; // 作废旧 run
     setStatus("loading"); setStreamText(""); setErrorMessage("");
     setLastFeedback(feedback);
     speechLogRef.current = [];
@@ -438,8 +438,8 @@ export default function App() {
 
     let raw: string;
     try {
-      await ensureLlmListener(); // H5：失败抛错进 catch，不再卡死
-      // F12：lastUserInput 是展示用拼接文本（原歌词+新主题），从中拆出两部分直传。
+      await ensureLlmListener(); // 失败抛错进 catch，不再卡死
+      // lastUserInput 是展示用拼接文本（原歌词+新主题），从中拆出两部分直传。
       // 注意：这是展示文本的解析（用户可见格式，稳定），不是旧协议——新生成已不再依赖它。
       let originalLyrics: string | undefined;
       let input = lastUserInput;
@@ -450,9 +450,9 @@ export default function App() {
           input = m[2];
         }
       }
-      // P1：取最后一条 assistant（重复 refine 时注入的是上一版而非初始版）
+      // 取最后一条 assistant（重复 refine 时注入的是上一版而非初始版）
       const lastOutput = [...currentHistory].reverse().find((m) => m.role === "assistant")?.content || "";
-      // F1：fast 增量时前端预估 targets 透传（无命中传空→后端自动路由；full 不传=全量）
+      // fast 增量时前端预估 targets 透传（无命中传空→后端自动路由；full 不传=全量）
       const { estimateRefineTargets } = await import("./utils/refineTargets");
       const estimated = refineMode === "fast" ? estimateRefineTargets(feedback, mode) : [];
       raw = await pipeline.refine({
@@ -466,18 +466,18 @@ export default function App() {
         refineMode,
         refineTargets: refineMode === "fast" && estimated.length > 0 ? estimated : undefined,
         onSpeech: (speech) => {
-          // P5：阶段0流式结束后清空中间态流式文本（首个专家发言时）
+          // 阶段0流式结束后清空中间态流式文本（首个专家发言时）
           if (speechLogRef.current.length === 0) setStreamText("");
           speechLogRef.current.push(speech);
           setConversation((prev) => [...prev, speech]);
         },
       });
     } catch (e) {
-      if (token !== runTokenRef.current) return; // 过期 run 的错误丢弃（H4）
+      if (token !== runTokenRef.current) return; // 过期 run 的错误丢弃
       setStatus("error"); setErrorMessage(errText(e));
       return;
     }
-    if (token !== runTokenRef.current) return; // 过期 run 的结果丢弃（H4）
+    if (token !== runTokenRef.current) return; // 过期 run 的结果丢弃
 
     const allTurns: ChatTurn[] = [
       ...conversation,
@@ -503,7 +503,7 @@ export default function App() {
     if (status === "error" && lastFeedback) {
       await handleRefine(lastFeedback, "fast");
     } else if (status === "error" && lastUserInput) {
-      // F12：重试走展示文本解析路径（handleGenerate 内部处理直传，此处传原始展示文本由其二次解析）
+      // 重试走展示文本解析路径（handleGenerate 内部处理直传，此处传原始展示文本由其二次解析）
       // 注意：mode_c 重试时 lastUserInput 为展示拼接文本，handleGenerate 会误判为新主题——
       // 因此 mode_c 重试改走 refine 路径（带上次反馈），避免原歌词丢失
       if (mode === "mode_c" && lastFeedback) {
@@ -518,7 +518,7 @@ export default function App() {
   const clearHistory = () => { setHistoryEntries([]); scheduleSave([]); };
   const selectHistory = (entry: HistoryEntry) => { setHistoryView(entry); setShowHistory(false); };
 
-  /** F9：队列查看——完成/失败项点击查看对应历史（按 input 匹配最新一条） */
+  /** 队列查看——完成/失败项点击查看对应历史（按 input 匹配最新一条） */
   const selectQueueItem = useCallback((id: string) => {
     const item = queue.peek().find((q) => q.id === id);
     if (!item) return;
@@ -529,7 +529,7 @@ export default function App() {
     }
   }, [queue]);
 
-  /** F9：队列取消当前——只杀当前运行项（A9 run_id 定向），队列继续 */
+  /** 队列取消当前——只杀当前运行项，队列继续 */
   const handleCancelCurrent = useCallback(async () => {
     if (runningQueueId) {
       queue.mark(runningQueueId, "cancelled");
@@ -613,7 +613,7 @@ export default function App() {
               onChange={e => { updateSettings({ thinking: e.target.checked }); setTestResult(null); }}
               className="w-4 h-4 accent-brand-500 cursor-pointer shrink-0" />
           </div>
-          {/* A11：高级参数（缺省走后端默认；temperature 0~2，max_tokens 1000~32000） */}
+          {/* 高级参数（缺省走后端默认；temperature 0~2，max_tokens 1000~32000） */}
           <div className="rounded-lg border border-border/40 bg-surface-0/40 px-3 py-2 space-y-2">
             <div className="flex items-center justify-between gap-2">
               <label htmlFor="gen-temperature" className="text-[11px] text-text-2 cursor-pointer select-none">
@@ -655,14 +655,14 @@ export default function App() {
             {testResult === "fail" && t(settings.language, "settings.fail")}
             {testResult === null && (testingApi ? t(settings.language, "settings.testing") : t(settings.language, "settings.test"))}
           </button>
-          {/* A6：打开日志目录（诊断用，失败提示路径） */}
+          {/* 打开日志目录（诊断用，失败提示路径） */}
           <button onClick={handleOpenLogDir}
             className="w-full py-1.5 rounded-lg text-[11px] text-text-muted hover:text-text-2
                        bg-surface-2/60 hover:bg-surface-3/80 border border-border/40
                        transition-all duration-150 active:scale-[0.98]">
             {logDirMsg || t(settings.language, "settings.logdir")}
           </button>
-          {/* A10：打开配置目录（prompt/知识库覆盖文件投放处） */}
+          {/* 打开配置目录（prompt/知识库覆盖文件投放处） */}
           <button onClick={handleOpenConfigDir}
             className="w-full py-1.5 rounded-lg text-[11px] text-text-muted hover:text-text-2
                        bg-surface-2/60 hover:bg-surface-3/80 border border-border/40
@@ -732,7 +732,7 @@ export default function App() {
             </p>
           </div>
 
-          {/* F14：配置导入导出（密钥不落地：导出排除 apiKey/api_key，需重新输入） */}
+          {/* 配置导入导出（密钥不落地：导出排除 apiKey/api_key，需重新输入） */}
           <div className="border-t border-border/40 pt-3">
             <div className="flex gap-2">
               <button onClick={handleExportSettings}
@@ -752,7 +752,7 @@ export default function App() {
             </p>
           </div>
 
-          {/* F7/F8：主题 + 语言 */}
+          {/* 主题 + 语言 */}
           <div className="border-t border-border/40 pt-3 space-y-2">
             <div className="flex items-center justify-between gap-2">
               <span className="text-[11px] text-text-2">{t(settings.language, "settings.theme")}</span>
@@ -795,7 +795,7 @@ export default function App() {
           <div className="flex items-center gap-3">
             <div className="flex-1 max-w-[720px]">
               <ModeSelector mode={mode} locale={settings.language} onChange={(m) => {
-                runTokenRef.current++; // 作废在途 run（H4）
+                runTokenRef.current++; // 作废在途 run
                 if (llmUnlistenRef.current) { llmUnlistenRef.current(); llmUnlistenRef.current = null; }
                 setMode(m); setStatus("idle"); setStreamText(""); setErrorMessage("");
                 setConversation([]); chatHistoryRef.current = [];
@@ -808,7 +808,7 @@ export default function App() {
 
         {/* 工作区：圆桌舞台 + 结果 */}
         <div className="flex-1 flex overflow-hidden min-h-0">
-          {/* 左侧：圆桌舞台（四模式统一渲染，M13：Mode C 不再隐藏进度） */}
+          {/* 左侧：圆桌舞台（四模式统一渲染） */}
           <div className="w-[380px] shrink-0 flex flex-col border-r border-border/40 overflow-y-auto">
             <div className="p-3">
               <RoundtablePanel
@@ -851,7 +851,7 @@ export default function App() {
             {status !== "idle" && (
               <div className="shrink-0">
                 <StatusIndicator status={status} errorMessage={errorMessage} onRetry={handleRetry} onCancel={handleCancelCurrent} getRunId={pipeline.getRunId} locale={settings.language} />
-                {/* F9：生成队列面板（等待项列表；完成项点击查看） */}
+                {/* 生成队列面板（等待项列表；完成项点击查看） */}
                 <QueuePanel
                   queue={queue.queue}
                   locale={settings.language}

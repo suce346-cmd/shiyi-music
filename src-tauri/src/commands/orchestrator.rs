@@ -38,7 +38,7 @@ pub fn steps_for_mode(mode: &Mode) -> Vec<PipelineStep> {
     .collect()
 }
 
-/// F1：按优化反馈关键词路由重跑角色（纯函数，可测）。
+/// 按优化反馈关键词路由重跑角色（纯函数，可测）。
 /// 规则：歌词类→作词/改词；编曲类→制作；情绪类→情感；抖音类→流行风格；参数类→制作+情感。
 /// 无命中 → 空（调用方回落全量，安全默认不猜）；ModeC 的歌词类映射 Reviser 而非 Lyricist。
 /// 注：前端有 TS 镜像仅做预估展示，真源在此（双源同步，两端同 commit）。
@@ -77,13 +77,13 @@ pub fn roles_for_feedback(feedback: &str, mode: &Mode) -> Vec<PipelineRole> {
     out
 }
 
-/// 加载知识库（A4：读进程共享缓存，解析一次；测试直调 knowledge 接口）
+/// 加载知识库（读进程共享缓存，解析一次；测试直调 knowledge 接口）
 fn load_knowledge() -> Result<KnowledgeBase, String> {
     Ok(crate::knowledge::shared_knowledge().clone())
 }
 
 /// 按模式取原版完整指令（主持人阶段 0 用，一字不改）
-/// A10：取模式 prompt（用户覆盖优先，嵌入版回退；来源打日志）
+/// 取模式 prompt（用户覆盖优先，嵌入版回退；来源打日志）
 fn prompt_for_mode(mode: &Mode) -> String {
     let (name, embedded): (&str, &'static str) = match mode {
         Mode::ModeA => ("mode_a_system_prompt", prompts::mode_a_system_prompt()),
@@ -101,7 +101,7 @@ fn prompt_for_mode(mode: &Mode) -> String {
     }
 }
 
-/// A8：流水线元数据（单一真源下发）——modes 阵容来自 steps_for_mode，
+/// 流水线元数据（单一真源下发）——modes 阵容来自 steps_for_mode，
 /// roles 元数据来自 role_for（name/emoji/knowledge 表名；prompt 文本不下发）。
 /// 前端启动获取一次，本地三张表（MODE_EXPERTS/ROLE_NAMES/ROLE_EMOJIS）由它驱动；
 /// 一致性由 pipeline_meta_matches_sources 测试锁定。
@@ -119,7 +119,7 @@ pub struct RoleMeta {
     pub knowledge: Vec<String>,
 }
 
-/// A8：元数据查询命令（只读，无参数）
+/// 元数据查询命令（只读，无参数）
 #[tauri::command]
 pub async fn get_pipeline_meta() -> Result<PipelineMeta, crate::errors::AppError> {
     use crate::models::Mode;
@@ -191,12 +191,12 @@ struct ReviewResult {
     reason: String,
     /// agree=true 时的已核查关键检查项清单（无异议最低门槛：必须列出核查依据，防偷懒 agree）
     checked: Vec<String>,
-    /// B10：输出不可信（JSON 解析失败 / agree 字段缺失）——意见作废，仅作警示记录。
+    /// 输出不可信（JSON 解析失败 / agree 字段缺失）——意见作废，仅作警示记录。
     /// degraded 的结果不算 agree 也不算异议：不进 round_changes、不阻断收敛，但必须可见。
     degraded: bool,
 }
 
-/// target 合法枚举（P8：非法 target 归一为 other，主持人汇总时按杂项处理）
+/// target 合法枚举（非法 target 归一为 other，主持人汇总时按杂项处理）
 fn normalize_target(t: &str) -> String {
     match t {
         "style_prompt" | "lyrics" | "params" | "other" => t.to_string(),
@@ -204,9 +204,9 @@ fn normalize_target(t: &str) -> String {
     }
 }
 
-/// 解析审改 JSON（B10：不可信输出显式降级，不再假同意）。
+/// 解析审改 JSON（不可信输出显式降级，不再假同意）。
 /// - JSON 解析失败 / agree 字段缺失 → degraded=true（意见作废，仅作警示记录，见 humanize_review）
-/// - P8：content 为空的修订丢弃；非法 target 归一为 other。
+/// ——content 为空的修订丢弃；非法 target 归一为 other。
 fn parse_review(raw: &str) -> ReviewResult {
     let cleaned = strip_json_fence(raw);
     let Ok(v) = serde_json::from_str::<Value>(&cleaned) else {
@@ -256,7 +256,7 @@ fn parse_review(raw: &str) -> ReviewResult {
 
 /// 审改结果 → 前端可读文本
 fn humanize_review(role: PipelineRole, r: &ReviewResult) -> String {
-    // B10：不可信输出显式示警——绝不伪装成"无异议 ✅"
+    // 不可信输出显式示警——绝不伪装成"无异议 ✅"
     if r.degraded {
         return format!("⚠️ {}：输出无法采信（{}）", role.name(), r.reason);
     }
@@ -270,7 +270,7 @@ fn humanize_review(role: PipelineRole, r: &ReviewResult) -> String {
     }
     let mut out = format!("{}：提出 {} 处修订", role.name(), r.changes.len());
     for c in &r.changes {
-        // F2：修订全文展示（旧 40 字截断删除——对话流气泡支持长文本，用户应看到完整意见）
+        // 修订全文展示（旧 40 字截断删除——对话流气泡支持长文本，用户应看到完整意见）
         let reason = if c.reason.is_empty() { String::new() } else { format!("（{}）", c.reason) };
         out.push_str(&format!("\n· {} → {}{}", c.target, c.content, reason));
     }
@@ -325,14 +325,14 @@ pub const INJECT_MAX_INSTRUMENTS_ROWS: usize = 15;
 pub const INJECT_MAX_FULL_ROWS: usize = 50;
 /// 单角色一次注入总字数封顶（超过告警；最坏情况 = 制作人三表全命中含 22 条规则子集 ≈ 4300 字）
 pub const INJECT_MAX_TOTAL_CHARS: usize = 4500;
-/// A3：方案注入长度上限（超则截断 + 附注；对齐知识库"少而准"纪律，上下文同样需要预算）
+/// 方案注入长度上限（超则截断 + 附注；对齐知识库"少而准"纪律，上下文同样需要预算）
 pub const INJECT_MAX_PLAN_CHARS: usize = 8000;
-/// A3：revisions_log 保留条数（更早折叠为单行摘要，reason 关键词保留供去重参考）
+/// revisions_log 保留条数（更早折叠为单行摘要，reason 关键词保留供去重参考）
 pub const INJECT_MAX_LOG_ENTRIES: usize = 6;
-/// B4：格式输出截断时注入打回循环的 issue 文案（走 AuditResult 事件，用户可见）
+/// 格式输出截断时注入打回循环的 issue 文案（走 AuditResult 事件，用户可见）
 const TRUNCATION_ISSUE: &str = "输出被截断（finish_reason=length），请精简内容后重新输出完整提示词包";
 
-/// A3：方案截断（超长截断 + 附注，不静默丢；纯函数可测）
+/// 方案截断（超长截断 + 附注，不静默丢；纯函数可测）
 fn truncate_plan(plan: &str) -> String {
     if plan.chars().count() <= INJECT_MAX_PLAN_CHARS {
         return plan.to_string();
@@ -341,8 +341,8 @@ fn truncate_plan(plan: &str) -> String {
     format!("{}…\n[方案过长，已截断前 {} 字]", kept, INJECT_MAX_PLAN_CHARS)
 }
 
-/// A3：修订 log 折叠（只留最近 N 条，更早合成单行摘要；纯函数可测）
-/// B4 的 ⚠️ 条目短，折叠只压旧条目，警示可见性不受影响
+/// 修订 log 折叠（只留最近 N 条，更早合成单行摘要；纯函数可测）
+/// 的 ⚠️ 条目短，折叠只压旧条目，警示可见性不受影响
 fn fold_log(log: &[(String, String)]) -> Vec<(String, String)> {
     if log.len() <= INJECT_MAX_LOG_ENTRIES {
         return log.to_vec();
@@ -453,9 +453,9 @@ async fn execute_review<R: Runtime>(
     run_id: &str,
 ) -> Result<ReviewResult, AppError> {
     use crate::models::PipelineEnvelope;
-    // A11：生成参数（缺省默认；调用点透传给 llm 层）
+    // 生成参数（缺省默认；调用点透传给 llm 层）
     let gen = req.generation.clone().unwrap_or_default();
-    // A9：本函数事件包 envelope
+    // 本函数事件包 envelope
     let emit = |event: PipelineEvent| {
         let _ = app.emit("pipeline", PipelineEnvelope::new(run_id.to_string(), event));
     };
@@ -470,11 +470,11 @@ async fn execute_review<R: Runtime>(
     system.push_str("\n输出 JSON（严格符合格式，不输出其他内容）：\n");
     system.push_str(r.output_schema);
 
-    // A3：方案截断 + log 折叠（预算纪律；知识库注入同风格）
+    // 方案截断 + log 折叠（预算纪律；知识库注入同风格）
     let plan_view = truncate_plan(current_plan);
     let log_view = fold_log(revisions_log);
     let mut user = format!("【主持人当前方案】\n{}\n\n", plan_view);
-    // Mode C：原歌词全链路传递——审改员逐行字数/韵脚对齐的依据（P2 硬校验前置）
+    // Mode C：原歌词全链路传递——审改员逐行字数/韵脚对齐的依据
     if let Some(original) = req.original_lyrics_text() {
         user.push_str(&format!("【原歌词（改写需逐行对齐）】\n{}\n\n", original));
     }
@@ -509,12 +509,12 @@ async fn execute_review<R: Runtime>(
         &run_id,
     )
     .await?;
-    // B4（上限放开后简化）：30000 上限下截断极罕见，观测记录即可——JSON 已完整时仍可正常解析
+    // （上限放开后简化）：30000 上限下截断极罕见，观测记录即可——JSON 已完整时仍可正常解析
     if llm::is_truncated(&resp.finish_reason) {
         tracing::warn!(role = %role.name(), "审改输出触及 max_tokens 上限");
     }
     let mut result = parse_review(&resp.raw);
-    // B4：解析失败 → 同参数重试一次（LLM 输出有随机性，重试常能修复）；仍失败走 B10 降级警示
+    // 解析失败 → 同参数重试一次（LLM 输出有随机性，重试常能修复）；仍失败走相关降级警示
     if result.degraded {
         tracing::warn!(role = %role.name(), "审改输出无法解析，重试一次");
         let resp2 = llm::call_llm_silent(
@@ -540,7 +540,7 @@ async fn execute_review<R: Runtime>(
     Ok(result)
 }
 
-/// B10：校验员讨论轮 user prompt 构建（纯函数，可测）。
+/// 校验员讨论轮 user prompt 构建（纯函数，可测）。
 /// round_changes 三元组 =（角色, 修订片段, 角色总体意见）——意见必达：即使无具体修订，
 /// 角色总体意见也要进 prompt，供校验员核验冲突与漏项。
 fn build_audit_review_user_prompt(
@@ -550,11 +550,11 @@ fn build_audit_review_user_prompt(
     next_tasks: &str,
     req: &PipelineRequest,
 ) -> String {
-    // A3：方案截断 + log 折叠
+    // 方案截断 + log 折叠
     let plan_view = truncate_plan(current_plan);
     let log_view = fold_log(revisions_log);
     let mut user = format!("【主持人当前方案】\n{}\n\n", plan_view);
-    // Mode C：原歌词全链路传递——校验员核对逐行对齐（P2 硬校验前置）
+    // Mode C：原歌词全链路传递——校验员核对逐行对齐
     if let Some(original) = req.original_lyrics_text() {
         user.push_str(&format!("【原歌词（逐行字数对齐依据）】\n{}\n\n", original));
         if req.mode == Mode::ModeC {
@@ -606,9 +606,9 @@ async fn execute_audit_review<R: Runtime>(
     run_id: &str,
 ) -> Result<ReviewResult, AppError> {
     use crate::models::PipelineEnvelope;
-    // A11：生成参数（缺省默认；调用点透传给 llm 层）
+    // 生成参数（缺省默认；调用点透传给 llm 层）
     let gen = req.generation.clone().unwrap_or_default();
-    // A9：本函数事件包 envelope
+    // 本函数事件包 envelope
     let emit = |event: PipelineEvent| {
         let _ = app.emit("pipeline", PipelineEnvelope::new(run_id.to_string(), event));
     };
@@ -643,12 +643,12 @@ async fn execute_audit_review<R: Runtime>(
         &run_id,
     )
     .await?;
-    // B4（上限放开后简化）：截断观测记录，JSON 完整时照常解析
+    // （上限放开后简化）：截断观测记录，JSON 完整时照常解析
     if llm::is_truncated(&resp.finish_reason) {
         tracing::warn!("校验员审查输出触及 max_tokens 上限");
     }
     let mut result = parse_review(&resp.raw);
-    // B4：解析失败 → 重试一次；仍失败走 B10 降级警示
+    // 解析失败 → 重试一次；仍失败走相关降级警示
     if result.degraded {
         tracing::warn!("校验员审查输出无法解析，重试一次");
         let resp2 = llm::call_llm_silent(
@@ -707,7 +707,7 @@ async fn run_host_initial<R: Runtime>(
         &run_id,
     )
     .await?;
-    // B4：流式截断直接报错——半截方案绝不允许进入讨论轮（用户可见明确错误，可简化输入后重试）
+    // 流式截断直接报错——半截方案绝不允许进入讨论轮（用户可见明确错误，可简化输入后重试）
     if llm::is_truncated(&resp.finish_reason) {
         tracing::error!("方案初稿输出被截断");
         return Err("方案初稿输出被截断（达到输出上限），请简化输入后重试".into());
@@ -717,14 +717,14 @@ async fn run_host_initial<R: Runtime>(
     Ok(resp.raw)
 }
 
-/// B10：主持人汇总 user prompt 构建（纯函数，可测）。
+/// 主持人汇总 user prompt 构建（纯函数，可测）。
 /// round_changes 三元组 =（角色, 修订片段, 角色总体意见）——意见必达：即使无具体修订，
 /// "提出总体异议但没给改法"也要让主持人知道并自行权衡。
 fn build_summarize_user_prompt(
     current_plan: &str,
     round_changes: &[(PipelineRole, Vec<ReviewChange>, String)],
 ) -> String {
-    // A3：方案截断（汇总输入同样封顶）
+    // 方案截断（汇总输入同样封顶）
     let mut user = format!("【当前方案】\n{}\n\n【本轮各角色修订片段与校验员观点】\n", truncate_plan(current_plan));
     for (role, changes, role_reason) in round_changes {
         user.push_str(&format!("## {} 的修订：\n", role.name()));
@@ -773,7 +773,7 @@ async fn run_host_summarize<R: Runtime>(
         &run_id,
     )
     .await?;
-    // B4（上限放开后简化）：截断观测记录，split_tasks 对无标记文本全文当方案，行为兼容
+    // （上限放开后简化）：截断观测记录，split_tasks 对无标记文本全文当方案，行为兼容
     if llm::is_truncated(&resp.finish_reason) {
         tracing::warn!("主持人汇总输出触及 max_tokens 上限，按现状继续");
     }
@@ -787,7 +787,7 @@ async fn run_host_summarize<R: Runtime>(
 // ---------------------------------------------------------------------------
 
 /// 阶段 2：校验员按标准格式输出最终提示词包（硬校验失败打回重格式化）。
-/// 返回（文本, 是否截断）——B4：截断由调用方注入打回 issue，不在本函数内重试（复用打回循环的次数上限）。
+/// 返回（文本, 是否截断）———截断由调用方注入打回 issue，不在本函数内重试（复用打回循环的次数上限）。
 async fn run_audit_format<R: Runtime>(
     app: &AppHandle<R>,
     current_plan: &str,
@@ -815,11 +815,11 @@ async fn run_audit_format<R: Runtime>(
         system.push('\n');
     }
     let mut user = format!("请按标准格式输出最终提示词包：\n\n{}", current_plan);
-    // Mode C：原歌词全链路传递——格式输出逐行字数对齐的依据（P2 硬校验前置）
+    // Mode C：原歌词全链路传递——格式输出逐行字数对齐的依据
     if let Some(original) = req.original_lyrics_text() {
         user.push_str(&format!("\n\n【原歌词（逐行字数对齐依据，改词必须逐行等字数输出）】\n{}", original));
     }
-    // Mode C 专项：auditor 通用规范不含"改词"约束，必须显式声明（P2 硬校验前置）
+    // Mode C 专项：auditor 通用规范不含"改词"约束，必须显式声明
     if req.mode == Mode::ModeC {
         user.push_str(
             "\n\n【Mode C 改词专项（必须满足，校验会打回）】\n\
@@ -851,7 +851,7 @@ async fn run_audit_format<R: Runtime>(
     Ok((resp.raw, llm::is_truncated(&resp.finish_reason)))
 }
 
-/// F4：单次调用结束后发射用量事件（usage为None时不发射——网关未返回不阻塞流程）
+/// 单次调用结束后发射用量事件（usage为None时不发射——网关未返回不阻塞流程）
 fn emit_usage<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     role: PipelineRole,
@@ -904,8 +904,8 @@ fn split_tasks(text: &str) -> (String, String) {
     (text.trim().to_string(), String::new())
 }
 
-/// F1：从 refine 输入提取【上一版方案】段（P1 格式：`{输入}\n\n【上一版方案】\n{上一版}`）。
-/// 取最后一个标记之后全文（与 P6 同理：上一版方案内可能含标记字样）；缺失/空白返回 None。
+/// 从 refine 输入提取【上一版方案】段。
+/// 取最后一个标记之后全文（同理：上一版方案内可能含标记字样）；缺失/空白返回 None。
 fn extract_previous_plan(user_input: &str) -> Option<String> {
     let marker = "【上一版方案】";
     let pos = user_input.rfind(marker)?;
@@ -918,11 +918,11 @@ fn extract_previous_plan(user_input: &str) -> Option<String> {
 }
 
 /// 从最终文本收集硬校验问题。
-/// 全模式启用（P2 修复）：mode_c 的 lyric_fill 已过滤包装行 + 去空白计数，
+/// 全模式启用（历史修复）：mode_c 的 lyric_fill 已过滤包装行 + 去空白计数，
 /// 对标准提示词包可安全执行字数对齐校验，不再跳过。
-/// B7：Style Prompt 统一取 validator::extract_style_prompt 的冒号后正文——
+/// Style Prompt 统一取 validator::extract_style_prompt 的冒号后正文——
 /// 过短/BPM 校验不再被 "Style Prompt**: " 标签前缀虚增长度；"风格:" 前缀兼容已下沉至该实现。
-/// B6：BPM 只信任显式标注（knowledge::plan_bpm_value，无 BPM 字样返回 None），
+/// BPM 只信任显式标注（knowledge::plan_bpm_value，无 BPM 字样返回 None），
 /// 不再从行内任意数字猜值（"80年代" 等年代词误报源已移除）。
 fn collect_hard_issues(mode: &Mode, final_text: &str, extra: Option<&str>) -> Vec<String> {
     let mut issues = Vec::new();
@@ -968,7 +968,7 @@ where
 {
     let mut handle = tokio::task::spawn(fut);
     // 用 &mut handle 保住所有权：若按值传入，超时后 handle 会随 timeout future 一起被
-    // drop → tokio 语义为 detach，任务会继续在后台烧钱（B1 修复的根因）
+    // drop → tokio 语义为 detach，任务会继续在后台烧钱（历史修复的根因）
     match tokio::time::timeout(timeout, &mut handle).await {
         Ok(Ok(inner)) => GuardOutcome::Completed(inner),
         Ok(Err(e)) => GuardOutcome::JoinPanicked(format!("{}", e)),
@@ -983,9 +983,9 @@ where
 /// 主流程：跑圆桌流水线。
 /// 隔离层：tokio::task::spawn 执行（内部 panic 不杀 worker 线程，转为错误返回——依赖
 /// unwind，Cargo.toml 禁设 panic="abort"，改配置前先看这里）+ 整体超时（超时 = abort
-/// 强杀在途任务，非放弃等待）。真实错误统一发 Failed 事件；用户取消发 Cancelled 事件（B3）。
+/// 强杀在途任务，非放弃等待）。真实错误统一发 Failed 事件；用户取消发 Cancelled 事件。
 pub async fn run_pipeline<R: Runtime>(app: AppHandle<R>, request: PipelineRequest) -> Result<String, AppError> {
-    // A9：入口按请求 run_id 清理（与 with_timeout 内解析一致；空请求走全局兼容位）
+    // 入口按请求 run_id 清理（与 with_timeout 内解析一致；空请求走全局兼容位）
     let rid = request.run_id.clone().unwrap_or_default();
     cancel::reset(&rid);
     interject::reset(&rid);
@@ -1002,9 +1002,9 @@ pub(crate) async fn run_pipeline_with_timeout<R: Runtime>(
     use crate::errors::ErrorKind;
     use crate::models::PipelineEnvelope;
     let app2 = app.clone();
-    // A1：共享预算 = 超时时长——超时守卫（B1）是最后防线，预算是事前约束
+    // 共享预算 = 超时时长——超时守卫是最后防线，预算是事前约束
     let budget = std::sync::Arc::new(Budget::with_timeout(timeout));
-    // A9：run_id 归属（请求带则尊重，缺省后端生成）；全部事件包 envelope 发射
+    // run_id 归属（请求带则尊重，缺省后端生成）；全部事件包 envelope 发射
     let run_id = request
         .run_id
         .clone()
@@ -1019,7 +1019,7 @@ pub(crate) async fn run_pipeline_with_timeout<R: Runtime>(
     match spawn_guarded(run_pipeline_inner(app2, request, budget, run_id.clone()), timeout).await {
         GuardOutcome::Completed(inner) => {
             if let Err(e) = &inner {
-                // B3：取消走 Cancelled 事件（前端不标红），真实错误仍走 Failed
+                // 取消走 Cancelled 事件（前端不标红），真实错误仍走 Failed
                 if e.kind == ErrorKind::Cancelled {
                     emit(&app, PipelineEvent::Cancelled);
                 } else {
@@ -1048,10 +1048,10 @@ pub(crate) async fn run_pipeline_with_timeout<R: Runtime>(
 }
 
 /// 主流程内层：三阶段（主持人统领 → 角色审改+校验员审查讨论 → 校验员格式化）
-/// A1：budget 为共享预算（Arc），调用链逐层透传
-/// F1：增量模式（request.refine_targets.is_some()）时阶段 0 跳过——以上一版方案为起步，
+/// budget 为共享预算（Arc），调用链逐层透传
+/// 增量模式（request.refine_targets.is_some()）时阶段 0 跳过——以上一版方案为起步，
 /// 讨论轮只跑 targets 角色（Auditor 恒在：最终格式端口 + 讨论轮审查）。
-/// A9：run_id 透传——inner 内全部事件包 envelope 发射；取消/插话按 run_id 隔离。
+/// run_id 透传——inner 内全部事件包 envelope 发射；取消/插话按 run_id 隔离。
 async fn run_pipeline_inner<R: Runtime>(
     app: AppHandle<R>,
     request: PipelineRequest,
@@ -1059,12 +1059,12 @@ async fn run_pipeline_inner<R: Runtime>(
     run_id: String,
 ) -> Result<String, AppError> {
     use crate::models::PipelineEnvelope;
-    // A9：inner 专属发射器（全部事件带 run_id）
+    // inner 专属发射器（全部事件带 run_id）
     let emit = |event: PipelineEvent| {
         let _ = app.emit("pipeline", PipelineEnvelope::new(run_id.clone(), event));
     };
     let mode = &request.mode;
-    // B3/A9：取消检查点——按 run_id 隔离（多任务并行互不干扰）
+    // 取消检查点——按 run_id 隔离（多任务并行互不干扰）
     let checkpoint = || -> Result<(), AppError> {
         if cancel::is_cancelled(&run_id) {
             Err(AppError::cancelled())
@@ -1072,7 +1072,7 @@ async fn run_pipeline_inner<R: Runtime>(
             Ok(())
         }
     };
-    // F1：增量模式只跑 targets（空视为全量，防前端误传）；全量模式走模式阵容
+    // 增量模式只跑 targets（空视为全量，防前端误传）；全量模式走模式阵容
     let incremental = request
         .refine_targets
         .as_ref()
@@ -1087,7 +1087,7 @@ async fn run_pipeline_inner<R: Runtime>(
         steps_for_mode(mode).iter().map(|s| s.role).collect()
     };
 
-    // ---- 阶段 0：主持人统领（增量模式跳过——上一版方案即起步，P1 格式已注入 user_input）----
+    // ---- 阶段 0：主持人统领（增量模式跳过——上一版方案即起步，上一版格式已注入 user_input）----
     checkpoint()?;
     let mut current_plan = if incremental {
         // 增量起步：从 user_input 的【上一版方案】段提取；缺失则回落全量阶段 0（不静默用空方案）
@@ -1100,7 +1100,7 @@ async fn run_pipeline_inner<R: Runtime>(
     };
     // 主持人上轮任务分发（第一轮无任务）
     let mut next_tasks = String::new();
-    // F1：增量模式首条 log 声明参跑阵容（auditor 可见完整上下文）
+    // 增量模式首条 log 声明参跑阵容（auditor 可见完整上下文）
     let mut revisions_log: Vec<(String, String)> = Vec::new(); // (角色名, 修订摘要)
     if incremental {
         let names: Vec<&str> = roles.iter().map(|r| r.name()).collect();
@@ -1111,12 +1111,12 @@ async fn run_pipeline_inner<R: Runtime>(
     }
     for round in 1..=MAX_DISCUSSION_ROUNDS {
         let mut all_agree = true;
-        // B10：三元组 =（角色, 修订片段, 角色总体意见）——异议必达，无具体修订的意见也要汇总
+        // 三元组 =（角色, 修订片段, 角色总体意见）——异议必达，无具体修订的意见也要汇总
         let mut round_changes: Vec<(PipelineRole, Vec<ReviewChange>, String)> = Vec::new();
         // 本轮开始前的修订快照（上一轮及更早；本轮角色修订经 round_changes 传递，避免 auditor 双写）
         let prev_revisions = revisions_log.clone();
         checkpoint()?;
-        // F10：轮边界消费用户插话（非阻塞——在途调用不受影响，意见进本轮输入）
+        // 轮边界消费用户插话（非阻塞——在途调用不受影响，意见进本轮输入）
         for note in interject::drain(&run_id) {
             let preview: String = note.chars().take(60).collect();
             revisions_log.push(("用户插话".to_string(), note.clone()));
@@ -1130,7 +1130,7 @@ async fn run_pipeline_inner<R: Runtime>(
                 summary: format!("收到用户插话，已纳入本轮讨论：{}", preview),
             });
         }
-        // ① 动态角色并发审改（A2：同轮角色互相无依赖，join_all 并发；顺序收敛保证 revisions_log 确定性）
+        // ① 动态角色并发审改（同轮角色互相无依赖，join_all 并发；顺序收敛保证 revisions_log 确定性）
         let review_futs: Vec<_> = roles
             .iter()
             .map(|role| execute_review(&app, *role, &current_plan, &revisions_log, &next_tasks, &request, &budget, &run_id))
@@ -1139,10 +1139,10 @@ async fn run_pipeline_inner<R: Runtime>(
         for (role, result) in roles.iter().zip(review_results) {
             let result = result?;
             if result.degraded {
-                // B10：不可信输出不进 round_changes（无可整合内容）、不阻断收敛，但必须留下警示
+                // 不可信输出不进 round_changes（无可整合内容）、不阻断收敛，但必须留下警示
                 revisions_log.push((role.name().to_string(), humanize_review(*role, &result)));
             } else if !result.agree {
-                // B10：异议必达——有 changes 带着改，没 changes 带着 reason 也要让主持人看到
+                // 异议必达——有 changes 带着改，没 changes 带着 reason 也要让主持人看到
                 all_agree = false;
                 round_changes.push((*role, result.changes.clone(), result.reason.clone()));
                 revisions_log.push((role.name().to_string(), humanize_review(*role, &result)));
@@ -1197,7 +1197,7 @@ async fn run_pipeline_inner<R: Runtime>(
     let mut issues = Vec::new();
     for _ in 0..2 {
         issues = collect_hard_issues(mode, &final_text, request.original_lyrics_text());
-        // B4：截断与格式问题同一打回通道——截断 issue 置顶，校验员按"精简后重输"处置
+        // 截断与格式问题同一打回通道——截断 issue 置顶，校验员按"精简后重输"处置
         if truncated {
             issues.insert(0, TRUNCATION_ISSUE.to_string());
         }
@@ -1216,7 +1216,7 @@ async fn run_pipeline_inner<R: Runtime>(
     // 此前 issues 停留在上一次 collect，最后一次格式化的结果从未被校验（真 bug）
     if !issues.is_empty() {
         issues = collect_hard_issues(mode, &final_text, request.original_lyrics_text());
-        // B4：末次输出的截断标志同样参与最终裁决
+        // 末次输出的截断标志同样参与最终裁决
         if truncated {
             issues.insert(0, TRUNCATION_ISSUE.to_string());
         }
@@ -1239,8 +1239,8 @@ async fn run_pipeline_inner<R: Runtime>(
 }
 
 /// 优化/重跑：全流程重跑 + 反馈注入
-/// F13：feedback 长度校验在 command 入口（pipeline_refine）做，此处只拼装
-/// F1：前端未传 targets（None）时按反馈关键词自动路由；显式传（含空数组→全量）则尊重前端
+/// feedback 长度校验在 command 入口（pipeline_refine）做，此处只拼装
+/// 前端未传 targets（None）时按反馈关键词自动路由；显式传（含空数组→全量）则尊重前端
 pub async fn run_pipeline_refine(app: AppHandle, request: PipelineRequest, feedback: &str) -> Result<String, AppError> {
     let mut req = request;
     req.user_input = format!("{}\n\n（优化反馈：{}）", req.user_input, feedback);
@@ -1259,7 +1259,7 @@ pub async fn run_pipeline_refine(app: AppHandle, request: PipelineRequest, feedb
 // ---------------------------------------------------------------------------
 
 /// 圆桌生成（前端调用）
-/// F13：入口准入校验——非法输入在第一个 LLM 调用前拦截（Validation kind，前端 errText 展示）
+/// 入口准入校验——非法输入在第一个 LLM 调用前拦截（Validation kind，前端 errText 展示）
 #[tauri::command]
 pub async fn pipeline_generate(app: AppHandle, request: PipelineRequest) -> Result<String, AppError> {
     crate::models::validate_request(&request, None)?;
@@ -1277,14 +1277,14 @@ pub async fn pipeline_refine(
     run_pipeline_refine(app, request, &feedback).await
 }
 
-/// B3/A9：请求取消指定 run（前端"停止"按钮调，带 run_id）——检查点在下次机会中断
+/// 请求取消指定 run（前端"停止"按钮调，带 run_id）——检查点在下次机会中断
 #[tauri::command]
 pub async fn cancel_pipeline(run_id: Option<String>) {
     cancel::request_cancel(&run_id.unwrap_or_default());
 }
 
-/// F10：用户中途插话（前端"插入意见"调）——非阻塞存入槽，轮边界消费。
-/// F13 复用：超长意见（>2000）直接 Validation 拦截，与 feedback 同限额。
+/// 用户中途插话（前端"插入意见"调）——非阻塞存入槽，轮边界消费。
+/// 复用：超长意见（>2000）直接 Validation 拦截，与 feedback 同限额。
 #[tauri::command]
 pub async fn interject_feedback(run_id: Option<String>, note: String) -> Result<(), AppError> {
     crate::models::validate_request(
@@ -1374,7 +1374,7 @@ mod tests {
 
     #[test]
     fn parse_review_garbage_is_degraded() {
-        // B10：解析失败不再假同意——显式降级（意见作废，警示可见，流程不阻断）
+        // 解析失败不再假同意——显式降级（意见作废，警示可见，流程不阻断）
         let r = parse_review("不是 JSON");
         assert!(r.degraded);
         assert!(!r.agree);
@@ -1386,7 +1386,7 @@ mod tests {
         assert!(!s.contains("无异议 ✅"), "degraded 不得伪装成同意: {}", s);
     }
 
-    /// B10：agree 字段缺失（模型输出截断/自由发挥）→ 降级，不再 unwrap_or(true) 默认同意
+    /// agree 字段缺失（模型输出截断/自由发挥）→ 降级，不再 unwrap_or(true) 默认同意
     #[test]
     fn parse_review_missing_agree_is_degraded() {
         let r = parse_review(r#"{"changes": [{"target": "lyrics", "content": "x", "reason": "y"}]}"#);
@@ -1395,7 +1395,7 @@ mod tests {
         assert!(r2.degraded);
     }
 
-    /// B10：空手 agree（agree=true 无 checked）必须可见为警示，而非普通"无异议 ✅"
+    /// 空手 agree（agree=true 无 checked）必须可见为警示，而非普通"无异议 ✅"
     #[test]
     fn humanize_review_empty_checked_is_warning() {
         let r = parse_review(r#"{"agree": true}"#);
@@ -1405,7 +1405,7 @@ mod tests {
         assert!(!s.contains("✅"), "空手 agree 不得显示为合规通过: {}", s);
     }
 
-    /// B10：round_changes 三元组——无具体修订的总体异议也要进主持人/校验员 prompt
+    /// round_changes 三元组——无具体修订的总体异议也要进主持人/校验员 prompt
     #[test]
     fn summarize_prompt_carries_reason_without_changes() {
         let rc = vec![(
@@ -1418,7 +1418,7 @@ mod tests {
         assert!(user.contains("情感分析师"), "got: {}", user);
     }
 
-    /// B10：校验员讨论轮 prompt 同样携带无修订的总体意见 + Mode C 专项保留
+    /// 校验员讨论轮 prompt 同样携带无修订的总体意见 + Mode C 专项保留
     #[test]
     fn audit_review_prompt_carries_reason_and_mode_c() {
         let rc = vec![(PipelineRole::Producer, vec![], "参数越界".to_string())];
@@ -1432,7 +1432,7 @@ mod tests {
         assert!(user.contains("任务"), "got: {}", user);
     }
 
-    /// F1：反馈关键词路由——歌词/编曲/情绪/抖音/参数五类 + 无命中空 + ModeC 映射 + 去重保序
+    /// 反馈关键词路由——歌词/编曲/情绪/抖音/参数五类 + 无命中空 + ModeC 映射 + 去重保序
     /// （反馈文本均为中文描述，无凭据字面量）
     #[test]
     fn roles_for_feedback_routes_by_keywords() {
@@ -1454,7 +1454,7 @@ mod tests {
         assert!(roles_for_feedback("随便改改", &Mode::ModeB).is_empty());
     }
 
-    /// F1：上一版方案提取——取最后标记之后；缺失/空白返回 None
+    /// 上一版方案提取——取最后标记之后；缺失/空白返回 None
     #[test]
     fn extract_previous_plan_takes_last_marker() {
         let input = "新主题\n\n【上一版方案】\n方案A\n【上一版方案】\n方案B";
@@ -1463,7 +1463,7 @@ mod tests {
         assert!(extract_previous_plan("【上一版方案】\n   ").is_none());
     }
 
-    /// F12：original_lyrics 统一入口——新字段优先、旧 extra 回退、双空 None；旧请求兼容
+    /// original_lyrics 统一入口——新字段优先、旧 extra 回退、双空 None；旧请求兼容
     /// （旧请求模拟：序列化后删除新字段再解析，全程无凭据字面量）
     #[test]
     fn original_lyrics_prefers_new_field_falls_back_extra() {
@@ -1486,7 +1486,7 @@ mod tests {
 
     #[test]
     fn parse_review_drops_empty_content_and_normalizes_target() {
-        // P8：空 content 修订丢弃；非法 target 归一为 other
+        // 空 content 修订丢弃；非法 target 归一为 other
         let r = parse_review(r#"{"agree": false, "changes": [
             {"target": "lyrics", "content": "有效修订", "reason": "r1"},
             {"target": "style_prompt", "content": "   ", "reason": "空内容丢弃"},
@@ -1512,7 +1512,7 @@ mod tests {
         assert!(ok.contains("无异议"), "got: {}", ok);
         assert!(ok.contains("已核查"), "无异议必须展示核查清单: {}", ok);
         assert!(ok.contains("情绪内核"), "got: {}", ok);
-        // 无 checked 时为警示（B10：空手 agree 可见化）
+        // 无 checked 时为警示（空手 agree 可见化）
         let ok2 = humanize_review(PipelineRole::Emotion, &ReviewResult {
             agree: true,
             changes: vec![],
@@ -1537,7 +1537,7 @@ mod tests {
         assert!(fix.contains("Chorus 配器太弱"), "got: {}", fix);
     }
 
-    /// F2：长修订全文展示——100 字 content 不得被截断
+    /// 长修订全文展示——100 字 content 不得被截断
     #[test]
     fn humanize_review_full_content_no_truncation() {
         let long = "这是一段超过四十字的修订内容".repeat(5); // 70 字
@@ -1622,7 +1622,7 @@ mod tests {
         assert!(tasks2.contains("任务B"));
     }
 
-    /// B7：过短校验按冒号后正文计数——旧行级计数被 "Style Prompt**: " 前缀虚增 16 字符。
+    /// 过短校验按冒号后正文计数——旧行级计数被 "Style Prompt**: " 前缀虚增 16 字符。
     /// 正文 15 字符：旧实现 15+16=31 ≥30 放行（放水），新实现按正文判过短。
     #[test]
     fn style_prompt_short_check_uses_body_not_line() {
@@ -1635,7 +1635,7 @@ mod tests {
         assert!(!issues_ok.iter().any(|i| i.contains("过短")), "正文充足不应报过短: {:?}", issues_ok);
     }
 
-    /// B7 旧语义保留：`风格:` 前缀行同样能提取正文（原 extract_style_prompt_line 认得它）
+    /// 旧语义保留：`风格:` 前缀行同样能提取正文（原 extract_style_prompt_line 认得它）
     #[test]
     fn style_prompt_supports_legacy_grey_prefix() {
         let text = "风格：深夜室内民谣基调, 68BPM D小调, 钢琴与弦乐交织, 气声念白, 温暖木质空间\n[Verse 1]\n歌词";
@@ -1643,7 +1643,7 @@ mod tests {
         assert!(!issues.iter().any(|i| i.contains("过短")), "风格: 前缀应提取到正文: {:?}", issues);
     }
 
-    /// B6+B7 集成：mode_d 的 BPM 只按显式标注判——"80年代" 不再被当成 BPM=80 误报
+    /// +B7 集成：mode_d 的 BPM 只按显式标注判——"80年代" 不再被当成 BPM=80 误报
     #[test]
     fn bpm_check_not_fooled_by_era_words() {
         let text = "**Style Prompt**: 80年代复古Disco, 125BPM, 律动铜管, 痞气男声, 拥挤商场混响, 高能持续\n[Hook]\n[suona, 808]\n我 真的 会谢\n[Hook]\n我 真的 会谢\n[Hook]\n[all instruments cut abruptly]";
@@ -1655,7 +1655,7 @@ mod tests {
         );
     }
 
-    /// B6 旧规则保留：显式 BPM 不足（mode_d 要求 ≥90）仍必须报
+    /// 旧规则保留：显式 BPM 不足（mode_d 要求 ≥90）仍必须报
     #[test]
     fn bpm_explicit_violation_still_reported() {
         let text = "**Style Prompt**: 深夜室内民谣基调, 68BPM, 钢琴弦乐, 气声念白, 温暖空间\n[Hook]\n[suona, 808]\n我 真的 会谢\n[Hook]\n我 真的 会谢\n[Hook]\n[all instruments cut abruptly]";
@@ -1758,7 +1758,7 @@ mod tests {
         assert!(hit_lines <= 17, "注入行数超限: {}", hit_lines); // 表头+分隔+≤15
     }
 
-    /// A3：方案截断——短方案原样，超长截断+附注（INJECT_MAX_PLAN_CHARS 锁）
+    /// 方案截断——短方案原样，超长截断+附注（INJECT_MAX_PLAN_CHARS 锁）
     #[test]
     fn truncate_plan_caps_long_input() {
         assert_eq!(truncate_plan("短方案"), "短方案");
@@ -1771,7 +1771,7 @@ mod tests {
         assert_eq!(truncate_plan(&edge), edge);
     }
 
-    /// A3：log 折叠——6 条内原样，7 条折叠为摘要+最近 6 条，关键词保留
+    /// log 折叠——6 条内原样，7 条折叠为摘要+最近 6 条，关键词保留
     #[test]
     fn fold_log_keeps_recent_and_summarizes_rest() {
         let mk = |i: usize| (format!("角色{}", i), format!("修订内容很长很长很长很长很长很长{}", i));
@@ -1868,7 +1868,7 @@ mod tests {
         }
     }
 
-    /// A8：meta 与真源一致——modes 阵容 == steps_for_mode；roles 元数据 == role_for
+    /// meta 与真源一致——modes 阵容 == steps_for_mode；roles 元数据 == role_for
     #[test]
     fn pipeline_meta_matches_sources() {
         use crate::models::Mode;
@@ -1900,7 +1900,7 @@ mod tests {
         assert!(auditor.knowledge_tables.iter().any(|(t, _, _)| *t == "suno_rules"));
     }
 
-    /// A2：同轮角色并发语义——join_all 按输入顺序返回（revisions_log 确定性），
+    /// 同轮角色并发语义——join_all 按输入顺序返回（revisions_log 确定性），
     /// 任一角色 Err 时整轮中断（与串行语义一致）
     #[tokio::test]
     async fn concurrent_reviews_preserve_order_and_fail_fast() {
@@ -1925,7 +1925,7 @@ mod tests {
         assert!(matches!(res, Err(e) if e.kind == crate::errors::ErrorKind::Cancelled));
     }
 
-    // ---- B1：超时守卫（spawn_guarded）----
+    // ---- 超时守卫（spawn_guarded）----
 
     /// 超时必须真正终止任务——守卫返回 TimedOut 后，内层任务不得再推进
     #[tokio::test]

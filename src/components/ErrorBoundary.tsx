@@ -4,7 +4,7 @@ import { t } from "../i18n";
 
 interface Props {
   children: ReactNode;
-  /** F8：界面语言（缺省中文；类组件经 props 透传） */
+  /** 界面语言（缺省中文；类组件经 props 透传） */
   locale?: Locale;
 }
 

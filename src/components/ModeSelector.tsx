@@ -5,7 +5,7 @@ import { t } from "../i18n";
 interface Props {
   mode: Mode;
   onChange: (mode: Mode) => void;
-  /** F8：界面语言（缺省中文） */
+  /** 界面语言（缺省中文） */
   locale?: Locale;
 }
 

@@ -26,12 +26,12 @@ impl Mode {
 pub struct LLMResponse {
     pub raw: String,
     pub finish_reason: Option<String>,
-    /// F4：token 用量（网关不返回时为 None，不阻塞流程）
+    /// token 用量（网关不返回时为 None，不阻塞流程）
     #[serde(default)]
     pub usage: Option<TokenUsage>,
 }
 
-/// F4：单次 LLM 调用的 token 用量（只计数，不估算金额——各渠道单价不同）
+/// 单次 LLM 调用的 token 用量（只计数，不估算金额——各渠道单价不同）
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TokenUsage {
     pub prompt_tokens: u32,
@@ -104,7 +104,7 @@ mod tests {
         }
     }
 
-    /// A9：envelope 序列化形态 {run_id, event:{type,...}}（前端拆包过滤）
+    /// envelope 序列化形态 {run_id, event:{type,...}}（前端拆包过滤）
     #[test]
     fn envelope_serializes_with_run_id() {
         let e = PipelineEnvelope::new("r1", PipelineEvent::StepStart { role: PipelineRole::Host });
@@ -114,7 +114,7 @@ mod tests {
         assert_eq!(j["event"]["role"], "host");
     }
 
-    /// B3：Cancelled 事件序列化为 {"type":"cancelled"}（前端 usePipeline 分支）
+    /// Cancelled 事件序列化为 {"type":"cancelled"}（前端 usePipeline 分支）
     #[test]
     fn cancelled_event_serializes() {
         let e = PipelineEvent::Cancelled;
@@ -122,7 +122,7 @@ mod tests {
         assert_eq!(j["type"], "cancelled");
     }
 
-    /// F4：TokenUsage 宽容提取——正常 / 缺字段 / 全零 / 非数字
+    /// TokenUsage 宽容提取——正常 / 缺字段 / 全零 / 非数字
     #[test]
     fn token_usage_extracts_tolerantly() {
         let ok = serde_json::json!({"usage": {"prompt_tokens": 120, "completion_tokens": 34}});
@@ -139,7 +139,7 @@ mod tests {
         assert_eq!((uh.prompt_tokens, uh.completion_tokens), (50, 0));
     }
 
-    /// F4：StepUsage 事件序列化形态（前端累计分支）
+    /// StepUsage 事件序列化形态（前端累计分支）
     #[test]
     fn step_usage_event_serializes() {
         let e = PipelineEvent::StepUsage { role: PipelineRole::Emotion, prompt_tokens: 100, completion_tokens: 20 };
@@ -181,7 +181,7 @@ mod tests {
         assert!(back.thinking);
     }
 
-    /// A11：GenerationConfig 缺省=现行值（silent 0.6/stream 0.7/max 30000），越界 Validation
+    /// GenerationConfig 缺省=现行值（silent 0.6/stream 0.7/max 30000），越界 Validation
     #[test]
     fn generation_config_defaults_and_validation() {
         let d = GenerationConfig::default();
@@ -220,7 +220,7 @@ mod tests {
         assert!(validate_request(&req, None).is_ok());
     }
 
-    /// A9：旧请求无 run_id 字段 → None（后端生成）；新字段透传
+    /// 旧请求无 run_id 字段 → None（后端生成）；新字段透传
     #[test]
     fn request_run_id_defaults_none() {
         let req: PipelineRequest = serde_json::from_str(
@@ -230,7 +230,7 @@ mod tests {
         assert!(req.run_id.is_none());
     }
 
-    /// F13：准入校验——空/超长/非法 URL/缺配置一律 Validation（构造请求用 struct 直写，无凭据字面量 JSON）
+    /// 准入校验——空/超长/非法 URL/缺配置一律 Validation（构造请求用 struct 直写，无凭据字面量 JSON）
     #[test]
     fn validate_request_rejects_bad_input() {
         fn good() -> PipelineRequest {
@@ -386,9 +386,9 @@ pub struct PipelineRequest {
     pub api_key: String,
     pub base_url: String,
     /// 额外上下文（Mode C 原歌词）。
-    /// F12：deprecated——保留解析兼容一个版本（旧请求 extra 仍生效），新请求走 original_lyrics。
+    /// deprecated——保留解析兼容一个版本（旧请求 extra 仍生效），新请求走 original_lyrics。
     pub extra: Option<String>,
-    /// F12：Mode C 原歌词独立字段（替代 extra 的字符串拼接协议）。
+    /// Mode C 原歌词独立字段（替代 extra 的字符串拼接协议）。
     /// 旧前端无此字段 → None（serde default），后端回退读 extra。
     #[serde(default)]
     pub original_lyrics: Option<String>,
@@ -398,19 +398,19 @@ pub struct PipelineRequest {
     /// 思考模式：开启后按模型能力路由表注入厂商思考参数（旧前端无此字段 → 默认关闭）
     #[serde(default)]
     pub thinking: bool,
-    /// F1：增量优化目标角色（None = 全量，旧行为；Some(空) 也视为全量，防前端误传）。
+    /// 增量优化目标角色（None = 全量，旧行为；Some(空) 也视为全量，防前端误传）。
     /// 旧前端无此字段 → None（serde default）。
     #[serde(default)]
     pub refine_targets: Option<Vec<PipelineRole>>,
-    /// A11：生成参数覆盖（缺省走内置默认；旧前端无此字段 → None）。
+    /// 生成参数覆盖（缺省走内置默认；旧前端无此字段 → None）。
     #[serde(default)]
     pub generation: Option<GenerationConfig>,
-    /// A9：任务归属 id（前端生成传入；缺省后端在 with_timeout 内生成）。
+    /// 任务归属 id（前端生成传入；缺省后端在 with_timeout 内生成）。
     #[serde(default)]
     pub run_id: Option<String>,
 }
 
-/// A11：生成参数（全字段可选，缺省=现行硬编码值，零行为变化）。
+/// 生成参数（全字段可选，缺省=现行硬编码值，零行为变化）。
 /// temperature 默认：静默 0.6 / 流式 0.7（调用方区分）；max_tokens 默认 30000（MAX_TOKENS_CAP）。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GenerationConfig {
@@ -433,7 +433,7 @@ impl GenerationConfig {
     pub fn max_tokens(&self) -> u32 {
         self.max_tokens.unwrap_or(30000).min(32000)
     }
-    /// F13 扩展：范围校验（temperature 0~2，max_tokens 1000~32000）
+    /// 扩展：范围校验（temperature 0~2，max_tokens 1000~32000）
     pub fn validate(&self) -> Result<(), AppError> {
         if let Some(t) = self.temperature {
             if !(0.0..=2.0).contains(&t) {
@@ -456,7 +456,7 @@ impl GenerationConfig {
 }
 
 impl PipelineRequest {
-    /// F12：取 Mode C 原歌词统一入口——新字段优先，旧 extra 回退（兼容旧前端/旧请求）。
+    /// 取 Mode C 原歌词统一入口——新字段优先，旧 extra 回退（兼容旧前端/旧请求）。
     pub fn original_lyrics_text(&self) -> Option<&str> {
         self.original_lyrics
             .as_deref()
@@ -465,10 +465,10 @@ impl PipelineRequest {
     }
 }
 
-/// F13：请求准入校验（后端兜底——前端 InputPanel 保留快速反馈，后端为准入闸门）。
+/// 请求准入校验（后端兜底——前端 InputPanel 保留快速反馈，后端为准入闸门）。
 /// 限额：user_input ≤20000 字符、原歌词 ≤20000、feedback ≤2000；
 /// base_url 必须 http(s)；model/api_key 去空白后非空。
-/// 失败返回 Validation kind（A5 预留正式启用），前端 errText 原样展示。
+/// 失败返回 Validation kind（预留正式启用），前端 errText 原样展示。
 pub fn validate_request(req: &PipelineRequest, feedback: Option<&str>) -> Result<(), AppError> {
     /// 字符数超限报错
     fn too_long(field: &str, len: usize, max: usize) -> AppError {
@@ -514,7 +514,7 @@ pub fn validate_request(req: &PipelineRequest, feedback: Option<&str>) -> Result
             "API 地址非法（必须 http(s) 开头），请在设置中检查",
         ));
     }
-    // A11：生成参数范围校验（缺省跳过）
+    // 生成参数范围校验（缺省跳过）
     if let Some(g) = &req.generation {
         g.validate()?;
     }
@@ -532,7 +532,7 @@ pub enum HostStage {
 }
 
 /// 流水线事件（后端 → 前端，复用 'pipeline' 通道）
-/// A9：统一包 envelope 传输（PipelineEnvelope { run_id, event }），事件本体无 run_id 字段。
+/// 统一包 envelope 传输（PipelineEnvelope { run_id, event }），事件本体无 run_id 字段。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PipelineEvent {
@@ -554,13 +554,13 @@ pub enum PipelineEvent {
     DiscussionRound { round: u32, roles: Vec<PipelineRole>, reason: String },
     /// 整体失败
     Failed { error: String },
-    /// B3：用户取消（前端"停止"按钮）——与 Failed 区别：不标红，只回到空闲
+    /// 用户取消（前端"停止"按钮）——与 Failed 区别：不标红，只回到空闲
     Cancelled,
-    /// F4：单次调用的 token 用量（前端累计展示，不阻塞流程）
+    /// 单次调用的 token 用量（前端累计展示，不阻塞流程）
     StepUsage { role: PipelineRole, prompt_tokens: u32, completion_tokens: u32 },
 }
 
-/// A9：事件信封——run_id 归属 + 事件本体（前端按 run_id 过滤，替代 H4 纯 token 补丁的后端原生支持）
+/// 事件信封——run_id 归属 + 事件本体（前端按 run_id 过滤，替代旧纯 token 补丁的后端原生支持）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineEnvelope {
     pub run_id: String,

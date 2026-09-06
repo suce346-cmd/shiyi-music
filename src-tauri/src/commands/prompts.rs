@@ -1,12 +1,12 @@
-/// A10：prompt 覆盖目录（setup 时记录；{app_data}/prompts/<name>.txt 存在则优先）
+/// prompt 覆盖目录（setup 时记录；{app_data}/prompts/<name>.txt 存在则优先）
 static PROMPT_OVERRIDE_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 
-/// A10：setup 调用一次，记录覆盖目录（目录不存在也记录，读取时判定）
+/// setup 调用一次，记录覆盖目录（目录不存在也记录，读取时判定）
 pub fn set_prompt_override_dir(dir: std::path::PathBuf) {
     let _ = PROMPT_OVERRIDE_DIR.set(dir.join("prompts"));
 }
 
-/// A10：读覆盖 prompt（存在且非空则 Some；否则 None 走嵌入版）
+/// 读覆盖 prompt（存在且非空则 Some；否则 None 走嵌入版）
 pub(crate) fn prompt_override(name: &str) -> Option<String> {
     let dir = PROMPT_OVERRIDE_DIR.get()?;
     let content = std::fs::read_to_string(dir.join(format!("{}.txt", name))).ok()?;

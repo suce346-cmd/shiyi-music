@@ -1,4 +1,4 @@
-//! A6：日志落盘（tracing + 文件）。
+//! 日志落盘（tracing + 文件）。
 //! 路径：{app_data}/logs/shiyi.log（按日滚动，保留 3 天）；级别 INFO。
 //! 初始化失败不阻断启动（回退 stderr fmt 层）；dev 终端双写保留。
 

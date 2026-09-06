@@ -13,11 +13,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            // A6：app_data 目录就绪后初始化文件日志
+            // app_data 目录就绪后初始化文件日志
             use tauri::Manager;
             if let Ok(dir) = app.path().app_data_dir() {
                 let _ = logging::init(&dir);
-                // A10：知识库覆盖预热 + prompt 覆盖目录记录（失败回退嵌入版，不阻断启动）
+                // 知识库覆盖预热 + prompt 覆盖目录记录（失败回退嵌入版，不阻断启动）
                 crate::knowledge::warm_knowledge(&dir);
                 crate::commands::prompts::set_prompt_override_dir(dir);
                 tracing::info!(

@@ -16,11 +16,11 @@ interface Props {
   onClear: () => void;
   onSelect: (entry: HistoryEntry) => void;
   onClose: () => void;
-  /** F8：界面语言（缺省中文） */
+  /** 界面语言（缺省中文） */
   locale?: Locale;
 }
 
-/** F3：导出单条记录（后端拼文本 → dialog 选路径 → 写文件） */
+/** 导出单条记录（后端拼文本 → dialog 选路径 → 写文件） */
 async function exportEntry(id: string, format: "txt" | "md"): Promise<string | null> {
   const text = await invoke<string>("history_export_text", { id, format });
   const filePath = await save({
@@ -42,7 +42,7 @@ const FILTER_TABS: { label: string; value: Mode | "all" }[] = [
   { label: "D", value: "mode_d" },
 ];
 
-/** A13：export 供单测（纯函数） */
+/** export 供单测（纯函数） */
 export function outputSummary(entry: HistoryEntry): string {
   const text = entry.output || "";
   return text.length > 60 ? text.slice(0, 60) + "..." : text;
@@ -50,7 +50,7 @@ export function outputSummary(entry: HistoryEntry): string {
 
 export default function HistoryPanel({ entries, allEntriesCount, filter, onFilterChange, onDelete, onClear, onSelect, onClose, locale }: Props) {
   const [confirmClear, setConfirmClear] = useState(false);
-  /** F3：导出中 id（按钮 loading 态）/ 导出结果提示 */
+  /** 导出中 id（按钮 loading 态）/ 导出结果提示 */
   const [exportingId, setExportingId] = useState<string | null>(null);
   const [exportMsg, setExportMsg] = useState("");
 
@@ -109,7 +109,7 @@ export default function HistoryPanel({ entries, allEntriesCount, filter, onFilte
             </button>
           ))}
         </div>
-        {/* F3：导出结果提示 */}
+        {/* 导出结果提示 */}
         {exportMsg && (
           <div className="px-4 py-1.5 border-b border-border/50 text-[10px] text-text-muted truncate">
             {exportMsg}

@@ -1,4 +1,4 @@
-//! 结构化错误（A5）：kind 供程序判断/前端差异化提示，message 为用户可读文本。
+//! 结构化错误：kind 供程序判断/前端差异化提示，message 为用户可读文本。
 //! 兼容策略：历史 String 错误经 From 自动归为 Internal，函数体无需逐处改写；
 //! 仅关键构造点（网络/鉴权/限流/超时/取消/解析）显式分类。
 
@@ -28,7 +28,7 @@ impl AppError {
         Self { kind, message: message.into() }
     }
 
-    /// B3：用户取消
+    /// 用户取消
     pub fn cancelled() -> Self {
         Self::new(ErrorKind::Cancelled, "生成已取消")
     }

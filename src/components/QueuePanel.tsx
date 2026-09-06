@@ -11,11 +11,11 @@ interface Props {
   onRemove: (id: string) => void;
   onClear: () => void;
   onSelect: (id: string) => void;
-  /** F8：界面语言（缺省中文） */
+  /** 界面语言（缺省中文） */
   locale?: Locale;
 }
 
-/** F8：状态文案 key（locale 运行时解析） */
+/** 状态文案 key（locale 运行时解析） */
 const STATUS_KEY: Record<QueueItem["status"], string> = {
   queued: "queue.st.queued",
   running: "queue.st.running",
@@ -24,7 +24,7 @@ const STATUS_KEY: Record<QueueItem["status"], string> = {
   cancelled: "queue.st.cancelled",
 };
 
-/** F9：生成队列面板（等待项列表；当前运行项高亮；完成/失败项点击查看对应历史） */
+/** 生成队列面板（等待项列表；当前运行项高亮；完成/失败项点击查看对应历史） */
 export default function QueuePanel({ queue, runningId, onRemove, onClear, onSelect, locale }: Props) {
   const waiting = queue.filter((q) => q.status === "queued" || q.status === "running");
   if (queue.length === 0) return null;

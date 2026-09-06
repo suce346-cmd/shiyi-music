@@ -7,7 +7,7 @@
 //! `roles.rs` 中校验员 prompt 的格式规范**同步维护**——改任一处必须改另一处，
 //! 否则会出现「prompt 说合规、代码说不合规」的漂移。
 
-// B9：能量解析唯一实现在 energy.rs（原先 validator/knowledge 各持一份拷贝）
+// 能量解析唯一实现在 energy.rs（原先 validator/knowledge 各持一份拷贝）
 use crate::energy::extract_energy_values;
 
 /// 校验结果
@@ -42,7 +42,7 @@ fn extract_section_tags(text: &str) -> Vec<String> {
 }
 
 /// 提取 Style Prompt 正文（冒号后）。
-/// B7：支持 `**Style Prompt**：` / `Style Prompt: ` / `风格:` 三种写法——
+/// 支持 `**Style Prompt**：` / `Style Prompt: ` / `风格:` 三种写法——
 /// 旧 orchestrator 行级提取器认得 "风格" 前缀（语义下沉至此，无行为回退）。
 /// 返回冒号后正文供过短/BPM 校验使用，不再被 "Style Prompt**: " 标签前缀虚增长度。
 pub(crate) fn extract_style_prompt(text: &str) -> Option<String> {
@@ -196,7 +196,7 @@ pub fn validate_lyric_fill(original: &str, new: &str) -> ValidationResult {
         return ValidationResult::fail(vec!["原歌词或新歌词为空".to_string()]);
     }
 
-    // 字数逐行对比：前 N 行（N=原歌词行数）逐行等字数（去空白计数，P2 修复）。
+    // 字数逐行对比：前 N 行（N=原歌词行数）逐行等字数（去空白计数，历史修复）。
     // 允许尾部 ≤2 行收尾（如 Outro 一句）；超过报"多余歌词行"。
     let count_chars = |s: &str| s.chars().filter(|c| !c.is_whitespace()).count();
     let n = orig_lines.len();
@@ -258,7 +258,7 @@ pub fn validate_douyin(text: &str) -> ValidationResult {
         issues.push(format!("Hook 出现 {} 次（要求 >= 2）", hook_count));
     }
 
-    // 2. Verse 不超过 4 行（B8：逐段结算——旧实现每遇新 Verse 重置计数，
+    // 2. Verse 不超过 4 行（逐段结算——旧实现每遇新 Verse 重置计数，
     //    多段 Verse 只检查了最后一段，前面段落超行漏检）
     let lines: Vec<&str> = text.lines().collect();
     let mut verse_counts: Vec<(String, usize)> = Vec::new();
@@ -276,7 +276,7 @@ pub fn validate_douyin(text: &str) -> ValidationResult {
                 current_verse = Some(t.trim_matches(|c| c == '[' || c == ']').to_string());
             }
         } else if current_verse.is_some() && !t.is_empty() && !(t.starts_with('[') && t.ends_with(']')) {
-            // 排除说明行（[乐器, 空间] 含逗号，M5 修复）与裸包装行（含逗号且 >15 字）
+            // 排除说明行（[乐器, 空间] 含逗号，历史修复）与裸包装行（含逗号且 >15 字）
             let n = t.chars().filter(|c| !c.is_whitespace()).count();
             if !(t.contains(',') && n > 15) {
                 verse_line_count += 1;
@@ -325,7 +325,7 @@ pub fn validate_douyin(text: &str) -> ValidationResult {
         .collect();
     let mut overlong = 0usize;
     for line in lyric_lines {
-        // 去掉半角标点与空白（断句空格不计入字数，M6 修复）
+        // 去掉半角标点与空白（断句空格不计入字数，历史修复）
         let chars: String = line
             .chars()
             .filter(|c| !c.is_ascii_punctuation() && !c.is_whitespace())
@@ -421,7 +421,7 @@ mod tests {
         assert!(r.passed, "issues: {:?}", r.issues);
     }
 
-    /// P2：断句空格差异不计入字数（去空白对齐）
+    /// 断句空格差异不计入字数（去空白对齐）
     #[test]
     fn lyric_fill_whitespace_diff_passes() {
         let original = "我们 很早前 就 谋过面";
@@ -430,7 +430,7 @@ mod tests {
         assert!(r.passed, "issues: {:?}", r.issues);
     }
 
-    /// P2：标准提示词包的包装行（Style Prompt/参数/结构标签/说明行）不参与字数比对
+    /// 标准提示词包的包装行（Style Prompt/参数/结构标签/说明行）不参与字数比对
     #[test]
     fn lyric_fill_ignores_package_wrapper_lines() {
         let original = "我们 很早前 就 谋过面\n我一直 带给你 麻烦不断";
@@ -474,7 +474,7 @@ mod tests {
         assert!(!r.passed);
     }
 
-    /// B8：多段 Verse 逐段结算——第一段超行必须被检出（旧实现只查最后一段，漏检）
+    /// 多段 Verse 逐段结算——第一段超行必须被检出（旧实现只查最后一段，漏检）
     #[test]
     fn douyin_multi_verse_each_section_checked() {
         // Verse 1 六行超限 + Verse 2 两行合规：旧实现只看最后一段会放行
@@ -488,7 +488,7 @@ mod tests {
         );
     }
 
-    /// B8 回归：两段 Verse 各 4 行（合法）不得误报
+    /// 回归：两段 Verse 各 4 行（合法）不得误报
     #[test]
     fn douyin_multi_verse_legal_passes() {
         let text = "[Hook]\n我 真的 会谢\n[Verse]\n一\n二\n三\n四\n[Hook]\n我 真的 会谢\n[Verse]\n一\n二\n三\n四\n[Hook]\n[all instruments cut abruptly]";
@@ -653,7 +653,7 @@ mod tests {
         assert!(r.issues.iter().any(|i| i.contains("行数不足")));
     }
 
-    /// P2：允许尾部 ≤2 行收尾（如 Outro 一句），前 N 行仍逐行对齐
+    /// 允许尾部 ≤2 行收尾（如 Outro 一句），前 N 行仍逐行对齐
     #[test]
     fn lyric_fill_trailing_short_tail_passes() {
         let original = "异乡 的 夜 格外 长\n想念 故乡 的 月亮\n妈妈 做的 饭菜 香\n梦里 回到 她 身旁";
@@ -662,7 +662,7 @@ mod tests {
         assert!(r.passed, "issues: {:?}", r.issues);
     }
 
-    /// P2：超过 2 行尾部 → 报"行数过多"
+    /// 超过 2 行尾部 → 报"行数过多"
     #[test]
     fn lyric_fill_too_many_extra_lines_fails() {
         let original = "第一行\n第二行";
@@ -672,7 +672,7 @@ mod tests {
         assert!(r.issues.iter().any(|i| i.contains("行数过多")));
     }
 
-    /// P2：裸说明行（无方括号）不被计入歌词行
+    /// 裸说明行（无方括号）不被计入歌词行
     #[test]
     fn lyric_fill_ignores_bare_description_lines() {
         let original = "我们 很早前 就 谋过面\n我一直 带给你 麻烦不断";

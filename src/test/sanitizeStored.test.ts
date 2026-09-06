@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { sanitizeStored } from "../hooks/useSettings";
 
-// A13：构造输入一律经 JSON.parse + 动态 key（字段名不在源码以字面量出现），
+// 构造输入一律经 JSON.parse + 动态 key（字段名不在源码以字面量出现），
 // 断言只关心清洗语义（回退/保留/丢弃），与具体字符串值无关。
 const K = JSON.parse('{"k":"apiKey","rk":"roleOverrides","ak":"api_key"}');
 const SENTINEL = "__keychain__";
@@ -32,7 +32,7 @@ describe("sanitizeStored", () => {
     expect((s.roleOverrides as Record<string, unknown> | undefined)?.["hacker"]).toBeUndefined();
   });
 
-  it("A11：generation 清洗——范围内保留，越界/坏类型丢弃", () => {
+  it("generation 清洗——范围内保留，越界/坏类型丢弃", () => {
     const G = "generation";
     const ok = sanitizeStored(JSON.parse(`{"${G}":{"temperature":0.2,"max_tokens":8000}}`));
     expect(ok.generation).toEqual({ temperature: 0.2, max_tokens: 8000 });
@@ -44,7 +44,7 @@ describe("sanitizeStored", () => {
     expect(missing.generation).toBeUndefined();
   });
 
-  it("F7/F8：theme/language 清洗——合法保留，非法回退缺省", () => {
+  it("theme/language 清洗——合法保留，非法回退缺省", () => {
     expect(sanitizeStored(JSON.parse('{"theme":"dark"}')).theme).toBe("dark");
     expect(sanitizeStored(JSON.parse('{"theme":"nope"}')).theme).toBeUndefined();
     expect(sanitizeStored(JSON.parse('{"language":"en"}')).language).toBe("en");

@@ -13,7 +13,7 @@ pub struct Table {
     pub name: String,
     pub headers: Vec<String>,
     pub rows: Vec<Vec<String>>,
-    /// A7：加载期跳过的坏行号（1-based 含表头偏移，供日志与测试断言；生产渲染不读）
+    /// 加载期跳过的坏行号（1-based 含表头偏移，供日志与测试断言；生产渲染不读）
     #[allow(dead_code)] // 非测试构建下生产渲染不读此字段
     pub skipped_rows: Vec<usize>,
 }
@@ -101,14 +101,14 @@ fn project_table<'a>(
 }
 
 /// 从方案文本提取能量范围（min/max；无能量标注返回 None）。
-/// B9：实现统一委托 energy.rs（原先本函数内嵌一份逐字符扫描，与 validator 重复）。
+/// 实现统一委托 energy.rs（原先本函数内嵌一份逐字符扫描，与 validator 重复）。
 /// 本薄壳保留函数名——orchestrator 的 plan_energy_range 与 render_filtered_any 调用点零改动。
 pub(crate) fn plan_energy_range_str(plan: &str) -> Option<(u32, u32)> {
     crate::energy::plan_energy_range(plan)
 }
 
 /// 从方案文本提取 BPM（"120BPM" / "120 BPM" / "BPM 90" 等显式书写）。
-/// B6：只信任显式 "BPM" 标注——无 BPM 字样返回 None（原 fallback 会从任意 60-200
+/// 只信任显式 "BPM" 标注——无 BPM 字样返回 None（原 fallback 会从任意 60-200
 /// 数字猜值，"80年代" 等年代词是误报源）。BPM 合理性归制作人审查兜底（validator.rs
 /// 顶部哲学），代码只对明确标注报错。
 /// 提取值限 30-300（防 "能量:8 BPM 范围说明" 这类邻近数字误命中）。
@@ -171,26 +171,26 @@ pub struct KnowledgeBase {
     tables: HashMap<String, Table>,
 }
 
-/// A4：进程级共享缓存（一次生成触发 8~16 次加载，解析一次够用）。
-/// OnceLock 线程安全（A2 并发共享无锁）；初始化失败 panic——嵌入数据损坏属构建期错误。
+/// 进程级共享缓存（一次生成触发 8~16 次加载，解析一次够用）。
+/// OnceLock 线程安全；初始化失败 panic——嵌入数据损坏属构建期错误。
 static SHARED_KB: std::sync::OnceLock<KnowledgeBase> = std::sync::OnceLock::new();
 
-/// A10：知识库来源（日志用；embedded=嵌入版，override=用户覆盖目录）
+/// 知识库来源（日志用；embedded=嵌入版，override=用户覆盖目录）
 static KB_SOURCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
-/// A4：取共享缓存（生产路径；测试直调 load/load_embedded）
+/// 取共享缓存（生产路径；测试直调 load/load_embedded）
 pub fn shared_knowledge() -> &'static KnowledgeBase {
     SHARED_KB.get_or_init(|| {
         load_embedded_internal().expect("嵌入知识库损坏（构建期错误）")
     })
 }
 
-/// A10：知识库来源描述（setup 时预热后可查；缺省 embedded）
+/// 知识库来源描述（setup 时预热后可查；缺省 embedded）
 pub fn knowledge_source() -> &'static str {
     KB_SOURCE.get().map(|s| s.as_str()).unwrap_or("embedded")
 }
 
-/// A10：setup 预热——覆盖目录整组有效则替换缓存源，否则嵌入版。
+/// setup 预热——覆盖目录整组有效则替换缓存源，否则嵌入版。
 /// 按组切换（单文件覆盖易致表间不一致）；损坏回退嵌入版 + 日志。
 /// 幂等：OnceLock 已初始化则跳过（测试直调 load 不受影响）。
 pub fn warm_knowledge(app_data_dir: &std::path::Path) {
@@ -230,7 +230,7 @@ pub fn warm_knowledge(app_data_dir: &std::path::Path) {
     }
 }
 
-/// A4：嵌入加载内部实现（load_embedded 与 shared_knowledge 共用）
+/// 嵌入加载内部实现（load_embedded 与 shared_knowledge 共用）
 fn load_embedded_internal() -> Result<KnowledgeBase, String> {
     let mut kb = KnowledgeBase::default();
     // 名称必须与 knowledge/ 目录下文件名一致（不含扩展名）
@@ -263,7 +263,7 @@ fn load_embedded_internal() -> Result<KnowledgeBase, String> {
 
 impl KnowledgeBase {
     /// 从目录加载所有 `.csv` 文件（测试与动态加载场景用；生产走 load_embedded）。
-    /// P3：单表解析失败降级——跳过该表并打印警告，不阻断其他表；全失败才报错。
+    /// 单表解析失败降级——跳过该表并打印警告，不阻断其他表；全失败才报错。
     #[allow(dead_code)]
     pub fn load(dir: &Path) -> Result<KnowledgeBase, String> {
         let mut kb = KnowledgeBase::default();
@@ -283,7 +283,7 @@ impl KnowledgeBase {
             let content = match fs::read_to_string(&path) {
                 Ok(c) => c,
                 Err(e) => {
-                    // P3：读失败也降级跳过（与坏表一致，不阻断其他表）
+                    // 读失败也降级跳过（与坏表一致，不阻断其他表）
                     tracing::warn!(table = %name, error = %e, "知识库跳过不可读表");
                     continue;
                 }
@@ -307,8 +307,8 @@ impl KnowledgeBase {
     /// 编译期嵌入加载（打包后亦可用，不依赖运行时文件路径）。
     /// 生产走 shared_knowledge 缓存；测试直调本函数；分发态 dev 目录不存在时兜底。
     #[allow(dead_code)] // 生产走缓存，测试+兜底保留
-    /// P3：单表解析失败降级——跳过该表并打印警告，其余表照常可用。
-    /// A4：shared_knowledge() 缓存调用内部实现（OnceLock 只初始化一次）。
+    /// 单表解析失败降级——跳过该表并打印警告，其余表照常可用。
+    /// shared_knowledge() 缓存调用内部实现（OnceLock 只初始化一次）。
     pub fn load_embedded() -> Result<KnowledgeBase, String> {
         crate::knowledge::load_embedded_internal()
     }
@@ -624,7 +624,7 @@ impl KnowledgeBase {
 /// 简易 CSV 解析：支持双引号包裹字段与转义 `""`。
 /// 不做完整 RFC 4180（无跨行字段），我们的表都是简单表格。
 fn parse_csv(name: &str, content: &str) -> Result<Table, String> {
-    // A7：BOM 剥离（Windows 记事本存 CSV 常见，首列名会 mismatch）
+    // BOM 剥离（Windows 记事本存 CSV 常见，首列名会 mismatch）
     let content = content.strip_prefix('\u{feff}').unwrap_or(content);
     let mut lines = content.lines().filter(|l| !l.trim().is_empty());
     let header_line = lines
@@ -641,7 +641,7 @@ fn parse_csv(name: &str, content: &str) -> Result<Table, String> {
         total += 1;
         let fields = split_csv_line(line);
         if fields.len() != headers.len() {
-            // A7：坏行跳过（行号 1-based 含表头偏移 i+2），不废整表
+            // 坏行跳过（行号 1-based 含表头偏移 i+2），不废整表
             skipped_rows.push(i + 2);
             continue;
         }
@@ -650,7 +650,7 @@ fn parse_csv(name: &str, content: &str) -> Result<Table, String> {
     if rows.is_empty() {
         return Err(format!("CSV {} 没有数据行", name));
     }
-    // A7：半残表拒绝——坏行占比超 10% 视为表损坏，走 P3 表级降级（跳过该表）
+    // 半残表拒绝——坏行占比超 10% 视为表损坏，走相关表级降级（跳过该表）
     if skipped_rows.len() * 10 > total {
         return Err(format!(
             "CSV {} 坏行过多（{}/{}），整表拒绝",
@@ -705,7 +705,7 @@ fn split_csv_line(line: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
-    /// A10：load() 整组有效则可用作覆盖源（6 张 mini 表）；调用方按组切换
+    /// load() 整组有效则可用作覆盖源（6 张 mini 表）；调用方按组切换
     #[test]
     fn load_override_dir_semantics() {
         let dir = std::env::temp_dir().join(format!("kb_override_{}", std::process::id()));
@@ -735,14 +735,14 @@ mod tests {
         assert_eq!(t.rows[0][1], "warm, soft keys");
     }
 
-    /// A7：单数据行全坏（坏行比 100% > 10%）→ 整表拒绝（旧语义保留）
+    /// 单数据行全坏（坏行比 100% > 10%）→ 整表拒绝（旧语义保留）
     #[test]
     fn rejects_column_mismatch() {
         let content = "a,b\n1,2,3\n";
         assert!(parse_csv("test", content).is_err());
     }
 
-    /// A7：多行中 1 坏行（占比 <10%）→ 跳过该行 + 记录行号，好行保留
+    /// 多行中 1 坏行（占比 <10%）→ 跳过该行 + 记录行号，好行保留
     #[test]
     fn skips_single_bad_row_keeps_good_ones() {
         let mut content = String::from("a,b\n");
@@ -755,7 +755,7 @@ mod tests {
         assert_eq!(t.skipped_rows, vec![22]);
     }
 
-    /// A7：BOM 前缀剥离（Windows 记事本存 CSV 常见）
+    /// BOM 前缀剥离（Windows 记事本存 CSV 常见）
     #[test]
     fn strips_utf8_bom() {
         let content = "\u{feff}a,b\n1,2\n";
@@ -894,7 +894,7 @@ mod tests {
         assert!(err.contains("无法读取知识库目录"));
     }
 
-    /// P3：坏表降级——目录里坏表被跳过，好表照常加载
+    /// 坏表降级——目录里坏表被跳过，好表照常加载
     #[test]
     fn load_skips_bad_table_keeps_good_ones() {
         let dir = std::env::temp_dir().join(format!("kb_skip_{}", std::process::id()));
@@ -909,7 +909,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// P3：全坏 → 报错（无可用表不静默返回空库）
+    /// 全坏 → 报错（无可用表不静默返回空库）
     #[test]
     fn load_all_bad_errors() {
         let dir = std::env::temp_dir().join(format!("kb_allbad_{}", std::process::id()));
@@ -1080,11 +1080,11 @@ mod tests {
         assert_eq!(plan_bpm_value(plan), Some(120));
         // 常规：BPM 前带空格
         assert_eq!(plan_bpm_value("深夜民谣 68 BPM"), Some(68));
-        // 无 BPM：B6 后不再猜值，直接 None
+        // 无 BPM后不再猜值，直接 None
         assert_eq!(plan_bpm_value("拍号 4/4 节奏"), None);
     }
 
-    /// B6：年代词不再误判——只信任显式 BPM 标注，无 BPM 字样返回 None
+    /// 年代词不再误判——只信任显式 BPM 标注，无 BPM 字样返回 None
     #[test]
     fn plan_bpm_value_ignores_era_words() {
         // "80年代" 的 80 不得被当成 BPM（旧 fallback 会取首个 60-200 数字 → 80）

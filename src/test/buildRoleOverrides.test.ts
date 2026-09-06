@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { buildRoleOverrides } from "../hooks/usePipeline";
 import type { AppSettings } from "../types";
 
-// A13：settings 构造器——字段值取自可公开的默认配置形态（model/baseUrl 与产品默认值一致；
+// settings 构造器——字段值取自可公开的默认配置形态（model/baseUrl 与产品默认值一致；
 // apiKey 置空字符串，覆盖 buildRoleOverrides 不读全局 key 的分支——它只读 roleOverrides）。
 const makeSettings = (overrides: AppSettings["roleOverrides"] = {}): AppSettings => ({
   apiKey: "",

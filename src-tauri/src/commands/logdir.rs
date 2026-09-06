@@ -1,4 +1,4 @@
-//! A6："打开日志目录"命令（设置面板诊断用；opener 插件打开系统文件管理器）。
+//! "打开日志目录"命令（设置面板诊断用；opener 插件打开系统文件管理器）。
 
 use crate::errors::{AppError, ErrorKind};
 
@@ -12,7 +12,7 @@ async fn open_dir(app: &tauri::AppHandle, sub: &str) -> Result<String, AppError>
         .join(sub);
     std::fs::create_dir_all(&dir)
         .map_err(|e| AppError::new(ErrorKind::Internal, format!("创建目录失败: {}", e)))?;
-    // A10：配置根目录预建 prompts/knowledge 子目录（用户直接放文件）
+    // 配置根目录预建 prompts/knowledge 子目录（用户直接放文件）
     if sub.is_empty() {
         let _ = std::fs::create_dir_all(dir.join("prompts"));
         let _ = std::fs::create_dir_all(dir.join("knowledge"));
@@ -28,7 +28,7 @@ pub async fn open_log_dir(app: tauri::AppHandle) -> Result<String, AppError> {
     open_dir(&app, "logs").await
 }
 
-/// A10：打开配置根目录（{app_data}，含 prompts/knowledge 子目录说明）
+/// 打开配置根目录（{app_data}，含 prompts/knowledge 子目录说明）
 #[tauri::command]
 pub async fn open_config_dir(app: tauri::AppHandle) -> Result<String, AppError> {
     open_dir(&app, "").await
