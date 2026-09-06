@@ -702,16 +702,36 @@ async fn run_host_initial<R: Runtime>(
     if let Some(original) = req.original_lyrics_text() {
         user = format!("原歌词：\n{}\n\n新主题/故事：\n{}\n\n请按上述方法论直接输出完整改词方案。", original, req.user_input);
     }
-    let resp = llm::call_llm_stream(
+    let messages = vec![json!({"role":"system","content":system}), json!({"role":"user","content":user})];
+    // R2：流式 body 解码错误零重试补齐——整流同参重发一次（仅抛错路径；截断仍直接报错，取消不重试）。
+    // send_with_retry 只保"请求发出去"，stream_response 内 chunk 中断（llm.rs:364-367）此前直接死。
+    let mut resp = llm::call_llm_stream(
         app.clone(), &base_url, &api_key, &model,
-        vec![json!({"role":"system","content":system}), json!({"role":"user","content":user})],
+        messages.clone(),
         req.thinking,
         budget,
         &gen,
         &run_id,
         llm::FINAL_STAGE_RESERVE,
     )
-    .await?;
+    .await;
+    if let Err(e) = &resp {
+        // 取消不重试（用户主动停止）；截断是成功返回走不到这里
+        if e.kind != crate::errors::ErrorKind::Cancelled {
+            tracing::warn!(error = %e.message, "阶段 0 流式中断，整流重发一次");
+            resp = llm::call_llm_stream(
+                app.clone(), &base_url, &api_key, &model,
+                messages,
+                req.thinking,
+                budget,
+                &gen,
+                &run_id,
+                llm::FINAL_STAGE_RESERVE,
+            )
+            .await;
+        }
+    }
+    let resp = resp?;
     // 流式截断直接报错——半截方案绝不允许进入讨论轮（用户可见明确错误，可简化输入后重试）
     if llm::is_truncated(&resp.finish_reason) {
         tracing::error!("方案初稿输出被截断");
