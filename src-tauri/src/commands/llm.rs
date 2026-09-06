@@ -221,20 +221,10 @@ async fn send_and_extract(
     run_id: &str,
     reserve: std::time::Duration,
 ) -> Result<LLMResponse, AppError> {
-    let resp = send_with_retry(
-        client
-            .post(url)
-            .header("Authorization", format!("Bearer {}", api_key))
-            .header("Content-Type", "application/json")
-            .json(body),
-        budget,
-        run_id,
-        reserve,
-    )
-    .await?;
-    // R7：非流式 body 解码失败重试一次（网关抖动下 body 半截是常态；B/C/D 三挂全死在这里）。
+    // R7：非流式 body 解码失败重试（网关抖动下 body 半截是常态）。
     // 仅解码路径重试：HTTP 状态错误仍直接分类返回，不碰 retry_plan 通道，避免双重退避。
-    // body 字节一次读完后解析，失败则同参重发一次（预算闸门同样生效）。
+    // body 字节一次读完后解析，失败则同参重发（预算闸门同样生效）。
+    // 注意：首次发送在 extract_once 内，不在此处预发（避免空耗一次预算）。
     async fn extract_once(
         client: &Client,
         url: &str,
