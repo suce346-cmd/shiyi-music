@@ -325,7 +325,7 @@ fn matching_keywords(plan: &str, candidates: &[String]) -> Vec<String> {
 // - 乐器表：15 件封顶——能量区间覆盖弧线两端，"少而准"验证值
 // - 未命中：零行+无示例标注（M18，调用方走确定性默认；见 render_filtered_any 内部）
 // - suno_rules：校验员全量（40 条 < 50 截断上限）；其他角色按规则子集过滤
-// - 单角色一次注入总字数封顶：预算按最坏情况实测标定（制作人最大 ≈ 3900 字，取 4000）
+// - 单角色一次注入总字数封顶：预算按最坏情况实测标定（制作人最大 ≈ 4800 字，取 5200）
 // ---------------------------------------------------------------------------
 /// 关键词表（emotions/cliches/hooks）命中条数上限
 pub const INJECT_MAX_KEYWORD_ROWS: usize = 6;
@@ -335,8 +335,8 @@ pub const INJECT_MAX_STYLE_GENRE_ROWS: usize = 3;
 pub const INJECT_MAX_INSTRUMENTS_ROWS: usize = 15;
 /// 全量表（suno_rules）渲染截断上限（当前 40 条规则，留 10 条余量防静默截断）
 pub const INJECT_MAX_FULL_ROWS: usize = 50;
-/// 单角色一次注入总字数封顶（超过告警；最坏情况 = 制作人三表全命中含 22 条规则子集 ≈ 4300 字）
-pub const INJECT_MAX_TOTAL_CHARS: usize = 4500;
+/// 单角色一次注入总字数封顶（超过告警；最坏情况 = 制作人四表全命中含 22 条规则子集+8 条思维资产 ≈ 4800 字）
+pub const INJECT_MAX_TOTAL_CHARS: usize = 5200;
 /// 方案注入长度上限（超则截断 + 附注；对齐知识库"少而准"纪律，上下文同样需要预算）
 pub const INJECT_MAX_PLAN_CHARS: usize = 8000;
 /// revisions_log 保留条数（更早折叠为单行摘要，reason 关键词保留供去重参考）
