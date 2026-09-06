@@ -428,6 +428,11 @@ fn inject_knowledge(kb: &KnowledgeBase, tables: &[(&str, &[&str], &[&str])], pla
                     kb.render_filtered_any(t, &[("rule", subset)], proj, plan, None)
                 }
             }
+            // P2：思维资产表（lyric_craft/compose_craft）按 trigger 列做模式过滤 + 8 条上限。
+            // trigger 含"审改"即本轮可用；"阶段0"仅主持 primer 用；"扩展位"默认不注入。
+            "lyric_craft" | "compose_craft" => {
+                kb.render_filtered_any(t, &[("trigger", &["审改"])], proj, plan, Some(8))
+            }
             // 未知表：保守全量
             _ => kb.render_table(t, proj, Some(INJECT_MAX_FULL_ROWS)),
         };
@@ -1997,6 +2002,8 @@ mod tests {
                     .lines()
                     .filter(|l| l.starts_with("| ") && !l.contains("| ---"))
                     .count();
+                // 表头行（首个 | 开头行）不计入数据行上限
+                let data_lines = data_lines.saturating_sub(1);
                 let limit = match *table_name {
                     "style_genre" => INJECT_MAX_STYLE_GENRE_ROWS + 2,
                     "instruments" => INJECT_MAX_INSTRUMENTS_ROWS + 2,
