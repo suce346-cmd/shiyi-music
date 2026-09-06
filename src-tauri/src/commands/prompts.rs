@@ -18,14 +18,6 @@ pub(crate) fn prompt_override(name: &str) -> Option<String> {
     }
 }
 
-/// A10：prompt 来源（日志用）
-pub fn prompt_source(name: &str) -> &'static str {
-    match PROMPT_OVERRIDE_DIR.get() {
-        Some(dir) if dir.join(format!("{}.txt", name)).is_file() => "override",
-        _ => "embedded",
-    }
-}
-
 pub fn mode_a_system_prompt() -> &'static str {
     r#"你是一个 Suno AI 音乐制作助手。你的任务是根据用户提供的歌词，完成以下工作：
 
