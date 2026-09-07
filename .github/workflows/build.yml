@@ -42,9 +42,17 @@ jobs:
         run: npm run build
 
       - name: Run Rust tests
-        # Windows 首跑失败但未登录读不到日志——tee 落盘 + 失败时传 artifact，供匿名下载诊断
-        run: cargo test --manifest-path src-tauri/Cargo.toml 2>&1 | tee rust-test-output.txt
+        # Windows 上 headless_modes 集成测试二进制启动即 STATUS_ENTRYPOINT_NOT_FOUND
+        # （tauri/WebView2 动态库入口点在测试 exe 加载时解析失败）——全部用例本就 #[ignore]，
+        # 云端只需 lib 全测 + 集成测试可编译可链接，不执行该二进制
         shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            cargo test --manifest-path src-tauri/Cargo.toml --lib 2>&1 | tee rust-test-output.txt
+            cargo build --manifest-path src-tauri/Cargo.toml --tests 2>&1 | tee -a rust-test-output.txt
+          else
+            cargo test --manifest-path src-tauri/Cargo.toml 2>&1 | tee rust-test-output.txt
+          fi
 
       - name: Upload test log on failure
         if: failure()
