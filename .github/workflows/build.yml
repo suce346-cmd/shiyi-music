@@ -42,7 +42,17 @@ jobs:
         run: npm run build
 
       - name: Run Rust tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        # Windows 首跑失败但未登录读不到日志——tee 落盘 + 失败时传 artifact，供匿名下载诊断
+        run: cargo test --manifest-path src-tauri/Cargo.toml 2>&1 | tee rust-test-output.txt
+        shell: bash
+
+      - name: Upload test log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-test-output-${{ matrix.os }}
+          path: rust-test-output.txt
+          retention-days: 7
 
   build:
     needs: test
