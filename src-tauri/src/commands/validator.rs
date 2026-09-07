@@ -527,12 +527,12 @@ mod tests {
         assert!(!r.issues.iter().any(|i| i.contains("超限")), "4 行 Verse 不应报超限: {:?}", r.issues);
     }
 
-    /// 一份合规的 Mode A 产出应能通过（正样：弱段 2 件、强段 5 件，满足 Q2 下限）
+    /// 一份合规的 Mode A 产出应能通过（正样：弱段 3 件、强段 5 件，满足单段 3-7 下限）
     #[test]
     fn production_valid_passes() {
         let text = r#"**Style Prompt**: dark indie folk 60BPM F#小调
 [Verse 1]
-[acoustic guitar fingerpicked, cello soft pads, intimate room]
+[acoustic guitar fingerpicked, cello soft pads, brushed drums keep time, intimate room]
 我们 很早前 就 谋过面
 [Chorus]
 [acoustic guitar strummed, cello dark bowing, warm piano cushions, light drums, deep bass pulses, wide hall]
@@ -540,6 +540,21 @@ mod tests {
 能量轨迹：Verse 1 能量 3，Chorus 能量 8"#;
         let r = validate_production("mode_a", text);
         assert!(r.passed, "issues: {:?}", r.issues);
+    }
+
+    /// L-3：弱段 2 件必须被揪出（单段下限统一为 3 后，旧正样"2 件"不再合法）
+    #[test]
+    fn production_weak_two_instruments_fails() {
+        let text = r#"**Style Prompt**: dark indie folk
+[Verse 1]
+[acoustic guitar fingerpicked, cello soft pads, intimate room]
+歌词行
+[Chorus]
+[acoustic guitar strummed, cello dark bowing, warm piano cushions, light drums, deep bass pulses, wide hall]
+能量轨迹：Verse 1 能量 3，Chorus 能量 8"#;
+        let r = validate_production("mode_a", text);
+        assert!(!r.passed);
+        assert!(r.issues.iter().any(|i| i.contains(&format!("要求 >= {} 件", rules::MIN_INSTRUMENT_WEAK))), "issues: {:?}", r.issues);
     }
 
     /// Q2：最弱段 1 件必须被揪出（此前只查差值可蒙混）

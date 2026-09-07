@@ -6,7 +6,7 @@ style_prompt_max_chars,all,0,350,字符,Style Prompt 上限 350 字符（含空�
 min_energy_gap,创作,3,10,级,最弱段与最强段能量差至少 3 级（0-10 标尺）：差太小全曲平淡无对比；差太大段落割裂
 min_instrument_gap,all,2,9,件,最弱段与最强段配器件数差至少 2 件：保证编曲层次变化，避免整曲同一配器密度
 instrument_max,all,3,7,件,全曲核心乐器上限 7 件：超过听感拥挤 Suno 容易糊成一团；弱段 3 件起
-min_instrument_weak,all,2,,件,最弱段至少 2 件：仅 1 件完全单薄听感空洞
+min_instrument_weak,all,3,,件,最弱段至少 3 件（与单段 3-7 件下限一致）：低于 3 件听感单薄难以撑起段落层次
 min_instrument_strong,all,5,,件,最强段至少 5 件：少于 5 件撑不起高潮密度
 hook_min_count,抖音,2,,次,D 模式至少 2 个 Hook：抖音传播需要多点记忆
 verse_max_lines,抖音,0,4,行,抖音 Verse 上限 4 行：前奏短进副歌快

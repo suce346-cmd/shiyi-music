@@ -21,8 +21,8 @@ pub const MIN_ENERGY_GAP: u32 = 3;
 pub const MIN_INSTRUMENT_GAP: usize = 2;
 /// 全曲核心乐器上限
 pub const INSTRUMENT_MAX: usize = 7;
-/// 最弱段至少件数
-pub const MIN_INSTRUMENT_WEAK: usize = 2;
+/// 最弱段至少件数（L-3 用户决策 2026-09-06：单段下限统一按 3——旧值 2 与"单段 3-7 件"打架）
+pub const MIN_INSTRUMENT_WEAK: usize = 3;
 /// 最强段至少件数
 pub const MIN_INSTRUMENT_STRONG: usize = 5;
 /// D 模式 Hook 最少次数
@@ -76,7 +76,7 @@ pub fn checklist(mode: &str) -> &'static str {
     }
 }
 
-const CHECKLIST_AB: &str = "【校验清单 A/B·单源】Style Prompt≤350字符且≥30字符；结构标签≥2段；能量差≥3级（0-10）；配器差≥2件、单段3-7件、最弱段≥2件、最强段≥5件；弧线参数：标准叙事22-28/78-83、全程高能10-15/85-90、高开低走25-35/70-80、平铺氛围15-25/80-90、起伏戏剧28-35/75-82、阶梯上升20-28/78-88、渐进爆发15-25/80-90、U型25-35/70-82、单峰20-30/75-85、回环20-28/78-85；Audio Influence=0；断句单空格、禁/与、标点全半角。";
+const CHECKLIST_AB: &str = "【校验清单 A/B·单源】Style Prompt≤350字符且≥30字符；结构标签≥2段；能量差≥3级（0-10）；配器差≥2件、单段3-7件（最弱段即下限3件）、最强段≥5件；弧线参数：标准叙事22-28/78-83、全程高能10-15/85-90、高开低走25-35/70-80、平铺氛围15-25/80-90、起伏戏剧28-35/75-82、阶梯上升20-28/78-88、渐进爆发15-25/80-90、U型25-35/70-82、单峰20-30/75-85、回环20-28/78-85；Audio Influence=0；断句单空格、禁/与、标点全半角。";
 const CHECKLIST_C: &str = "【校验清单 C·单源】逐行等字数（差一字即失败，尾部≤2行收尾）；行数与原歌词一致；段落结构与原歌词一致（禁新增Hook/Chorus段）；韵脚位置与模式保留；说明行带方括号；Style Prompt≤350字符；断句单空格、禁/与、标点全半角。";
 const CHECKLIST_D: &str = "【校验清单 D·单源】Hook≥2次；单段Verse≤4行；每行≤10字；结尾骤停（一刀切，含abruptly/cut标识）；BPM≥90；Style Prompt≤350字符且≥30字符；说明行≤80字符；参数抖音12-20/85-95（叙事型结构可回落A/B弧线区间须说明理由）；Audio Influence=0；断句单空格、禁/与、标点全半角。";
 
@@ -130,6 +130,9 @@ mod tests {
         assert!(ab.contains(&format!("≤{}", STYLE_PROMPT_MAX_CHARS)), "缺350");
         assert!(ab.contains(&format!("≥{}", MIN_ENERGY_GAP)), "缺能量差3");
         assert!(ab.contains(&format!("≥{}件", MIN_INSTRUMENT_GAP)), "缺配器差2");
+        // L-3：单段下限统一为 3 后，清单不得残留"最弱段≥2件"旧口径
+        assert!(ab.contains("单段3-7件"), "缺单段3-7");
+        assert!(!ab.contains("最弱段≥2件"), "残留最弱段2件旧口径");
         assert!(ab.contains("7件"), "缺7件上限");
         let d = checklist("mode_d");
         assert!(d.contains(&format!("≥{}次", HOOK_MIN_COUNT)), "缺Hook2");
