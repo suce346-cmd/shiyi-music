@@ -69,14 +69,17 @@ pub const MODE_B_STYLE_MAX: u32 = 85;
 /// 入参为 `Mode::to_str_name()`（mode_a/mode_b/mode_c/mode_d），未知模式回退通用清单。
 pub fn checklist(mode: &str) -> &'static str {
     match mode {
-        "mode_a" | "mode_b" => CHECKLIST_AB,
+        "mode_a" => CHECKLIST_A,
+        // R-1：B 模式独立清单——参数准绳是 B 专属区间（20-35/75-85），弧线区间不再混入 B 清单
+        "mode_b" => CHECKLIST_B,
         "mode_c" => CHECKLIST_C,
         "mode_d" => CHECKLIST_D,
-        _ => CHECKLIST_AB,
+        _ => CHECKLIST_A,
     }
 }
 
-const CHECKLIST_AB: &str = "【校验清单 A/B·单源】Style Prompt≤350字符且≥30字符；结构标签≥2段；能量差≥3级（0-10）；配器差≥2件、单段3-7件（最弱段即下限3件）、最强段≥5件；弧线参数：标准叙事22-28/78-83、全程高能10-15/85-90、高开低走25-35/70-80、平铺氛围15-25/80-90、起伏戏剧28-35/75-82、阶梯上升20-28/78-88、渐进爆发15-25/80-90、U型25-35/70-82、单峰20-30/75-85、回环20-28/78-85；Audio Influence=0；断句单空格、禁/与、标点全半角。";
+const CHECKLIST_A: &str = "【校验清单 A·单源】Style Prompt≤350字符且≥30字符；结构标签≥2段；能量差≥3级（0-10）；配器差≥2件、单段3-7件（最弱段即下限3件）、最强段≥5件；弧线参数：标准叙事22-28/78-83、全程高能10-15/85-90、高开低走25-35/70-80、平铺氛围15-25/80-90、起伏戏剧28-35/75-82、阶梯上升20-28/78-88、渐进爆发15-25/80-90、U型25-35/70-82、单峰20-30/75-85、回环20-28/78-85；Audio Influence=0；断句单空格、禁/与、标点全半角。";
+const CHECKLIST_B: &str = "【校验清单 B·单源】Style Prompt≤350字符且≥30字符；结构标签≥2段；能量差≥3级（0-10）；配器差≥2件、单段3-7件（最弱段即下限3件）、最强段≥5件；参数固定区间：Weirdness 20-35、Style Influence 75-85（B 专属区间为准，弧线区间不适用 B）；Audio Influence=0；断句单空格、禁/与、标点全半角。";
 const CHECKLIST_C: &str = "【校验清单 C·单源】逐行等字数（差一字即失败，尾部≤2行收尾）；行数与原歌词一致；段落结构与原歌词一致（禁新增Hook/Chorus段）；韵脚位置与模式保留；说明行带方括号；Style Prompt≤350字符；断句单空格、禁/与、标点全半角。";
 const CHECKLIST_D: &str = "【校验清单 D·单源】Hook≥2次；单段Verse≤4行；每行≤10字；结尾骤停（一刀切，含abruptly/cut标识）；BPM≥90；Style Prompt≤350字符且≥30字符；说明行≤80字符；参数抖音12-20/85-95（叙事型结构可回落A/B弧线区间须说明理由）；Audio Influence=0；断句单空格、禁/与、标点全半角。";
 
@@ -133,6 +136,13 @@ mod tests {
         // L-3：单段下限统一为 3 后，清单不得残留"最弱段≥2件"旧口径
         assert!(ab.contains("单段3-7件"), "缺单段3-7");
         assert!(!ab.contains("最弱段≥2件"), "残留最弱段2件旧口径");
+        // R-1：B 清单参数准绳是 B 专属区间，弧线区间不适用 B
+        let b = checklist("mode_b");
+        assert!(b.contains(&format!("{}-{}", MODE_B_WEIRD_MIN, MODE_B_WEIRD_MAX)), "缺B区间20-35");
+        assert!(b.contains(&format!("{}-{}", MODE_B_STYLE_MIN, MODE_B_STYLE_MAX)), "缺B区间75-85");
+        assert!(b.contains("B 专属区间为准"), "缺B优先级声明");
+        assert!(!b.contains("22-28/78-83"), "B 清单不得混入弧线区间表");
+        assert!(!b.contains("弧线参数："), "B 清单不得含弧线参数段");
         assert!(ab.contains("7件"), "缺7件上限");
         let d = checklist("mode_d");
         assert!(d.contains(&format!("≥{}次", HOOK_MIN_COUNT)), "缺Hook2");
@@ -146,8 +156,7 @@ mod tests {
     #[test]
     fn arc_params_cover_ten_arcs() {
         assert_eq!(ARC_PARAMS.len(), 10, "弧线须10种");
-        let ab = checklist("mode_a");
-        for (name, wmin, wmax, smin, smax) in ARC_PARAMS {
+        let ab = checklist("mode_a");        for (name, wmin, wmax, smin, smax) in ARC_PARAMS {
             let frag = format!("{}-{}", wmin, wmax);
             assert!(ab.contains(name), "清单缺弧线 {}", name);
             assert!(ab.contains(&frag), "清单缺区间 {}", frag);
