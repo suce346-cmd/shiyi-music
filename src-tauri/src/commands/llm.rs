@@ -868,7 +868,8 @@ pub async fn test_api(
         std::time::Duration::ZERO,
     )
     .await
-    .map_err(|e| AppError::new(ErrorKind::Network, format!("请求失败: {}", truncate_err(&e.message))))?;
+    // G-3：kind 原样透传（旧规则硬转 Network——key 填错被报成"网络请求失败"，排障方向被误导）
+    .map_err(|e| AppError::new(e.kind, format!("请求失败: {}", truncate_err(&e.message))))?;
     let status = resp.status();
     if status.is_success() {
         Ok("连接成功".into())
