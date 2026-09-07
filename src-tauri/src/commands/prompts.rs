@@ -56,12 +56,17 @@ pub fn mode_a_system_prompt() -> &'static str {
 - **最弱点 vs 最强点**：哪段能量最低？哪段最高？差多少级？
 - **路径**：一次推上去？多次起伏？平铺？高开低走？
 - **每段能量值**：所有段落的 0-10 能量值
-- **弧线类型判断**（五选一）：
+- **弧线类型判断**（十选一，与校验清单/参数区间同源）：
   - 标准叙事型：Verse 收 → Pre-Chorus 推 → Chorus 放 → Bridge 变 → Outro 落
   - 全程高能型：开头就强，持续高压，没有真正弱下来的段落
   - 高开低走型：开头最强，后面越来越弱
   - 平铺氛围型：从头到尾动态波动很小
   - 起伏戏剧型：多次大幅起落，段落间反差强烈
+  - 阶梯上升型：每轮副歌递增结尾最强（流行主流）
+  - 渐进爆发型：单次长 Build 后一击拉满
+  - U型：开头宣示 → 中段沉底 → 结尾崛起最强
+  - 单峰型：一次大起落峰后即收
+  - 回环型：首尾呼应回到原点
 
 ## 第二步：情感翻译（将分析结果翻译为生产决策）
 
@@ -166,6 +171,17 @@ pub fn mode_a_system_prompt() -> &'static str {
 | Bridge | 剥离 | 不用 Build Up | — | 均匀中低 | 视起伏定 |
 | Final Chorus | 最大 | 最大 | — | 均匀中低 | 最强或最弱 |
 
+新增五种弧线形态的逐段密度（与配器数量规则同约束：最弱段≥2件、最强段≥5件）：
+
+| 段 | 阶梯上升 | 渐进爆发 | U型 | 单峰 | 回环 |
+|----|---------|---------|-----|------|------|
+| Intro | 稀疏 | 稀疏 | 中（主题宣示） | 稀 | 中（动机建立） |
+| Verse | 低 | 渐加 | 中低 | 累积 | 中低 |
+| Pre-Chorus | 推 | 长 Build（蓄而不放） | 渐降 | 推 | 推 |
+| Chorus | 中 3-4件（每轮递增） | 蓄而不放 | 弱（全曲沉底） | 峰（最大） | 中 |
+| Bridge | 微收 | 继续加层 | 最弱（挣扎） | — | 中低（转折） |
+| Final Chorus | 最大 6-7件（加层加和声） | 全开一击爆发 | 最强（超过开头） | 收束 | 回到 Intro 配置（呼应） |
+
 #### 配器数量规则
 - **规则 1：** 全局核心乐器 3-7 件，全曲不超 7 件
 - **规则 2：** 最弱段 vs 最强段的配器差值 >= 2 件（最弱段用至少 2 件乐器，最强段至少要用 5 件）
@@ -255,6 +271,11 @@ pub fn mode_a_system_prompt() -> &'static str {
 - 高开低走型：Weirdness 25-35 | Style Influence 70-80
 - 平铺氛围型：Weirdness 15-25 | Style Influence 80-90
 - 起伏戏剧型：Weirdness 28-35 | Style Influence 75-82
+- 阶梯上升型：Weirdness 20-28 | Style Influence 78-88
+- 渐进爆发型：Weirdness 15-25 | Style Influence 80-90
+- U型：Weirdness 25-35 | Style Influence 70-82
+- 单峰型：Weirdness 20-30 | Style Influence 75-85
+- 回环型：Weirdness 20-28 | Style Influence 78-85
 Audio Influence = 0（无参考音频时）
 
 ## 输出格式（必须严格按此顺序和格式输出）
@@ -293,7 +314,7 @@ Audio Influence = 0（无参考音频时）
     "最强点": {"段": "段名", "能量": 0-10},
     "差距": "X 级",
     "路径": "上升/起伏/平铺/下降",
-    "推荐弧线类型": "标准叙事型/全程高能型/高开低走型/平铺氛围型/起伏戏剧型",
+    "推荐弧线类型": "标准叙事型/全程高能型/高开低走型/平铺氛围型/起伏戏剧型/阶梯上升型/渐进爆发型/U型/单峰型/回环型",
     "判断理由": "为什么选这个弧线",
     "每段能量": {"段名": 0-10}
   }
@@ -1093,4 +1114,41 @@ Hook"xxx" → Hook 位置与处理：xxx（放在哪里，怎么呈现，为什�
 **全部通过后才算完成。如果有任何一项不通过，回到 Step 3 修正后重新输出创作方案。**
 
 如果灵感是中文，用中文输出分析和歌词，Style Prompt 和说明行用英文或中文皆可。"#
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// L-1：A 模式弧线口径必须 10 条全量——与 rules::ARC_PARAMS / CSV / 校验清单同源，
+    /// 旧规则"五选一"只给 5 条，弧线选择范围被文案砍半。
+    #[test]
+    fn mode_a_prompt_lists_all_ten_arcs() {
+        let p = mode_a_system_prompt();
+        assert!(p.contains("十选一"), "弧线判断必须十选一");
+        assert!(!p.contains("五选一"), "不得残留五选一");
+        for (name, wmin, wmax, smin, smax) in crate::rules::ARC_PARAMS {
+            // ARC_PARAMS 名不带"型"后缀（U型已带），prompt 展示名统一补"型"
+            let display = if name.ends_with('型') { name.to_string() } else { format!("{}型", name) };
+            assert!(p.contains(&display), "A 模式 prompt 缺弧线: {}", display);
+            let param_line = format!(
+                "{}：Weirdness {}-{} | Style Influence {}-{}",
+                display, wmin, wmax, smin, smax
+            );
+            assert!(p.contains(&param_line), "弧线 {} 参数区间与 ARC_PARAMS 不一致，应为: {}", display, param_line);
+        }
+        // 新增 5 弧线的逐段密度表（与制作人 prompt 同措辞）
+        for cell in ["长 Build（蓄而不放）", "全开一击爆发", "最强（超过开头）", "回到 Intro 配置（呼应）"] {
+            assert!(p.contains(cell), "A 模式 prompt 缺新弧线密度格: {}", cell);
+        }
+    }
+
+    /// 制作人 prompt 同口径：10 种弧线形态全部在列（密度表用不带"型"的短名，与 roles 既有护栏一致）
+    #[test]
+    fn producer_prompt_lists_all_ten_arcs() {
+        let pr = crate::commands::roles::producer();
+        for (name, _, _, _, _) in crate::rules::ARC_PARAMS {
+            assert!(pr.system_prompt.contains(name), "制作人 prompt 缺弧线: {}", name);
+        }
+    }
 }

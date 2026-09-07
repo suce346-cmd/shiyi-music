@@ -395,7 +395,7 @@ mod tests {
         ] {
             assert!(pr.system_prompt.contains(kw), "producer prompt 缺失维度: {}", kw);
         }
-        // 五弧线密度表完整（防"只有一种情绪曲线"偏科）：5 种弧线各有逐段密度指引
+        // 十弧线密度表完整（防"只有一种情绪曲线"偏科）：前 5 原型 + 下方 5 新增，共 10 种
         for arc in ["标准叙事型", "全程高能型", "高开低走型", "平铺氛围型", "起伏戏剧型"] {
             assert!(pr.system_prompt.contains(arc), "制作人缺失弧线密度: {}", arc);
         }
