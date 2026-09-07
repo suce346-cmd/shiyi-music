@@ -41,7 +41,8 @@ export function sanitizeStored(raw: unknown): AppSettings {
     if (typeof g.temperature === "number" && g.temperature >= 0 && g.temperature <= 2) {
       cleaned.temperature = g.temperature;
     }
-    if (typeof g.max_tokens === "number" && Number.isInteger(g.max_tokens) && g.max_tokens >= 1000 && g.max_tokens <= 32000) {
+    // F-1：上限 30000 与后端 MAX_TOKENS_CAP 同源（后端校验 1000..=30000，32000 会被整请求拒绝）
+    if (typeof g.max_tokens === "number" && Number.isInteger(g.max_tokens) && g.max_tokens >= 1000 && g.max_tokens <= 30000) {
       cleaned.max_tokens = g.max_tokens;
     }
     if (cleaned.temperature !== undefined || cleaned.max_tokens !== undefined) {

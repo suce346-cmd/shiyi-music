@@ -44,6 +44,16 @@ describe("sanitizeStored", () => {
     expect(missing.generation).toBeUndefined();
   });
 
+  it("generation 清洗——max_tokens 上限 30000 与后端 MAX_TOKENS_CAP 对齐（F-1）", () => {
+    const G = "generation";
+    // 边界 30000 保留
+    const edge = sanitizeStored(JSON.parse(`{"${G}":{"max_tokens":30000}}`));
+    expect(edge.generation).toEqual({ max_tokens: 30000 });
+    // 32000（旧前端错位上限）丢弃 → 走后端默认，不再发出会被后端拒绝的请求
+    const over = sanitizeStored(JSON.parse(`{"${G}":{"max_tokens":32000}}`));
+    expect(over.generation).toBeUndefined();
+  });
+
   it("theme/language 清洗——合法保留，非法回退缺省", () => {
     expect(sanitizeStored(JSON.parse('{"theme":"dark"}')).theme).toBe("dark");
     expect(sanitizeStored(JSON.parse('{"theme":"nope"}')).theme).toBeUndefined();

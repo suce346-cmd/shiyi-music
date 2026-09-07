@@ -677,7 +677,7 @@ export default function App() {
               onChange={e => { updateSettings({ thinking: e.target.checked }); setTestResult(null); }}
               className="w-4 h-4 accent-brand-500 cursor-pointer shrink-0" />
           </div>
-          {/* 高级参数（缺省走后端默认；temperature 0~2，max_tokens 1000~32000） */}
+          {/* 高级参数（缺省走后端默认；temperature 0~2，max_tokens 1000~30000——F-1 与后端 MAX_TOKENS_CAP 对齐，32000 会被后端拒绝） */}
           <div className="rounded-lg border border-border/40 bg-surface-0/40 px-3 py-2 space-y-2">
             <div className="flex items-center justify-between gap-2">
               <label htmlFor="gen-temperature" className="text-[11px] text-text-2 cursor-pointer select-none">
@@ -699,7 +699,7 @@ export default function App() {
                 {t(settings.language, "settings.advanced.maxtokens")}
                 <span className="block text-[10px] text-text-muted font-normal">{t(settings.language, "settings.advanced.maxtokens.desc")}</span>
               </label>
-              <input id="gen-max-tokens" type="number" min={1000} max={32000} step={1000}
+              <input id="gen-max-tokens" type="number" min={1000} max={30000} step={1000}
                 value={settings.generation?.max_tokens ?? ""}
                 onChange={e => {
                   const v = e.target.value === "" ? undefined : Math.round(Number(e.target.value));
