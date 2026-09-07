@@ -209,7 +209,7 @@ mod tests {
             user_input: "雨天".into(),
             model: "m".into(),
             api_key: "k".into(),
-            base_url: "https://api.example.com/v1".into(),
+            base_url: "https://8.8.8.8/v1".into(),
             extra: None,
             original_lyrics: None,
             role_overrides: None,
@@ -242,7 +242,7 @@ mod tests {
                 user_input: "雨天".into(),
                 model: "m".into(),
                 api_key: "k".into(),
-                base_url: "https://api.example.com/v1".into(),
+                base_url: "https://8.8.8.8/v1".into(),
                 extra: None,
                 original_lyrics: None,
                 role_overrides: None,
@@ -282,6 +282,92 @@ mod tests {
         // 原歌词超长
         r = good();
         r.original_lyrics = Some("啊".repeat(20001));
+        assert_eq!(validate_request(&r, None).unwrap_err().kind, ErrorKind::Validation);
+    }
+
+    /// S-1：validate_url 内网/环回/保留/变形 URL 全拒绝（IP 字面量直测，不依赖 DNS）
+    #[test]
+    fn validate_url_rejects_internal_and_malformed() {
+        let bad = [
+            "ftp://x.com/v1",                  // 非 http(s) 协议
+            "http://localhost/v1",             // localhost 字符串
+            "http://sub.localhost/v1",         // localhost 子域
+            "http://127.0.0.1:8080/v1",        // 环回
+            "http://0.0.0.0/v1",               // 未指定/本网络
+            "http://10.1.2.3/v1",              // 10/8 私有
+            "http://192.168.1.1/v1",           // 192.168/16 私有
+            "http://172.16.0.9/v1",            // 172.16/12 私有
+            "http://169.254.169.254/latest",   // 链路本地（云元数据端点）
+            "http://100.64.0.1/v1",            // CGNAT 共享段
+            "http://192.0.2.1/v1",             // 文档段
+            "http://198.18.0.1/v1",            // 基准测试段
+            "http://255.255.255.255/v1",       // 广播
+            "http://[::1]/v1",                 // IPv6 环回
+            "http://[fe80::1]/v1",             // IPv6 链路本地
+            "http://[fd00::1]/v1",             // IPv6 唯一本地
+            "http://[::ffff:127.0.0.1]/v1",    // IPv4-mapped 壳套环回
+            "https://user@evil.com/v1",        // userinfo 变形
+            "https://user:pass@evil.com/v1",   // userinfo 带密码
+            "not a url at all",                // 无法解析
+            "",                                // 空串
+        ];
+        for u in bad {
+            let err = validate_url(u).unwrap_err();
+            assert!(!err.is_empty(), "用例 {} 应给出拒绝原因", u);
+        }
+    }
+
+    /// S-1：公网 IP 直连通过（用 IP 字面量避免单测依赖 DNS；真实域名由无头实网测试覆盖）
+    #[test]
+    fn validate_url_allows_public() {
+        for u in ["https://8.8.8.8/v1", "http://1.1.1.1/", "https://93.184.216.34/v2"] {
+            assert!(validate_url(u).is_ok(), "{} 应通过", u);
+        }
+    }
+
+    /// S-1：role_overrides.base_url 旁路封死——内网地址/空串一律 Validation，合法覆盖正常通过
+    #[test]
+    fn validate_request_rejects_role_override_internal_url() {
+        fn good() -> PipelineRequest {
+            PipelineRequest {
+                mode: Mode::ModeB,
+                user_input: "雨天".into(),
+                model: "m".into(),
+                api_key: "k".into(),
+                base_url: "https://8.8.8.8/v1".into(),
+                extra: None,
+                original_lyrics: None,
+                role_overrides: None,
+                thinking: false,
+                refine_targets: None,
+                generation: None,
+                run_id: None,
+            }
+        }
+        use crate::errors::ErrorKind;
+        use std::collections::HashMap;
+        // 合法覆盖通过
+        let mut r = good();
+        let mut map = HashMap::new();
+        map.insert(PipelineRole::Emotion, RoleApiOverride { model: None, api_key: None, base_url: Some("https://1.1.1.1/v1".into()) });
+        r.role_overrides = Some(map);
+        assert!(validate_request(&r, None).is_ok());
+        // 覆盖指向内网 → 拒绝且报出角色名
+        let mut map = HashMap::new();
+        map.insert(PipelineRole::Emotion, RoleApiOverride { model: None, api_key: None, base_url: Some("http://127.0.0.1:9000/v1".into()) });
+        r.role_overrides = Some(map);
+        let e = validate_request(&r, None).unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Validation);
+        assert!(e.message.contains("情感分析师"), "报错应带角色名：{}", e.message);
+        // 覆盖为空串 → 拒绝
+        let mut map = HashMap::new();
+        map.insert(PipelineRole::Lyricist, RoleApiOverride { model: None, api_key: None, base_url: Some("   ".into()) });
+        r.role_overrides = Some(map);
+        assert_eq!(validate_request(&r, None).unwrap_err().kind, ErrorKind::Validation);
+        // 覆盖非 http(s) → 拒绝
+        let mut map = HashMap::new();
+        map.insert(PipelineRole::Host, RoleApiOverride { model: None, api_key: None, base_url: Some("ftp://x.com".into()) });
+        r.role_overrides = Some(map);
         assert_eq!(validate_request(&r, None).unwrap_err().kind, ErrorKind::Validation);
     }
 
@@ -468,9 +554,83 @@ impl PipelineRequest {
     }
 }
 
+/// URL 准入校验（S-1 SSRF 防线，纯函数供三入口复用：validate_request / test_api / 无头 test_config）。
+/// 四层：真实解析 → 仅 http/https → 拒绝 userinfo（user[:pass]@host 变形）→
+/// host 解析出全部 IP 逐一拒绝环回/内网/链路本地/组播/未指定/广播/CGNAT/文档段/唯一本地。
+/// 域名走阻塞 DNS（桌面端一次性校验可接受）；解析失败视为不可验证，按拒绝处理（fail closed）。
+pub fn validate_url(raw: &str) -> Result<(), String> {
+    let url = reqwest::Url::parse(raw.trim()).map_err(|e| format!("URL 无法解析（{}）", e))?;
+    match url.scheme() {
+        "http" | "https" => {}
+        other => return Err(format!("URL 协议仅允许 http/https（当前 {}）", other)),
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("URL 不允许携带用户名/密码（@ 形态）".to_string());
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| "URL 缺少主机名".to_string())?
+        .to_string();
+    if host.eq_ignore_ascii_case("localhost") || host.to_lowercase().ends_with(".localhost") {
+        return Err("URL 主机不允许指向 localhost".to_string());
+    }
+    let port = url.port_or_known_default().unwrap_or(443);
+    let ips: Vec<std::net::IpAddr> = match host.parse::<std::net::IpAddr>() {
+        Ok(ip) => vec![ip],
+        Err(_) => {
+            use std::net::ToSocketAddrs;
+            (host.as_str(), port)
+                .to_socket_addrs()
+                .map_err(|e| format!("URL 主机解析失败，无法验证安全性（{}）", e))?
+                .map(|s| s.ip())
+                .collect()
+        }
+    };
+    for ip in ips {
+        if is_forbidden_ip(ip) {
+            return Err(format!("URL 解析到内网/环回/保留地址（{}），已拒绝", ip));
+        }
+    }
+    Ok(())
+}
+
+/// 内网/保留 IP 判定（纯函数可测；手写区间避免 std 未稳定的 is_global/is_unique_local）
+fn is_forbidden_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            let [a, b, c, d] = v4.octets();
+            v4.is_unspecified()             // 0.0.0.0
+                || v4.is_loopback()          // 127.0.0.0/8
+                || v4.is_private()           // 10/8、172.16/12、192.168/16
+                || v4.is_link_local()        // 169.254/16（含云元数据 169.254.169.254）
+                || v4.is_multicast()         // 224/4
+                || a == 0                    // 0.0.0.0/8 本网络
+                || (a == 100 && (64..=127).contains(&b)) // 100.64/10 CGNAT 共享段
+                || (a == 192 && b == 0 && c == 2)        // 192.0.2/24 文档段
+                || (a == 198 && b == 51 && c == 100)     // 198.51.100/24 文档段
+                || (a == 203 && b == 0 && c == 113)      // 203.0.113/24 文档段
+                || (a == 198 && (18..=19).contains(&b))  // 198.18/15 基准测试段
+                || (a == 255 && b == 255 && c == 255 && d == 255) // 广播
+        }
+        std::net::IpAddr::V6(v6) => {
+            // IPv4-mapped（::ffff:a.b.c.d）拆出内层按 IPv4 判定，防六代壳套四代内网
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_forbidden_ip(std::net::IpAddr::V4(v4));
+            }
+            let seg = v6.segments();
+            v6.is_loopback()                    // ::1
+                || v6.is_unspecified()          // ::
+                || (seg[0] & 0xfe00) == 0xfc00  // fc00::/7 唯一本地
+                || (seg[0] & 0xffc0) == 0xfe80  // fe80::/10 链路本地
+                || (seg[0] & 0xff00) == 0xff00  // ff00::/8 组播
+        }
+    }
+}
+
 /// 请求准入校验（后端兜底——前端 InputPanel 保留快速反馈，后端为准入闸门）。
 /// 限额：user_input ≤20000 字符、原歌词 ≤20000、feedback ≤2000；
-/// base_url 必须 http(s)；model/api_key 去空白后非空。
+/// base_url 双层校验（http(s) 前缀 + validate_url host 解析）且覆盖全部 role_overrides.base_url；
+/// model/api_key 去空白后非空。
 /// 失败返回 Validation kind（预留正式启用），前端 errText 原样展示。
 pub fn validate_request(req: &PipelineRequest, feedback: Option<&str>) -> Result<(), AppError> {
     /// 字符数超限报错
@@ -516,6 +676,34 @@ pub fn validate_request(req: &PipelineRequest, feedback: Option<&str>) -> Result
             ErrorKind::Validation,
             "API 地址非法（必须 http(s) 开头），请在设置中检查",
         ));
+    }
+    // S-1 新规则：host 级校验第二道（真实解析，拒绝环回/内网/保留地址），全局入口
+    validate_url(url).map_err(|m| {
+        AppError::new(ErrorKind::Validation, format!("API 地址不合规：{}，请在设置中检查", m))
+    })?;
+    // S-1：role_overrides.base_url 是独立第二入口，与全局同闸（旧规则完全不校验，属 SSRF 旁路）
+    for (role, ov) in req.role_overrides.iter().flatten() {
+        if let Some(ov_url) = ov.base_url.as_deref() {
+            let ov_trim = ov_url.trim();
+            if ov_trim.is_empty() {
+                return Err(AppError::new(
+                    ErrorKind::Validation,
+                    format!("{} 角色的 API 地址为空，请填写完整或清空该角色覆盖", role.name()),
+                ));
+            }
+            if !(ov_trim.starts_with("http://") || ov_trim.starts_with("https://")) {
+                return Err(AppError::new(
+                    ErrorKind::Validation,
+                    format!("{} 角色的 API 地址非法（必须 http(s) 开头），请在设置中检查", role.name()),
+                ));
+            }
+            validate_url(ov_trim).map_err(|m| {
+                AppError::new(
+                    ErrorKind::Validation,
+                    format!("{} 角色的 API 地址不合规：{}，请在设置中检查", role.name(), m),
+                )
+            })?;
+        }
     }
     // 生成参数范围校验（缺省跳过）
     if let Some(g) = &req.generation {

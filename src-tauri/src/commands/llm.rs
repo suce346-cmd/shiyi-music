@@ -142,10 +142,13 @@ async fn send_with_retry(
 }
 
 /// 构建 HTTP 客户端：connect 10s；总超时按调用场景（普通 120s，思考模式 300s——思维链+长输出耗时更长）
+/// S-1：关闭自动重定向——重定向目标不经过 validate_url，跟随即绕过 SSRF 防线；
+/// 公网 API 网关不依赖 3xx 跳转，遇重定向按非 2xx 原样报错（fail loud）。
 pub(crate) fn build_client(timeout_secs: u64) -> Result<Client, AppError> {
     Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
         .timeout(std::time::Duration::from_secs(timeout_secs))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| AppError::new(ErrorKind::Internal, format!("Failed to build HTTP client: {}", e)))
 }
@@ -846,6 +849,10 @@ pub async fn test_api(
     // 预算独立 120s（不占流水线 15 分钟池，天然隔离）；成功判定与失败分类原样保留。
     use crate::budget::Budget;
     use std::sync::Arc;
+    // S-1 新规则：测试连接与流水线同一道 URL 闸门（旧规则此处无任何校验，可直连任意 host）
+    crate::models::validate_url(&base_url).map_err(|m| {
+        AppError::new(ErrorKind::Validation, format!("API 地址不合规：{}，请在设置中检查", m))
+    })?;
     let client = build_client(120)?;
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let body = test_api_body(&model);

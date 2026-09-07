@@ -21,8 +21,10 @@ fn test_config() -> Option<TestConfig> {
     if base_url.trim().is_empty() || api_key.trim().is_empty() || model.trim().is_empty() {
         return None;
     }
-    // 仅允许 http/https（与生产约束一致；本地环回不在实网测试用）
-    if !(base_url.starts_with("http://") || base_url.starts_with("https://")) {
+    // S-1 新规则：与生产同一道 validate_url 闸门（旧规则仅前缀检查，测试与生产两套标准）
+    // 配置非法时 eprintln 后跳过——与"缺变量自动跳过"语义一致，实网测试不吞凭据
+    if let Err(m) = suno_prompt_generator_lib::models::validate_url(&base_url) {
+        eprintln!("SHIYI_TEST_BASE_URL 不合规，实网测试跳过: {}", m);
         return None;
     }
     Some(TestConfig { base_url, api_key, model })
