@@ -60,18 +60,24 @@ pub fn save<R: Runtime>(app: &tauri::AppHandle<R>, run_id: &str, cp: &PipelineCh
 }
 
 /// 读检查点（不存在 → None；损坏 → 备份 .bak 后 None，不丢数据且不阻断）
+/// B-5：读取 IO 失败不再静默 None（旧规则与"不存在"混在一起，续跑文案误导用户以为任务没跑过）
 pub fn load<R: Runtime>(app: &tauri::AppHandle<R>, run_id: &str) -> Option<PipelineCheckpoint> {
     let path = checkpoint_path(app, run_id).ok()?;
     if !path.exists() {
         return None;
     }
-    let content = std::fs::read_to_string(&path).ok()?;
-    match serde_json::from_str::<PipelineCheckpoint>(&content) {
-        Ok(cp) => Some(cp),
+    match std::fs::read_to_string(&path) {
+        Ok(content) => match serde_json::from_str::<PipelineCheckpoint>(&content) {
+            Ok(cp) => Some(cp),
+            Err(e) => {
+                let bak = path.with_extension("json.bak");
+                let _ = std::fs::rename(&path, &bak);
+                tracing::warn!(backup = ?bak, error = %e, "检查点文件损坏已备份");
+                None
+            }
+        },
         Err(e) => {
-            let bak = path.with_extension("json.bak");
-            let _ = std::fs::rename(&path, &bak);
-            tracing::warn!(backup = ?bak, error = %e, "检查点文件损坏已备份");
+            tracing::warn!(path = ?path, error = %e, "检查点读取失败（按不存在处理，但原因已记录）");
             None
         }
     }

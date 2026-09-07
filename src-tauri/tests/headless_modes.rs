@@ -111,7 +111,7 @@ async fn headless_mode_b() {
     println!("HEADLESS-B-OK chars={}", text.chars().count());
 }
 
-/// Mode C：三行原词 + 新主题 → 逐行等字改写（座位=4；硬校验逐行对齐）
+/// Mode C：三行原词 + 新主题 → 逐行等字改写（座位=3：Reviser+Host+Auditor，Q6 后制作人已移除；硬校验逐行对齐）
 #[tokio::test]
 #[ignore]
 async fn headless_mode_c() {

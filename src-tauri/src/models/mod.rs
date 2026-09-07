@@ -436,6 +436,32 @@ pub enum PipelineRole {
 }
 
 impl PipelineRole {
+    /// 全角色枚举（O-5 白名单等需要遍历角色处共用）
+    pub fn all() -> [PipelineRole; 7] {
+        [
+            PipelineRole::Host,
+            PipelineRole::Auditor,
+            PipelineRole::Emotion,
+            PipelineRole::Lyricist,
+            PipelineRole::Reviser,
+            PipelineRole::Producer,
+            PipelineRole::StyleAnalyst,
+        ]
+    }
+
+    /// 钥匙串 account 标识（O-5 白名单真源；与 serde snake_case 键一致，前端 role:{id} 同名）
+    pub fn storage_key(&self) -> &'static str {
+        match self {
+            PipelineRole::Host => "host",
+            PipelineRole::Auditor => "auditor",
+            PipelineRole::Emotion => "emotion",
+            PipelineRole::Lyricist => "lyricist",
+            PipelineRole::Reviser => "reviser",
+            PipelineRole::Producer => "producer",
+            PipelineRole::StyleAnalyst => "style_analyst",
+        }
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             PipelineRole::Host => "主持人",

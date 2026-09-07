@@ -38,9 +38,10 @@ pub const DOUYIN_DESC_LINE_MAX_CHARS: usize = 80;
 /// Mode C 尾部收尾允许行数
 pub const LYRIC_FILL_TAIL_ALLOW: usize = 2;
 
-/// 弧线参数区间（Weirdness min/max + Style Influence min/max），以 suno_rules.csv 为真源。
-/// CSV 中 style_arc_high 的 Style Influence 上限为 90（非 95），此处与其对齐；
-/// 其余 9 条弧线 Weirdness 只散在 CSV 描述文本中，无结构化列，数值沿用既有 prose 共识。
+/// 弧线参数区间（Weirdness min/max + Style Influence min/max），与 suno_rules.csv 同源。
+/// K-1 正名：CSV 仅 style_arc_high 有结构化列（85-90，arc_high_matches_csv_structured_value 锁定）；
+/// 其余 9 条的 Weirdness 区间只散在 CSV 描述文本中，无结构化列，数值系 prose 共识——
+/// 改这 9 条时 CSV 描述文本需同步，二者无自动约束。
 /// 顺序：标准叙事 / 全程高能 / 高开低走 / 平铺氛围 / 起伏戏剧 / 阶梯上升 / 渐进爆发 / U型 / 单峰 / 回环。
 pub const ARC_PARAMS: &[(&str, u32, u32, u32, u32)] = &[
     ("标准叙事", 22, 28, 78, 83),
@@ -156,11 +157,12 @@ mod tests {
     #[test]
     fn arc_params_cover_ten_arcs() {
         assert_eq!(ARC_PARAMS.len(), 10, "弧线须10种");
-        let ab = checklist("mode_a");        for (name, wmin, wmax, smin, smax) in ARC_PARAMS {
-            let frag = format!("{}-{}", wmin, wmax);
+        let ab = checklist("mode_a");
+        for (name, wmin, wmax, smin, smax) in ARC_PARAMS {
             assert!(ab.contains(name), "清单缺弧线 {}", name);
-            assert!(ab.contains(&frag), "清单缺区间 {}", frag);
-            let _ = (smin, smax);
+            // K-2：断言完整 "W-W/S-S" 片段——只查 Weirdness 段时 Style Influence 数字漂移漏检
+            let frag = format!("{}-{}/{}-{}", wmin, wmax, smin, smax);
+            assert!(ab.contains(&frag), "清单缺完整弧线区间 {}", frag);
         }
     }
 

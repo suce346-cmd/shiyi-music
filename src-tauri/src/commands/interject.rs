@@ -11,27 +11,37 @@ use std::sync::Mutex;
 static SLOTS: std::sync::LazyLock<Mutex<HashMap<String, Vec<String>>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// 单 run 插话槽上限（O-4：防 UI 异常循环 push 撑爆内存）；超出丢弃最新并记 warn
+const MAX_PER_RUN: usize = 10;
+/// 单条插话上限字符数（与前端输入框约束同量级的后端兜底）
+const MAX_TEXT_CHARS: usize = 1000;
+
 /// 存入一条用户意见（前端"插入意见"按钮调，带 run_id；多条累积，轮边界一次性消费）
+/// O-3/O-4：锁中毒恢复；超限（条数/单条字符）丢弃并记 warn，不撑爆内存
 pub(crate) fn push(run_id: &str, text: String) {
-    if let Ok(mut slots) = SLOTS.lock() {
-        slots.entry(run_id.to_string()).or_default().push(text);
+    if text.chars().count() > MAX_TEXT_CHARS {
+        tracing::warn!(run_id = %run_id, len = text.chars().count(), "插话超长已丢弃");
+        return;
     }
+    let mut slots = SLOTS.lock().unwrap_or_else(|e| e.into_inner());
+    let slot = slots.entry(run_id.to_string()).or_default();
+    if slot.len() >= MAX_PER_RUN {
+        tracing::warn!(run_id = %run_id, cap = MAX_PER_RUN, "插话条数达上限，丢弃最新");
+        return;
+    }
+    slot.push(text);
 }
 
 /// 取走指定 run 的全部累积意见（轮边界调用；拿走即清空，无残留）
 pub(crate) fn drain(run_id: &str) -> Vec<String> {
-    if let Ok(mut slots) = SLOTS.lock() {
-        slots.remove(run_id).unwrap_or_default()
-    } else {
-        Vec::new()
-    }
+    let mut slots = SLOTS.lock().unwrap_or_else(|e| e.into_inner());
+    slots.remove(run_id).unwrap_or_default()
 }
 
 /// 新 run 清槽（防上一轮残留污染；与 cancel::reset 同位置调用）
 pub(crate) fn reset(run_id: &str) {
-    if let Ok(mut slots) = SLOTS.lock() {
-        slots.remove(run_id);
-    }
+    let mut slots = SLOTS.lock().unwrap_or_else(|e| e.into_inner());
+    slots.remove(run_id);
 }
 
 #[cfg(test)]
@@ -52,5 +62,21 @@ mod tests {
         push("r1", "残留".to_string());
         reset("r1");
         assert!(drain("r1").is_empty());
+    }
+
+    /// O-4：插话槽上限——超过 10 条丢弃最新、超长文本丢弃，不撑爆内存
+    #[test]
+    fn interject_slot_capped() {
+        reset("cap1");
+        for i in 0..15 {
+            push("cap1", format!("意见{}", i));
+        }
+        let drained = drain("cap1");
+        assert_eq!(drained.len(), 10, "单 run 上限 10 条: {:?}", drained.len());
+        assert_eq!(drained[9], "意见9", "超限后最新丢弃，保留先到的 10 条");
+        // 超长文本丢弃
+        reset("cap2");
+        push("cap2", "长".repeat(1001));
+        assert!(drain("cap2").is_empty(), "超长插话应被丢弃");
     }
 }

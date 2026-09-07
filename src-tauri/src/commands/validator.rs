@@ -165,9 +165,38 @@ pub fn validate_production(mode: &str, text: &str) -> ValidationResult {
         } else {
             issues.push("未找到任何说明行（每段应含 [乐器1+行为, ...] 说明行）".to_string());
         }
+        // K-3：Audio Influence=0 硬门（双向）——清单写了"Audio Influence=0"但旧校验不查，
+        // 非 0 会让 Suno 匹配不存在的参考音频导致生成漂移（CSV audio_influence 行）。
+        if let Some(msg) = check_audio_influence(text) {
+            issues.push(msg);
+        }
     }
 
     if issues.is_empty() { ValidationResult::ok() } else { ValidationResult::fail(issues) }
+}
+
+/// K-3：解析参数行 Audio Influence（Mode A/B 硬门）。双向：缺参数行 / 值非 0 / 无法解析都拦。
+fn check_audio_influence(text: &str) -> Option<String> {
+    let line = text
+        .lines()
+        .find(|l| l.trim_start().starts_with("参数") && l.contains("Audio Influence"));
+    let line = match line {
+        Some(l) => l,
+        None => return Some("缺参数行（末尾须输出 `参数: Weirdness=… | Style Influence=… | Audio Influence=0`）".to_string()),
+    };
+    let after = line.split("Audio Influence").nth(1).unwrap_or("");
+    let num: String = after
+        .trim_start()
+        .trim_start_matches(['=', '：', ':'])
+        .trim_start()
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    match num.parse::<f64>() {
+        Ok(v) if v == 0.0 => None,
+        Ok(v) => Some(format!("Audio Influence 须为 0（无参考音频，当前 {}）", v)),
+        Err(_) => Some("参数行 Audio Influence 无法解析（应为 `Audio Influence=0`）".to_string()),
+    }
 }
 
 /// Mode C 字数计数：去空白 + 去标点（Q2：与 prompts.rs“标点不计入字数”同口径；
@@ -537,9 +566,41 @@ mod tests {
 [Chorus]
 [acoustic guitar strummed, cello dark bowing, warm piano cushions, light drums, deep bass pulses, wide hall]
 我梦过 你的未来
-能量轨迹：Verse 1 能量 3，Chorus 能量 8"#;
+能量轨迹：Verse 1 能量 3，Chorus 能量 8
+参数: Weirdness=25 | Style Influence=80 | Audio Influence=0"#;
         let r = validate_production("mode_a", text);
         assert!(r.passed, "issues: {:?}", r.issues);
+    }
+
+    /// K-3：Audio Influence 非 0 必须被拦（旧规则清单写了但不查）
+    #[test]
+    fn production_audio_influence_nonzero_fails() {
+        let text = r#"**Style Prompt**: dark indie folk
+[Verse 1]
+[acoustic guitar fingerpicked, cello soft pads, brushed drums keep time, intimate room]
+歌词行
+[Chorus]
+[acoustic guitar strummed, cello dark bowing, warm piano cushions, light drums, deep bass pulses, wide hall]
+能量轨迹：Verse 1 能量 3，Chorus 能量 8
+参数: Weirdness=25 | Style Influence=80 | Audio Influence=30"#;
+        let r = validate_production("mode_a", text);
+        assert!(!r.passed);
+        assert!(r.issues.iter().any(|i| i.contains("Audio Influence")), "issues: {:?}", r.issues);
+    }
+
+    /// K-3：缺参数行同样被拦（双向门）
+    #[test]
+    fn production_audio_param_line_missing_fails() {
+        let text = r#"**Style Prompt**: dark indie folk
+[Verse 1]
+[acoustic guitar fingerpicked, cello soft pads, brushed drums keep time, intimate room]
+歌词行
+[Chorus]
+[acoustic guitar strummed, cello dark bowing, warm piano cushions, light drums, deep bass pulses, wide hall]
+能量轨迹：Verse 1 能量 3，Chorus 能量 8"#;
+        let r = validate_production("mode_a", text);
+        assert!(!r.passed);
+        assert!(r.issues.iter().any(|i| i.contains("缺参数行")), "issues: {:?}", r.issues);
     }
 
     /// L-3：弱段 2 件必须被揪出（单段下限统一为 3 后，旧正样"2 件"不再合法）

@@ -92,17 +92,14 @@ async fn send_with_retry(
                         let wait_dur = std::time::Duration::from_secs(planned)
                             .min(budget.remaining_for_discussion(reserve));
                         if tokio::time::timeout(budget.remaining(), tokio::time::sleep(wait_dur)).await.is_err() {
-                            return Err(AppError::new(
-                                ErrorKind::Timeout,
-                                "等待重试时流水线预算耗尽".to_string(),
-                            ));
+                            return Err(AppError::new(ErrorKind::Timeout, budget_stop_msg(reserve, "等待重试中止")));
                         }
                         // 保底截断了等待：不等满直接中止本轮，不再消耗（Q3：此前文案写“转入终稿”，
                         // 实际讨论轮 Timeout 经 .await? 直接中止整线，无跳终稿分支；文案如实改中止）。
                         if wait_dur < std::time::Duration::from_secs(planned) {
                             return Err(AppError::new(
                                 ErrorKind::Timeout,
-                                format!("讨论轮退避被终稿保底截断（已等 {:?}，计划 {}s），中止本轮", wait_dur, planned),
+                                budget_stop_msg(reserve, &format!("退避被保底截断（已等 {:?}，计划 {}s），中止本轮", wait_dur, planned)),
                             ));
                         }
                         continue;
@@ -121,15 +118,12 @@ async fn send_with_retry(
                     let wait_dur = std::time::Duration::from_secs(planned)
                         .min(budget.remaining_for_discussion(reserve));
                     if tokio::time::timeout(budget.remaining(), tokio::time::sleep(wait_dur)).await.is_err() {
-                        return Err(AppError::new(
-                            ErrorKind::Timeout,
-                            "等待重试时流水线预算耗尽".to_string(),
-                        ));
+                        return Err(AppError::new(ErrorKind::Timeout, budget_stop_msg(reserve, "等待重试中止")));
                     }
                     if wait_dur < std::time::Duration::from_secs(planned) {
                         return Err(AppError::new(
                             ErrorKind::Timeout,
-                            format!("讨论轮退避被终稿保底截断（已等 {:?}，计划 {}s），中止本轮", wait_dur, planned),
+                            budget_stop_msg(reserve, &format!("退避被保底截断（已等 {:?}，计划 {}s），中止本轮", wait_dur, planned)),
                         ));
                     }
                     continue;
@@ -139,6 +133,16 @@ async fn send_with_retry(
         }
     }
     Err(AppError::new(ErrorKind::Network, format!("API 请求失败（重试 3 次后仍失败）：{}", last_err)))
+}
+
+/// G-1 单源：预算打断文案按 reserve 分流——终稿（reserve=ZERO）说"流水线预算"，
+/// 讨论轮明示"已预留终稿"；两处退避打断共用，不再各写各的（预算闸门分支文案在 send_with_retry 内）。
+fn budget_stop_msg(reserve: std::time::Duration, what: &str) -> String {
+    if reserve.is_zero() {
+        format!("流水线预算耗尽，{}", what)
+    } else {
+        format!("讨论轮预算耗尽（已预留终稿 {:?}），{}", reserve, what)
+    }
 }
 
 /// 构建 HTTP 客户端：connect 10s；总超时按调用场景（普通 120s，思考模式 300s——思维链+长输出耗时更长）
@@ -286,8 +290,13 @@ async fn send_and_extract(
                 let wait = std::time::Duration::from_secs(if attempt == 1 { 5 } else { 10 });
                 let wait_capped = wait.min(budget.remaining_for_discussion(reserve));
                 if wait_capped.is_zero() || tokio::time::timeout(budget.remaining(), tokio::time::sleep(wait_capped)).await.is_err() {
+                    // G-2：丢因修复——旧规则 break 后透出的是底层解码错误，"预算打断"这一真实原因丢失，
+                    // 且 Parse 形态会被外层误判为可重试再烧一轮。改置 Timeout 结论并保留最后一次错误。
                     tracing::warn!("非流式重发等待被预算打断，不再重试");
-                    break;
+                    return Err(AppError::new(
+                        ErrorKind::Timeout,
+                        format!("预算打断，停止解码重发；最后一次错误: {}", truncate_err(&last.message)),
+                    ));
                 }
                 match extract_once(client, url, api_key, body, budget, run_id, reserve).await {
                     Ok(resp) => return Ok(resp),

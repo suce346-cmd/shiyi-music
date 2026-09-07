@@ -56,6 +56,9 @@ pub fn seats_for_mode(mode: &Mode) -> Vec<PipelineRole> {
 /// 注：前端有 TS 镜像仅做预估展示，真源在此（双源同步，两端同 commit）。
 pub fn roles_for_feedback(feedback: &str, mode: &Mode) -> Vec<PipelineRole> {
     use PipelineRole::*;
+    // B-2：输入统一转小写匹配（旧规则大小写混排——用户输入 "Hook"/"weirdness" 时
+    // 小写关键词 "hook" 与大写关键词 "Weirdness" 各漏一头）
+    let fb = feedback.to_lowercase();
     let mut out: Vec<PipelineRole> = Vec::new();
     let mut push = |r: PipelineRole| {
         if !out.contains(&r) {
@@ -63,26 +66,26 @@ pub fn roles_for_feedback(feedback: &str, mode: &Mode) -> Vec<PipelineRole> {
         }
     };
     // 歌词类
-    if ["歌词", "词", "句", "韵", "唱", "hook", "副歌", "主歌", "金句"].iter().any(|k| feedback.contains(k)) {
+    if ["歌词", "词", "句", "韵", "唱", "hook", "副歌", "主歌", "金句"].iter().any(|k| fb.contains(k)) {
         push(if *mode == Mode::ModeC { Reviser } else { Lyricist });
     }
     // 编曲类
-    if ["编曲", "配器", "乐器", "伴奏", "BPM", "bpm", "人声", "音色", "混音", "鼓", "吉他", "钢琴", "唢呐"]
+    if ["编曲", "配器", "乐器", "伴奏", "bpm", "人声", "音色", "混音", "鼓", "吉他", "钢琴", "唢呐"]
         .iter()
-        .any(|k| feedback.contains(k))
+        .any(|k| fb.contains(k))
     {
         push(Producer);
     }
     // 情绪类
-    if ["情绪", "能量", "感觉", "氛围", "情感", "炸", "软", "嗨"].iter().any(|k| feedback.contains(k)) {
+    if ["情绪", "能量", "感觉", "氛围", "情感", "炸", "软", "嗨"].iter().any(|k| fb.contains(k)) {
         push(Emotion);
     }
     // 抖音传播类（仅 ModeD 有 StyleAnalyst；其他模式回落 Producer）
-    if ["抖音", "传播", "钩子", "洗脑", "爆", "魔性", "循环", "骤停"].iter().any(|k| feedback.contains(k)) {
+    if ["抖音", "传播", "钩子", "洗脑", "爆", "魔性", "循环", "骤停"].iter().any(|k| fb.contains(k)) {
         push(if *mode == Mode::ModeD { StyleAnalyst } else { Producer });
     }
     // 参数类
-    if ["参数", "怪异度", "影响度", "Weirdness", "Influence"].iter().any(|k| feedback.contains(k)) {
+    if ["参数", "怪异度", "影响度", "weirdness", "influence"].iter().any(|k| fb.contains(k)) {
         push(Producer);
         push(Emotion);
     }
@@ -550,6 +553,8 @@ async fn execute_review<R: Runtime>(
         )
         .await?;
         let result2 = parse_review(&resp2.raw);
+        // B-1：重试调用同样计费，usage 必须如实入账（旧规则只发首调，重试 tokens 漏记）
+        emit_usage(app, role, &resp2, run_id);
         if !result2.degraded {
             result = result2;
         }
@@ -689,6 +694,8 @@ async fn execute_audit_review<R: Runtime>(
         )
         .await?;
         let result2 = parse_review(&resp2.raw);
+        // B-1：重试调用同样计费，usage 必须如实入账（旧规则只发首调，重试 tokens 漏记）
+        emit_usage(app, PipelineRole::Auditor, &resp2, run_id);
         if !result2.degraded {
             result = result2;
         }
@@ -744,7 +751,21 @@ async fn run_host_initial<R: Runtime>(
             let wait = std::time::Duration::from_secs(if attempt == 1 { 5 } else { 10 });
             let wait_capped = wait.min(budget.remaining_for_discussion(llm::FINAL_STAGE_RESERVE));
             if wait_capped.is_zero() || tokio::time::timeout(budget.remaining(), tokio::time::sleep(wait_capped)).await.is_err() {
+                // G-2：丢因修复——旧规则 break 后 resp 保持上一轮流错误，"预算打断"真实原因丢失。
+                // 置 Timeout 结论（外层按不可重试透出）并保留最后一次流错误。
                 tracing::warn!("阶段 0 重发等待被预算打断，不再重试");
+                let last_msg = match &resp {
+                    Err(e) => e.message.clone(),
+                    _ => String::new(),
+                };
+                resp = Err(crate::errors::AppError::new(
+                    crate::errors::ErrorKind::Timeout,
+                    if last_msg.is_empty() {
+                        "预算打断，阶段 0 整流重发未执行".to_string()
+                    } else {
+                        format!("预算打断，停止阶段 0 整流重发；最后一次错误: {}", last_msg)
+                    },
+                ));
                 break;
             }
         }
@@ -1330,7 +1351,8 @@ async fn run_pipeline_inner<R: Runtime>(
     // R3：阶段 2 入口同样落检查点（含收敛后的 current_plan），终稿失败可直接续终稿
     {
         let cp = crate::commands::checkpoint::PipelineCheckpoint {
-            mode: format!("{:?}", mode).to_lowercase().replace("mode", "mode_"),
+            // B-3：mode 单源 to_str_name（旧规则用 Debug 字符串变换，两处序列化口径漂移风险）
+            mode: mode.to_str_name().to_string(),
             user_input: request.user_input.clone(),
             current_plan: current_plan.clone(),
             revisions_log: revisions_log.clone(),
@@ -1420,6 +1442,18 @@ pub async fn pipeline_generate(app: AppHandle, request: PipelineRequest) -> Resu
     run_pipeline(app, request).await
 }
 
+/// 模式锁判定（B-5 纯函数，可测）：空 mode（旧版检查点无该字段）放行；匹配放行；错配返回报错文案。
+fn checkpoint_mode_error(cp_mode: &str, req_mode: &str) -> Option<String> {
+    if cp_mode.is_empty() || cp_mode == req_mode {
+        None
+    } else {
+        Some(format!(
+            "检查点模式 {} 与请求模式 {} 不一致，请用原模式续跑",
+            cp_mode, req_mode
+        ))
+    }
+}
+
 /// 圆桌优化（前端调用，带反馈）
 #[tauri::command]
 pub async fn pipeline_refine(
@@ -1465,12 +1499,9 @@ pub async fn pipeline_resume<R: Runtime>(
             "无可用检查点（任务已完成、已取消或检查点损坏），请重新生成",
         )
     })?;
-    // Q4模式锁：检查点 mode 须与请求 mode 一致（此前静默错配，按新规范出旧 plan）。
-    if !cp.mode.is_empty() && cp.mode != request.mode.to_str_name() {
-        return Err(crate::errors::AppError::new(
-            crate::errors::ErrorKind::Validation,
-            format!("检查点模式 {} 与请求模式 {} 不一致，请用原模式续跑", cp.mode, request.mode.to_str_name()),
-        ));
+    // Q4模式锁（B-5 抽纯函数）：检查点 mode 须与请求 mode 一致（此前静默错配，按新规范出旧 plan）。
+    if let Some(msg) = checkpoint_mode_error(&cp.mode, request.mode.to_str_name()) {
+        return Err(crate::errors::AppError::new(crate::errors::ErrorKind::Validation, msg));
     }
     // 续跑用新预算（15 分钟满额），不继承已耗尽的旧预算——旧预算耗尽正是失败原因
     let budget = std::sync::Arc::new(Budget::with_timeout(PIPELINE_TIMEOUT));
@@ -1721,6 +1752,11 @@ mod tests {
             vec![Lyricist, Producer, Emotion]
         ); // "炸"兼命中情绪类
         assert!(roles_for_feedback("随便改改", &Mode::ModeB).is_empty());
+        // B-2：大小写混排输入也要命中（旧规则小写 hook/大写 Weirdness 各漏一头）
+        assert_eq!(roles_for_feedback("HOOK 记忆点不够", &Mode::ModeB), vec![Lyricist]);
+        assert_eq!(roles_for_feedback("weirdness 太高", &Mode::ModeB), vec![Producer, Emotion]);
+        assert_eq!(roles_for_feedback("BPM 太快", &Mode::ModeB), vec![Producer]);
+        assert_eq!(roles_for_feedback("bpm 太快", &Mode::ModeB), vec![Producer]);
     }
 
     /// 上一版方案提取——取最后标记之后；缺失/空白返回 None
@@ -1947,15 +1983,16 @@ mod tests {
         assert!(!issues_a.iter().any(|i| i.contains("缺少 BPM")), "A 模式不应报缺 BPM: {:?}", issues_a);
     }
 
-    /// Q4模式锁：检查点 mode 与请求 mode 必须一致（纯逻辑断言，不碰磁盘）。
+    /// Q4模式锁（B-5 行为化）：错配拒绝、匹配放行、旧检查点空 mode 放行。
     #[test]
     fn resume_mode_must_match_checkpoint() {
-        let cp = crate::commands::checkpoint::PipelineCheckpoint {
-            mode: "mode_b".to_string(),
-            ..Default::default()
-        };
-        let req_mode = Mode::ModeD;
-        assert_ne!(cp.mode, req_mode.to_str_name(), "测试前提：B 断点 vs D 请求必须触发模式锁");
+        // B 断点 vs D 请求 → 拒绝并双端报模式名
+        let err = checkpoint_mode_error("mode_b", Mode::ModeD.to_str_name()).unwrap();
+        assert!(err.contains("mode_b") && err.contains("mode_d"), "报错应含双端模式: {}", err);
+        // 匹配放行
+        assert!(checkpoint_mode_error("mode_a", Mode::ModeA.to_str_name()).is_none());
+        // 旧版检查点空 mode 放行（向后兼容）
+        assert!(checkpoint_mode_error("", Mode::ModeC.to_str_name()).is_none());
     }
 
     #[test]

@@ -52,8 +52,12 @@ export function sanitizeStored(raw: unknown): AppSettings {
   if (typeof o.roleOverrides === "object" && o.roleOverrides !== null && !Array.isArray(o.roleOverrides)) {
     // 逐角色深校验：非对象条目丢弃；对象只保留 string 三字段
     // api_key 同 apiKey 处理——仅哨兵保留，明文待迁移
+    // O-5/U-1：role 键白名单（与后端 PipelineRole::storage_key 同名单源，keychain account 同名）——
+    // 旧规则任意键放行，会配出后端拒绝的 role:{未知} 钥匙串账户
+    const KNOWN_ROLES = ["host", "auditor", "emotion", "lyricist", "reviser", "producer", "style_analyst"];
     const cleaned: Record<string, RoleApiOverride> = {};
     for (const [k, v] of Object.entries(o.roleOverrides)) {
+      if (!KNOWN_ROLES.includes(k)) continue;
       if (v && typeof v === "object" && !Array.isArray(v)) {
         const entry: RoleApiOverride = {};
         const e = v as Record<string, unknown>;

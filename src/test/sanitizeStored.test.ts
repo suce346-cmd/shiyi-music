@@ -32,6 +32,15 @@ describe("sanitizeStored", () => {
     expect((s.roleOverrides as Record<string, unknown> | undefined)?.["hacker"]).toBeUndefined();
   });
 
+  it("O-5/U-1：role 键白名单——对象形态的未知角色键也丢弃（与后端 storage_key 名单一致）", () => {
+    const s = sanitizeStored(
+      JSON.parse(`{"${K.rk}":{"emotion":{"model":"m"},"hacker":{"model":"evil"},"ninja":{"base_url":"u"}}}`),
+    );
+    expect(s.roleOverrides?.emotion).toEqual({ model: "m" });
+    expect((s.roleOverrides as Record<string, unknown> | undefined)?.["hacker"]).toBeUndefined();
+    expect((s.roleOverrides as Record<string, unknown> | undefined)?.["ninja"]).toBeUndefined();
+  });
+
   it("generation 清洗——范围内保留，越界/坏类型丢弃", () => {
     const G = "generation";
     const ok = sanitizeStored(JSON.parse(`{"${G}":{"temperature":0.2,"max_tokens":8000}}`));

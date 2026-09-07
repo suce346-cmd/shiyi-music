@@ -16,9 +16,9 @@ pub(crate) fn request_cancel(run_id: &str) {
         CANCELLED_GLOBAL.store(true, std::sync::atomic::Ordering::SeqCst);
         return;
     }
-    if let Ok(mut set) = CANCELLED_RUNS.lock() {
-        set.insert(run_id.to_string());
-    }
+    // O-3：锁中毒恢复——poisoned 的 Mutex 里的 HashSet 本身仍一致，取回内层数据继续（取消位宁可可用）
+    let mut set = CANCELLED_RUNS.lock().unwrap_or_else(|e| e.into_inner());
+    set.insert(run_id.to_string());
 }
 
 /// 指定 run 是否被取消（空 run_id 查全局兼容位）
@@ -28,16 +28,20 @@ pub(crate) fn is_cancelled(run_id: &str) -> bool {
     }
     CANCELLED_RUNS
         .lock()
-        .map(|set| set.contains(run_id))
-        .unwrap_or(false)
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(run_id)
 }
 
-/// 新 run 清理指定 run_id 条目 + 全局位（防残留污染；与 interject::reset 同位置调用）
+/// 新 run 清理取消位（与 interject::reset 同位置调用）
+/// B-6 语义收窄：具名 reset 只删自身条目（并行互不干扰）；空参只清全局位。
+/// 旧规则具名 reset 连带清全局——会误清其他遗留空 id 任务的取消状态。
 pub(crate) fn reset(run_id: &str) {
-    if let Ok(mut set) = CANCELLED_RUNS.lock() {
-        set.remove(run_id);
+    if run_id.trim().is_empty() {
+        CANCELLED_GLOBAL.store(false, std::sync::atomic::Ordering::SeqCst);
+        return;
     }
-    CANCELLED_GLOBAL.store(false, std::sync::atomic::Ordering::SeqCst);
+    let mut set = CANCELLED_RUNS.lock().unwrap_or_else(|e| e.into_inner());
+    set.remove(run_id);
 }
 
 #[cfg(test)]
