@@ -49,7 +49,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: macos-13
+          # macos-13（Intel）已被 GitHub 退役——v0.4.1 的 macos-x64 构建曾因此无限排队；
+          # Intel 产物改用 macos-15-intel（现役 x86_64 镜像）
+          - os: macos-15-intel
             target: x86_64-apple-darwin
             label: macos-x64
           - os: macos-latest
