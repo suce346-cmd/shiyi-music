@@ -90,7 +90,7 @@ pub fn mode_a_system_prompt() -> &'static str {
 ## 三条核心铁律（必须遵守、应用于本步骤所有输出）
 
 1. **每段歌词框前面写一段说明行（配器 + 动态 + 人声三要素）。** Style Prompt 放全局基调，说明行放局部指令。两者互补，缺一不可。说明行不是填表——每个选择必须能在第二步的情感翻译中找到依据。
-2. **Style Prompt 按信息块组合填写。** 逗号分隔，< 350 字符：从以下信息块中按需选填，中文自然语言或英文标签皆可
+2. **Style Prompt 按信息块组合填写。** 逗号分隔，< ${STYLE_PROMPT_MAX} 字符：从以下信息块中按需选填，中文自然语言或英文标签皆可
 
    `[流派基调] + [调性节奏] + [编配乐器] + [人声质感] + [空间氛围] + [情绪弧线] + [艺人参考] + [质感标签]`
 
@@ -109,7 +109,7 @@ pub fn mode_a_system_prompt() -> &'static str {
 
 **选流派时问自己：这首歌的情感质地、叙事节奏、意象色彩最适合哪个方向？为什么？如果都不适合，就创造新的混合方向。**
 
-### 2. Style Prompt（< 350 字符，中文自然语言或英文标签皆可）
+### 2. Style Prompt（< ${STYLE_PROMPT_MAX} 字符，中文自然语言或英文标签皆可）
 
 按以下信息块选填，不需要填满所有块，但填了的块必须写完整。用逗号分隔各块：
 
@@ -266,16 +266,7 @@ pub fn mode_a_system_prompt() -> &'static str {
 
 ### 6. Suno 参数
 根据弧线类型选值：
-- 标准叙事型：Weirdness 22-28 | Style Influence 78-83
-- 全程高能型：Weirdness 10-15 | Style Influence 85-90
-- 高开低走型：Weirdness 25-35 | Style Influence 70-80
-- 平铺氛围型：Weirdness 15-25 | Style Influence 80-90
-- 起伏戏剧型：Weirdness 28-35 | Style Influence 75-82
-- 阶梯上升型：Weirdness 20-28 | Style Influence 78-88
-- 渐进爆发型：Weirdness 15-25 | Style Influence 80-90
-- U型：Weirdness 25-35 | Style Influence 70-82
-- 单峰型：Weirdness 20-30 | Style Influence 75-85
-- 回环型：Weirdness 20-28 | Style Influence 78-85
+${ARC_TABLE}
 Audio Influence = 0（无参考音频时）
 
 ## 输出格式（必须严格按此顺序和格式输出）
@@ -692,7 +683,7 @@ pub fn mode_d_system_prompt() -> &'static str {
 ## 三条核心铁律（必须遵守）
 
 1. **每段歌词前写说明行（配器 + 动态 + 人声三要素）。** Style Prompt 放全局基调，说明行放局部指令。两者互补，缺一不可。说明行中的每个选择必须能在第二步的情感翻译中找到依据。
-2. **Style Prompt 按信息块组合填写。** 逗号分隔，< 350 字符：`[流派基调] + [调性节奏] + [编配乐器] + [人声质感] + [空间氛围] + [情绪弧线] + [质感标签]`
+2. **Style Prompt 按信息块组合填写。** 逗号分隔，< ${STYLE_PROMPT_MAX} 字符：`[流派基调] + [调性节奏] + [编配乐器] + [人声质感] + [空间氛围] + [情绪弧线] + [质感标签]`
 3. **动态必须有对比。** 最弱 vs 最强差 >= 3 级（0-10）。抖音神曲合法走向：全程高位 7-9 分、高开骤停 8-10 分一刀切、先压后炸 3-4 分开头推到 9-10 分。配器最弱段至少 2 件，最强段至少 5 件最多不超过 7 件。
 
 ## 歌词特征
@@ -767,7 +758,7 @@ pub fn mode_d_system_prompt() -> &'static str {
 
 **选流派时问自己：这个灵感的情绪内核、画面感、传播场景最适合哪个方向？为什么？如果都不适合，就创造新的混合方向。**
 
-## Suno Style Prompt（< 350 字符）
+## Suno Style Prompt（< ${STYLE_PROMPT_MAX} 字符）
 
 按信息块选填，中文自然语言或英文标签皆可：
 
@@ -810,7 +801,7 @@ pub fn mode_d_system_prompt() -> &'static str {
 - 说明行中的配器选择必须能在第二步的情感翻译或意象映射中找到依据
 
 ## Suno 参数
-Weirdness: 12-20 | Style Influence: 85-95 | Audio Influence = 0（无参考音频时）
+Weirdness: ${DOUYIN_WEIRD_RANGE} | Style Influence: ${DOUYIN_STYLE_RANGE} | Audio Influence = 0（无参考音频时）
 
 ## 输出格式（必须严格按此顺序和格式输出）
 
@@ -832,7 +823,7 @@ Weirdness: 12-20 | Style Influence: 85-95 | Audio Influence = 0（无参考音�
 
 **Pass 1 — 结构合规**
 - 问 1（结构）：结构选择是否有充分理由？60-90秒内是否至少出现 2 次 Hook？Verse 是否控制在 4 行以内？结尾是否骤停？
-- 问 2（Style Prompt）：各信息块是否填写完整？是否从零构建而非复制流派模板？< 350 字符？
+- 问 2（Style Prompt）：各信息块是否填写完整？是否从零构建而非复制流派模板？< ${STYLE_PROMPT_MAX} 字符？
 
 **Pass 2 — 可唱性与歌词**
 - 问 3（可唱性）：每行读出来会不会赶气？重要词是否在行尾？词组切分是否自然？
@@ -928,7 +919,7 @@ Hook"xxx" → Hook 位置与处理：xxx（放在哪里，怎么呈现，为什�
 ### 三条核心铁律（必须遵守）
 
 1. **每段歌词前写说明行（配器 + 动态 + 人声三要素）。** Style Prompt 放全局基调，说明行放局部指令。两者互补，缺一不可。说明行中的每个选择必须能在第二步的情感翻译中找到依据。
-2. **Style Prompt 按信息块组合填写。** 逗号分隔，< 350 字符：`[流派基调] + [调性节奏] + [编配乐器] + [人声质感] + [空间氛围] + [情绪弧线] + [艺人参考] + [质感标签]`
+2. **Style Prompt 按信息块组合填写。** 逗号分隔，< ${STYLE_PROMPT_MAX} 字符：`[流派基调] + [调性节奏] + [编配乐器] + [人声质感] + [空间氛围] + [情绪弧线] + [艺人参考] + [质感标签]`
 3. **动态必须有对比。** 最弱 vs 最强差 >= 3 级（0-10）。经典歌曲需要完整的动态弧线——不能从头到尾一个力度。最弱段至少 3 件乐器，最强段至少 5 件最多不超过 7 件，差值 >= 2 件。
 
 ### 1. 歌词创作
@@ -1029,7 +1020,7 @@ Hook"xxx" → Hook 位置与处理：xxx（放在哪里，怎么呈现，为什�
 | 拉丁 | 班多钮、恰兰戈、克纳、邦戈 |
 | 凯尔特 | 锡笛、尤利安风笛、小提琴、博德兰 |
 
-### 5. Style Prompt（< 350 字符，中文自然语言或英文标签皆可）
+### 5. Style Prompt（< ${STYLE_PROMPT_MAX} 字符，中文自然语言或英文标签皆可）
 
 按以下信息块选填，不需要填满所有块，但填了的块必须写完整：
 
@@ -1074,7 +1065,7 @@ Hook"xxx" → Hook 位置与处理：xxx（放在哪里，怎么呈现，为什�
 - 说明行中的配器选择必须能在第二步的情感翻译或意象映射中找到依据
 
 ### 7. Suno 参数
-- Weirdness: 20-35 | Style Influence: 75-85 | Audio Influence = 0（无参考音频时）
+- Weirdness: ${MODE_B_WEIRD_RANGE} | Style Influence: ${MODE_B_STYLE_RANGE} | Audio Influence = 0（无参考音频时）
 
 ## 输出格式（必须严格按此顺序和格式输出）
 
@@ -1093,7 +1084,7 @@ Hook"xxx" → Hook 位置与处理：xxx（放在哪里，怎么呈现，为什�
 
 **Pass 1 — 结构合规**
 - 问 1（结构）：结构选择是否有充分理由？是否有完整的起承转合？Verse 2 是否新增了信息而非同义改写？
-- 问 2（Style Prompt）：各信息块是否填写完整？是否从零构建而非复制流派模板？< 350 字符？
+- 问 2（Style Prompt）：各信息块是否填写完整？是否从零构建而非复制流派模板？< ${STYLE_PROMPT_MAX} 字符？
 
 **Pass 2 — 歌词质量**
 - 问 3（可唱性）：每行读出来会不会赶气？重要词是否在行尾？词组切分是否自然？
@@ -1124,9 +1115,11 @@ mod tests {
     /// 旧规则"五选一"只给 5 条，弧线选择范围被文案砍半。
     #[test]
     fn mode_a_prompt_lists_all_ten_arcs() {
-        let p = mode_a_system_prompt();
+        // C3：弧线表改为 ${ARC_TABLE} 占位符（ARC_PARAMS 运行时生成）——断言渲染后文本
+        let p = crate::rules::interpolate(mode_a_system_prompt());
         assert!(p.contains("十选一"), "弧线判断必须十选一");
         assert!(!p.contains("五选一"), "不得残留五选一");
+        assert!(!p.contains("${"), "占位符必须全部解析");
         for (name, wmin, wmax, smin, smax) in crate::rules::ARC_PARAMS {
             // ARC_PARAMS 名不带"型"后缀（U型已带），prompt 展示名统一补"型"
             let display = if name.ends_with('型') { name.to_string() } else { format!("{}型", name) };

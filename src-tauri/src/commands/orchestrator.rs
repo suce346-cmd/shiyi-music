@@ -110,9 +110,9 @@ fn prompt_for_mode(mode: &Mode) -> String {
     match prompts::prompt_override(name) {
         Some(text) => {
             tracing::info!(prompt = %name, source = "override", "prompt 来源：用户覆盖");
-            text
+            crate::rules::interpolate(&text) // C3：override 文本同样过占位符插值（写了占位符也能解析）
         }
-        None => embedded.to_string(),
+        None => crate::rules::interpolate(embedded),
     }
 }
 
@@ -484,14 +484,15 @@ async fn execute_review<R: Runtime>(
 
     let mut system = String::new();
     system.push_str(&format!("【角色】{} {}\n", r.name, r.emoji));
-    system.push_str(&format!("{}\n", r.system_prompt));
+    // C3：角色提示词过数值单源插值（${占位符} → rules 常量派生值）
+    system.push_str(&format!("{}\n", crate::rules::interpolate(r.system_prompt)));
     // 微观②：按需检索注入——按角色绑定表 + 当前方案关键词过滤，只注入命中条目（suno_rules 规则全量）
     system.push_str(&inject_knowledge(&kb, r.knowledge_tables, current_plan));
     // P4：单源校验清单（数字唯一 prose 载体；审改口径与硬校验同源）
     system.push_str(crate::rules::checklist(req.mode.to_str_name()));
     system.push('\n');
     system.push_str("\n输出 JSON（严格符合格式，不输出其他内容）：\n");
-    system.push_str(r.output_schema);
+    system.push_str(&crate::rules::interpolate(r.output_schema));
 
     // 方案截断 + log 折叠（预算纪律；知识库注入同风格）
     let plan_view = truncate_plan(current_plan);
@@ -643,7 +644,8 @@ async fn execute_audit_review<R: Runtime>(
 
     let mut system = String::new();
     system.push_str("【角色】校验员 🔍\n");
-    system.push_str(roles::auditor_review_prompt());
+    // C3：角色提示词过数值单源插值
+    system.push_str(&crate::rules::interpolate(roles::auditor_review_prompt()));
     system.push('\n');
     if let Ok(rendered) = kb.render_table("suno_rules", None, Some(INJECT_MAX_FULL_ROWS)) {
         system.push_str(&rendered);
@@ -712,6 +714,20 @@ async fn execute_audit_review<R: Runtime>(
 // 主持人（阶段 0 统领 / 阶段 1 汇总）
 // ---------------------------------------------------------------------------
 
+/// 阶段 0 主持人 system 组装单源：模式指令（含 override）+ 地基 primer + 校验清单（D3 同口径）。
+fn host_initial_system(mode: &Mode) -> String {
+    let mut system = prompt_for_mode(mode);
+    // P4：阶段 0 地基 primer（模式专属静态文本；缺失回退无 primer 旧行为；主持人仍零 CSV）
+    if let Some(primer) = crate::rules::host_primer(mode.to_str_name()) {
+        system.push_str("\n\n");
+        system.push_str(&crate::rules::interpolate(primer));
+    }
+    // C3/D3：阶段 0 纳入单源——主持人与审改员/校验员同一清单（数字口径同源，加载一致）
+    system.push_str("\n\n");
+    system.push_str(crate::rules::checklist(mode.to_str_name()));
+    system
+}
+
 /// 阶段 0：主持人用该模式的完整指令产出方案初稿（流式）
 async fn run_host_initial<R: Runtime>(
     app: &AppHandle<R>,
@@ -725,12 +741,7 @@ async fn run_host_initial<R: Runtime>(
         let _ = app.emit("pipeline", PipelineEnvelope::new(run_id.to_string(), event));
     };
     let _ = emit(PipelineEvent::HostStart { stage: HostStage::Initial });
-    let mut system = prompt_for_mode(&req.mode);
-    // P4：阶段 0 地基 primer（模式专属静态文本；缺失回退无 primer 旧行为；主持人仍零 CSV）
-    if let Some(primer) = crate::rules::host_primer(req.mode.to_str_name()) {
-        system.push_str("\n\n");
-        system.push_str(primer);
-    }
+    let system = host_initial_system(&req.mode);
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Host);
     let mut user = format!("用户输入：\n{}\n\n请按上述方法论直接输出完整方案。", req.user_input);
     // Mode C：原歌词在 extra，指令期望"原歌词 + 新主题"
@@ -854,7 +865,8 @@ async fn run_host_summarize<R: Runtime>(
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Host);
     let _ = emit(PipelineEvent::HostStart { stage: HostStage::Summarize });
     let messages = vec![
-        json!({"role":"system","content":host.system_prompt}),
+        // C3：角色提示词过数值单源插值（主持人人设无占位符时原样返回）
+        json!({"role":"system","content":crate::rules::interpolate(host.system_prompt)}),
         json!({"role":"user","content":user}),
     ];
     let resp = llm::call_llm_silent(
@@ -904,9 +916,9 @@ fn auditor_format_system(req: &PipelineRequest) -> Result<String, AppError> {
     let kb = load_knowledge()?;
     // Mode C 切换专用格式规范（通用规范诱导新增歌词段，与逐行对齐约束冲突）
     let mut system = if req.mode == Mode::ModeC {
-        roles::auditor_format_prompt_mode_c().to_string()
+        crate::rules::interpolate(roles::auditor_format_prompt_mode_c())
     } else {
-        auditor.system_prompt.to_string()
+        crate::rules::interpolate(auditor.system_prompt)
     };
     if let Ok(rules) = kb.render_table("suno_rules", None, Some(INJECT_MAX_FULL_ROWS)) {
         system.push_str(&rules);
@@ -2644,5 +2656,47 @@ mod tests {
         )
         .await;
         assert!(matches!(outcome, GuardOutcome::JoinPanicked(_)), "panic 应被隔离为 JoinPanicked");
+    }
+
+    /// C3/D3：阶段 0 主持人必须与审改员/校验员同清单注入（加载一致——数字口径同源）
+    #[test]
+    fn host_initial_system_includes_checklist() {
+        for m in [Mode::ModeA, Mode::ModeB, Mode::ModeC, Mode::ModeD] {
+            let s = host_initial_system(&m);
+            assert!(s.contains("【校验清单"), "{} stage-0 缺校验清单注入", m.to_str_name());
+        }
+        // mode_d 清单含抖音参数区间（渲染值来自常量，非手写）
+        let d = host_initial_system(&Mode::ModeD);
+        assert!(
+            d.contains(&format!("{}-{}", crate::rules::DOUYIN_WEIRD_MIN, crate::rules::DOUYIN_WEIRD_MAX)),
+            "stage-0 清单缺抖音参数区间"
+        );
+    }
+
+    /// C3 快照：四模式 prompt 渲染输出须与改前快照逐字节一致（占位符恰好还原当日数字）。
+    /// 常量有意变更时：跑 `cargo test --lib dump_mode_prompts` 重新生成快照并在提交说明中声明。
+    #[test]
+    fn mode_prompts_byte_identical_to_snapshot() {
+        for m in [Mode::ModeA, Mode::ModeB, Mode::ModeC, Mode::ModeD] {
+            let name = m.to_str_name();
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/prompts")
+                .join(format!("{}.txt", name));
+            let expected = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("快照缺失 {}（先跑 dump_mode_prompts）: {}", name, e));
+            assert_eq!(prompt_for_mode(&m), expected, "{} prompt 与快照不一致", name);
+        }
+    }
+
+    /// C3 快照再生成工具（不进常规断言流；常量变更后手动运行更新快照）
+    #[test]
+    #[ignore]
+    fn dump_mode_prompts() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/prompts");
+        std::fs::create_dir_all(&dir).unwrap();
+        for m in [Mode::ModeA, Mode::ModeB, Mode::ModeC, Mode::ModeD] {
+            let name = m.to_str_name();
+            std::fs::write(dir.join(format!("{}.txt", name)), prompt_for_mode(&m)).unwrap();
+        }
     }
 }

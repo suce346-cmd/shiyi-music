@@ -142,9 +142,133 @@ const PRIMER_C: &str = "【阶段0地基·C】对齐铁律：逐行等字数（�
 // D：前3秒画面 + 道具刻度 + 骤停提醒 + 字数提醒。
 const PRIMER_D: &str = "【阶段0地基·D】前3秒：开场3秒内建钩子或强画面，直接进内容不慢铺垫。道具刻度：核心情感绑有世俗重量的具体物（物作刻度），金句短、魔性、可独立传播，Hook≥2次。约束：Verse≤4行，每行≤10字，说明行≤80字符，BPM≥90。收尾：结尾骤停一刀切（不渐弱），动态标签用对，骤停后无乐器残留。";
 
+/// C3/D3：prompt 数值单源插值——`${NAME}` 占位符替换为常量派生值。
+/// prompts.rs/roles.rs 的静态文本不得手写注册表辖域数字（守护测试锁定）；
+/// 无占位符文本原样返回（幂等——用户 override 文件可不写占位符）。
+pub fn interpolate(text: &str) -> String {
+    let mut out = text.to_string();
+    for (key, value) in placeholder_pairs() {
+        out = out.replace(key, &value);
+    }
+    out
+}
+
+/// 占位符→值映射表（单源：全部由 rules 常量派生，无手写数字）。
+fn placeholder_pairs() -> Vec<(&'static str, String)> {
+    vec![
+        ("${STYLE_PROMPT_MAX}", STYLE_PROMPT_MAX_CHARS.to_string()),
+        ("${STYLE_PROMPT_MIN}", STYLE_PROMPT_MIN_CHARS.to_string()),
+        ("${DOUYIN_WEIRD_RANGE}", format!("{}-{}", DOUYIN_WEIRD_MIN, DOUYIN_WEIRD_MAX)),
+        ("${DOUYIN_STYLE_RANGE}", format!("{}-{}", DOUYIN_STYLE_MIN, DOUYIN_STYLE_MAX)),
+        ("${MODE_B_WEIRD_RANGE}", format!("{}-{}", MODE_B_WEIRD_MIN, MODE_B_WEIRD_MAX)),
+        ("${MODE_B_STYLE_RANGE}", format!("{}-{}", MODE_B_STYLE_MIN, MODE_B_STYLE_MAX)),
+        ("${DOUYIN_DESC_MAX}", DOUYIN_DESC_LINE_MAX_CHARS.to_string()),
+        ("${DOUYIN_LINE_MAX}", DOUYIN_LINE_MAX_CHARS.to_string()),
+        ("${DOUYIN_BPM_MIN}", DOUYIN_BPM_MIN.to_string()),
+        ("${HOOK_MIN}", HOOK_MIN_COUNT.to_string()),
+        ("${VERSE_MAX_LINES}", VERSE_MAX_LINES.to_string()),
+        ("${LYRIC_FILL_TAIL}", LYRIC_FILL_TAIL_ALLOW.to_string()),
+        ("${MIN_ENERGY_GAP}", MIN_ENERGY_GAP.to_string()),
+        ("${MIN_INSTRUMENT_GAP}", MIN_INSTRUMENT_GAP.to_string()),
+        ("${MIN_INSTRUMENT_WEAK}", MIN_INSTRUMENT_WEAK.to_string()),
+        ("${MIN_INSTRUMENT_STRONG}", MIN_INSTRUMENT_STRONG.to_string()),
+        ("${INSTRUMENT_MAX}", INSTRUMENT_MAX.to_string()),
+        ("${INSTRUMENT_RANGE}", format!("{}-{}", MIN_INSTRUMENT_WEAK, INSTRUMENT_MAX)),
+        ("${ARC_TABLE}", arc_table_lines()),
+    ]
+}
+
+/// 弧线参数表（从 ARC_PARAMS 运行时生成，供模式 prompt 的弧线十选一表插值）。
+fn arc_table_lines() -> String {
+    ARC_PARAMS
+        .iter()
+        .map(|(name, wmin, wmax, smin, smax)| {
+            let disp = if name.ends_with("型") { name.to_string() } else { format!("{}型", name) };
+            format!("- {}：Weirdness {}-{} | Style Influence {}-{}", disp, wmin, wmax, smin, smax)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interpolate_resolves_param_ranges() {
+        let t = "抖音 ${DOUYIN_WEIRD_RANGE}/${DOUYIN_STYLE_RANGE}；B ${MODE_B_WEIRD_RANGE}/${MODE_B_STYLE_RANGE}；上限 ${STYLE_PROMPT_MAX}；说明行 ${DOUYIN_DESC_MAX}";
+        let r = interpolate(t);
+        assert!(r.contains(&format!("{}-{}", DOUYIN_WEIRD_MIN, DOUYIN_WEIRD_MAX)), "抖音区间: {}", r);
+        assert!(r.contains(&format!("{}-{}", DOUYIN_STYLE_MIN, DOUYIN_STYLE_MAX)), "抖音 Style: {}", r);
+        assert!(r.contains(&format!("{}-{}", MODE_B_WEIRD_MIN, MODE_B_WEIRD_MAX)), "B 区间: {}", r);
+        assert!(r.contains(&format!("{}-{}", MODE_B_STYLE_MIN, MODE_B_STYLE_MAX)), "B Style: {}", r);
+        assert!(r.contains(&STYLE_PROMPT_MAX_CHARS.to_string()), "350: {}", r);
+        assert!(r.contains(&DOUYIN_DESC_LINE_MAX_CHARS.to_string()), "80: {}", r);
+        assert!(!r.contains("${"), "占位符必须全部解析: {}", r);
+    }
+
+    #[test]
+    fn interpolate_arc_table_generated_from_arc_params() {
+        let r = interpolate("${ARC_TABLE}");
+        assert_eq!(r.lines().count(), ARC_PARAMS.len(), "弧线表行数=弧线数");
+        for (name, wmin, wmax, smin, smax) in ARC_PARAMS {
+            let disp = if name.ends_with("型") { name.to_string() } else { format!("{}型", name) };
+            let frag = format!("- {}：Weirdness {}-{} | Style Influence {}-{}", disp, wmin, wmax, smin, smax);
+            assert!(r.contains(&frag), "弧线表缺 {}", frag);
+        }
+    }
+
+    #[test]
+    fn interpolate_plain_text_unchanged() {
+        assert_eq!(interpolate("无占位符文本，Weirdness 12-20 保持原样"), "无占位符文本，Weirdness 12-20 保持原样");
+    }
+
+    /// C3 守护：prompts.rs/roles.rs 非注释非测试代码不得手写注册表辖域数字——
+    /// 数字只从 rules.rs 常量经 interpolate 流入提示词（防"常量改了文案没改"复发）。
+    #[test]
+    fn no_handwritten_rule_numbers_in_prompt_sources() {
+        let banned = [
+            // 弧线区间片段（10 弧）+ 模式参数区间（4）
+            "22-28", "10-15", "25-35", "70-80", "15-25", "80-90", "28-35", "75-82", "20-28", "78-88",
+            "20-30", "78-83", "85-90", "70-82", "78-85", "12-20", "85-95", "20-35", "75-85",
+            // 其他注册表辖域数字
+            "350 字符", "≤350", "80 字符", "≤80", "BPM≥90",
+        ];
+        let mut violations: Vec<String> = Vec::new();
+        for file in ["src/commands/prompts.rs", "src/commands/roles.rs"] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(file);
+            let src = std::fs::read_to_string(&path).unwrap();
+            let mut depth_in_tests: i32 = -1; // -1 = 不在测试区
+            for (i, raw) in src.lines().enumerate() {
+                let trimmed = raw.trim_start();
+                if trimmed.starts_with("//") {
+                    continue; // 注释白名单
+                }
+                if depth_in_tests < 0 && trimmed.contains("mod tests") {
+                    depth_in_tests = (raw.chars().take_while(|c| *c == ' ').count() / 4) as i32;
+                    continue;
+                }
+                if depth_in_tests >= 0 {
+                    let d = (raw.chars().take_while(|c| *c == ' ').count() / 4) as i32;
+                    if d <= depth_in_tests && trimmed.starts_with('}') {
+                        depth_in_tests = -1; // 测试区结束
+                    }
+                    continue; // 测试区白名单
+                }
+                for b in banned {
+                    if raw.contains(b) {
+                        violations.push(format!("{}:{} \"{}\"", file, i + 1, b));
+                    }
+                }
+            }
+        }
+        assert!(
+            violations.is_empty(),
+            "手写规则数字 {} 处——请改用 ${{占位符}} 经 rules::interpolate 注入：\n{}",
+            violations.len(),
+            violations.join("\n")
+        );
+    }
 
     /// D2 守护：注册表每条规则的执行器必须在 validator/orchestrator 源码中存在，
     /// 且每个登记的消费符号在 rules.rs 之外有消费者——删掉执行点即红，
