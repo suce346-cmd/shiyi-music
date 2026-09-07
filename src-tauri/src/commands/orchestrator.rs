@@ -898,22 +898,8 @@ fn mode_c_special_block() -> String {
     )
 }
 
-/// 阶段 2：校验员按标准格式输出最终提示词包（硬校验失败打回重格式化）。
-/// 返回（文本, 是否截断）———截断由调用方注入打回 issue，不在本函数内重试（复用打回循环的次数上限）。
-async fn run_audit_format<R: Runtime>(
-    app: &AppHandle<R>,
-    current_plan: &str,
-    issues: Option<&[String]>,
-    req: &PipelineRequest,
-    budget: &crate::budget::SharedBudget,
-    run_id: &str,
-) -> Result<(String, bool), AppError> {
-    use crate::models::PipelineEnvelope;
-    let gen = req.generation.clone().unwrap_or_default();
-    let emit = |event: PipelineEvent| {
-        let _ = app.emit("pipeline", PipelineEnvelope::new(run_id.to_string(), event));
-    };
-    let _ = emit(PipelineEvent::AuditStart);
+/// 校验员格式输出 system 构建单源（全文重输与定点重写共用——契约/知识注入口径一致）。
+fn auditor_format_system(req: &PipelineRequest) -> Result<String, AppError> {
     let auditor = roles::auditor();
     let kb = load_knowledge()?;
     // Mode C 切换专用格式规范（通用规范诱导新增歌词段，与逐行对齐约束冲突）
@@ -926,13 +912,53 @@ async fn run_audit_format<R: Runtime>(
         system.push_str(&rules);
         system.push('\n');
     }
-    let mut user = format!("请按标准格式输出最终提示词包：\n\n{}", current_plan);
+    // C2/ADR-1：转写契约注入（开关关=不注入，回 v0.5.1 重写语义）
+    if transcription_fidelity_enabled() {
+        system.push_str(roles::TRANSCRIPTION_CONTRACT);
+    }
+    Ok(system)
+}
+
+/// 阶段 2 终稿产出上下文（C2 治味参数对象）：app/正源方案/模式/请求/预算/run_id/保真开关
+/// 在终稿产出全程同行，收拢后各子函数参数 ≤3。
+struct FinalStageCtx<'a, R: Runtime> {
+    app: &'a AppHandle<R>,
+    plan_ref: &'a str,
+    mode: &'a Mode,
+    request: &'a PipelineRequest,
+    budget: &'a crate::budget::SharedBudget,
+    run_id: &'a str,
+    fidelity: bool,
+}
+
+/// 圆桌流水线事件发射单源（run_id 绑定 envelope）。
+fn emit_pipeline_event<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    run_id: &str,
+    event: PipelineEvent,
+) {
+    use crate::models::PipelineEnvelope;
+    let _ = app.emit("pipeline", PipelineEnvelope::new(run_id.to_string(), event));
+}
+
+/// 阶段 2：校验员按标准格式输出最终提示词包（硬校验失败打回重格式化）。
+/// 返回（文本, 是否截断）———截断由调用方注入打回 issue，不在本函数内重试（复用打回循环的次数上限）。
+async fn run_audit_format<R: Runtime>(
+    ctx: &FinalStageCtx<'_, R>,
+    issues: Option<&[String]>,
+) -> Result<(String, bool), AppError> {
+    let system = auditor_format_system(ctx.request)?;
+    let mut user = if ctx.fidelity {
+        format!("以下是已收敛的最终方案，请按【转写契约】转写为最终提示词包（转写不是重写）：\n\n{}", ctx.plan_ref)
+    } else {
+        format!("请按标准格式输出最终提示词包：\n\n{}", ctx.plan_ref)
+    };
     // Mode C：原歌词全链路传递——格式输出逐行字数对齐的依据
-    if let Some(original) = req.original_lyrics_text() {
+    if let Some(original) = ctx.request.original_lyrics_text() {
         user.push_str(&format!("\n\n【原歌词（逐行字数对齐依据，改词必须逐行等字数输出）】\n{}", original));
     }
     // Mode C 专项：auditor 通用规范不含"改词"约束，必须显式声明
-    if req.mode == Mode::ModeC {
+    if ctx.request.mode == Mode::ModeC {
         user.push_str(&mode_c_special_block());
     }
     if let Some(issues) = issues {
@@ -941,6 +967,38 @@ async fn run_audit_format<R: Runtime>(
             issues.iter().map(|i| format!("- {}", i)).collect::<Vec<_>>().join("\n")
         ));
     }
+    call_auditor_format(ctx, system, user).await
+}
+
+/// C2/ADR-1：定点重写（纯保真违规专用）——只重写违规段落，不输出其余内容。
+/// 与全文重输的区别：输出按段落拼接（splice_sections），未点名段落字节不动，避免"修一处漂三处"。
+async fn run_audit_targeted_rewrite<R: Runtime>(
+    ctx: &FinalStageCtx<'_, R>,
+    final_text: &str,
+    issues: &[String],
+) -> Result<(String, bool), AppError> {
+    let system = auditor_format_system(ctx.request)?;
+    let mut user = format!(
+        "【定点重写】终稿的以下歌词行违反转写保真（两侧对照见问题清单）。只输出需要修正的段落：每段以原结构标签行开头，违规行按收敛方案逐字转写修正，其余歌词行逐字保留，不要输出其他段落、不要解释。\n\n【保真校验问题】\n{}\n\n【终稿（被点名的段落在此，供定位）】\n{}\n\n【收敛方案（歌词唯一正源）】\n{}",
+        issues.iter().map(|i| format!("- {}", i)).collect::<Vec<_>>().join("\n"),
+        final_text,
+        ctx.plan_ref
+    );
+    if let Some(original) = ctx.request.original_lyrics_text() {
+        user.push_str(&format!("\n\n【原歌词（Mode C 逐行字数对齐依据）】\n{}", original));
+    }
+    call_auditor_format(ctx, system, user).await
+}
+
+/// 校验员格式输出的 LLM 调用单源（system/user 组装完成后走这里——用量/截断/AuditStart 语义一致）。
+async fn call_auditor_format<R: Runtime>(
+    ctx: &FinalStageCtx<'_, R>,
+    system: String,
+    user: String,
+) -> Result<(String, bool), AppError> {
+    let emit = |event: PipelineEvent| emit_pipeline_event(ctx.app, ctx.run_id, event);
+    let _ = emit(PipelineEvent::AuditStart);
+    let req = ctx.request;
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Auditor);
     // R1：阶段 2 保底解除——全额使用剩余预算，保证终稿至少有一次完整尝试 + 退避
     let resp = llm::call_llm_silent(
@@ -948,14 +1006,279 @@ async fn run_audit_format<R: Runtime>(
         vec![json!({"role":"system","content":system}), json!({"role":"user","content":user})],
         llm::MAX_TOKENS_CAP,
         req.thinking,
-        budget,
-        &gen,
-        &run_id,
+        ctx.budget,
+        &req.generation.clone().unwrap_or_default(),
+        ctx.run_id,
         std::time::Duration::ZERO,
     )
     .await?;
-    emit_usage(app, PipelineRole::Auditor, &resp, run_id);
+    emit_usage(ctx.app, PipelineRole::Auditor, &resp, ctx.run_id);
     Ok((resp.raw, llm::is_truncated(&resp.finish_reason)))
+}
+
+/// C2/D6：转写保真功能开关。默认开；env SHIYI_TRANSCRIPTION_FIDELITY=0 一键回 v0.5.1 行为
+/// （契约不注入、保真不校验、打回全部全文重输）——出问题可不发版关闭。
+fn transcription_fidelity_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("SHIYI_TRANSCRIPTION_FIDELITY").ok().as_deref() != Some("0"))
+}
+
+const TRANSCRIPTION_ISSUE_PREFIX: &str = "TRANSCRIPTION_ISSUE:";
+
+/// C2/ADR-1：提取并剥离终稿中的转写问题标记行（契约第 3 条）。
+/// 标记 = 转写者申报"收敛方案本身有硬伤"，不得进入交付包；描述返回给调用方走回炉/显式降级。
+fn extract_and_strip_transcription_issues(text: &str) -> (String, Vec<String>) {
+    let mut descs = Vec::new();
+    let mut kept: Vec<&str> = Vec::new();
+    for line in text.lines() {
+        match line.trim().strip_prefix(TRANSCRIPTION_ISSUE_PREFIX) {
+            Some(desc) => {
+                let desc = desc.trim();
+                if !desc.is_empty() {
+                    descs.push(desc.to_string());
+                }
+            }
+            None => kept.push(line),
+        }
+    }
+    (kept.join("\n"), descs)
+}
+
+/// 结构标签行判定（'[' 开头且无逗号——说明行含逗号，与 extract_section_tags 同判据）。
+fn is_section_tag_line(l: &str) -> bool {
+    let t = l.trim();
+    t.starts_with('[') && t.ends_with(']') && !t.contains(',')
+}
+
+/// 终稿/重写输出解析出的段落：标签（小写归一）+ 段体（含标签行与换行）+ 段体在源文本中的字节区间。
+struct PlanSegment {
+    tag: String,
+    body: String,
+    start: usize,
+    end: usize,
+}
+
+/// 单遍解析：标签行开启新段（段起点=标签行字节起点，段终点=下一标签行起点或文末）；
+/// 标签前的前导内容（Style Prompt 等）不属任何段，splice 不触碰。
+fn parse_segments(text: &str) -> Vec<PlanSegment> {
+    let mut segs: Vec<PlanSegment> = Vec::new();
+    let mut acc = 0usize;
+    for line in text.split_inclusive('\n') {
+        let start = acc;
+        acc += line.len();
+        if is_section_tag_line(line) {
+            segs.push(PlanSegment {
+                tag: line.trim().to_lowercase(),
+                body: line.to_string(),
+                start,
+                end: acc,
+            });
+        } else if let Some(last) = segs.last_mut() {
+            last.body.push_str(line);
+            last.end = acc;
+        }
+    }
+    segs
+}
+
+/// 同名标签按出现顺序一一配对（每个标签一个消费游标）；
+/// 重写段数多于终稿同名段数时多余段忽略。返回 (base 段索引, 新段体) 列表。
+fn pair_segment_replacements(base: &[PlanSegment], rewrites: &[PlanSegment]) -> Vec<(usize, String)> {
+    let mut cursor: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let mut replacements = Vec::new();
+    for seg in rewrites {
+        let used = cursor.entry(seg.tag.as_str()).or_insert(0);
+        let nth = base
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.tag == seg.tag)
+            .nth(*used);
+        if let Some((i, _)) = nth {
+            replacements.push((i, seg.body.clone()));
+            *used += 1;
+        }
+    }
+    replacements
+}
+
+/// 把配对结果按 base 段字节区间写回：未匹配区间按字节原样保留，未点名段落逐字节不变；
+/// 新段体短于/长于原段都按区间替换（换行结尾对齐补齐）。
+fn apply_segment_replacements(base: &str, base_segs: &[PlanSegment], replacements: &[(usize, String)]) -> String {
+    let mut out = String::with_capacity(base.len() + 64);
+    let mut pos = 0usize;
+    for (idx, new_body) in replacements {
+        let seg = &base_segs[*idx];
+        out.push_str(&base[pos..seg.start]);
+        // 新段体补齐换行对齐：原段以换行结尾而新段体没有时补上
+        let base_body = &base[seg.start..seg.end];
+        let mut body = new_body.clone();
+        if base_body.ends_with('\n') && !body.ends_with('\n') {
+            body.push('\n');
+        }
+        out.push_str(&body);
+        pos = seg.end;
+    }
+    out.push_str(&base[pos..]);
+    out
+}
+
+/// C2/ADR-1：定点重写拼接——把定点重写输出中的段落按结构标签替换进终稿。
+/// 无任何一段成功匹配 → None（调用方回退全文重输通道）。
+fn splice_sections(base: &str, rewrites: &str) -> Option<String> {
+    let base_segs = parse_segments(base);
+    let rewrite_segs = parse_segments(rewrites);
+    if base_segs.is_empty() || rewrite_segs.is_empty() {
+        return None;
+    }
+    let mut replacements = pair_segment_replacements(&base_segs, &rewrite_segs);
+    if replacements.is_empty() {
+        return None;
+    }
+    // 重写段可能乱序（模型不保证按原文档顺序输出）——按 base 位置排序后顺序拼接
+    replacements.sort_by_key(|(i, _)| *i);
+    Some(apply_segment_replacements(base, &base_segs, &replacements))
+}
+
+/// C2/ADR-1：阶段 2 终稿产出（generate 主流程与 resume 续跑共用同一实现——加载必须一致）：
+/// 转写契约输出 → TRANSCRIPTION_ISSUE 处理（剥标记 + 一次定点回炉，自然消耗预算）→
+/// 保真校验 + 硬校验打回循环（≤2；纯保真违规走定点重写拼接，混有硬伤回退全文重输）→
+/// 最终复验（含保真）→ AuditResult。返回（终稿, 最终 issues）——降级由调用方据 issues 判定。
+/// 回炉修订片段：校验员的 TRANSCRIPTION_ISSUE 申报合成一条 other 修订，
+/// 走 run_host_summarize 既有通道交主持人定点整合（"谁发现谁修"责任链）。
+fn auditor_repair_changes(marker_descs: &[String]) -> Vec<(PipelineRole, Vec<ReviewChange>, String)> {
+    vec![(
+        PipelineRole::Auditor,
+        vec![ReviewChange {
+            target: "other".to_string(),
+            content: marker_descs.join("；"),
+            reason: "转写契约发现收敛方案硬伤（TRANSCRIPTION_ISSUE），请整合修正".to_string(),
+        }],
+        "转写契约申报收敛方案硬伤".to_string(),
+    )]
+}
+
+/// TRANSCRIPTION_ISSUE 回炉（一次，不循环）：主持人整合硬伤 → 以修复后方案重转写 → 再剥标记。
+/// 返回（新终稿, 是否截断, 修复后方案——调用方以它为后续保真比对正源）。
+async fn repair_transcription_issues<R: Runtime>(
+    ctx: &FinalStageCtx<'_, R>,
+    marker_descs: &[String],
+) -> Result<(String, bool, String), AppError> {
+    let synthetic = auditor_repair_changes(marker_descs);
+    let (new_plan, _) = run_host_summarize(ctx.app, ctx.plan_ref, &synthetic, ctx.request, ctx.budget, ctx.run_id).await?;
+    let repair_ctx = FinalStageCtx { plan_ref: new_plan.as_str(), ..*ctx };
+    let (text, t) = run_audit_format(&repair_ctx, None).await?;
+    let (stripped, _) = extract_and_strip_transcription_issues(&text);
+    Ok((stripped, t, new_plan))
+}
+
+/// 终稿 issue 组装单源（打回循环两次采集共用）：硬校验 + 保真 + 截断置顶。
+fn collect_final_issues<R: Runtime>(
+    ctx: &FinalStageCtx<'_, R>,
+    final_text: &str,
+    truncated: bool,
+) -> Vec<String> {
+    let mut issues = collect_hard_issues(ctx.mode, final_text, ctx.request.original_lyrics_text());
+    if ctx.fidelity {
+        issues.extend(validator::check_transcription_fidelity(ctx.plan_ref, final_text, ctx.mode.to_str_name()));
+    }
+    // 截断与格式问题同一打回通道——截断 issue 置顶，校验员按"精简后重输"处置
+    if truncated {
+        issues.insert(0, TRUNCATION_ISSUE.to_string());
+    }
+    issues
+}
+
+/// 单次打回动作：纯保真违规 → 定点重写拼接（其余段落字节不动）返回 true；
+/// 混有硬校验问题 / 模型未输出可拼接段落 → 返回 false（调用方回退全文重输）。
+async fn one_fidelity_retry<R: Runtime>(
+    ctx: &FinalStageCtx<'_, R>,
+    final_text: &mut String,
+    truncated: &mut bool,
+    issues: &[String],
+) -> bool {
+    let fid_only = ctx.fidelity && issues.iter().all(|i| i.starts_with("保真校验:"));
+    if !fid_only {
+        return false;
+    }
+    if let Ok((rw, _)) = run_audit_targeted_rewrite(ctx, final_text, issues).await {
+        if let Some(new_text) = splice_sections(final_text, &rw) {
+            *final_text = new_text;
+            *truncated = false;
+            return true;
+        }
+    }
+    false
+}
+
+/// 保真 + 硬校验打回循环（≤2）。循环内 collect 覆盖最后一次重写输出
+/// （历史真 bug：末次输出从未被校验——已修）。
+async fn fidelity_retry_loop<R: Runtime>(
+    ctx: &FinalStageCtx<'_, R>,
+    mut final_text: String,
+    mut truncated: bool,
+) -> Result<(String, Vec<String>), AppError> {
+    let mut issues = collect_final_issues(ctx, &final_text, truncated);
+    for _ in 0..2 {
+        if issues.is_empty() {
+            break;
+        }
+        emit_pipeline_event(ctx.app, ctx.run_id, PipelineEvent::Retry {
+            role: PipelineRole::Auditor,
+            reason: issues.join("；"),
+        });
+        if !one_fidelity_retry(ctx, &mut final_text, &mut truncated, &issues).await {
+            let (text, t) = run_audit_format(ctx, Some(&issues)).await?;
+            final_text = text;
+            truncated = t;
+        }
+        issues = collect_final_issues(ctx, &final_text, truncated);
+    }
+    emit_pipeline_event(ctx.app, ctx.run_id, PipelineEvent::AuditResult {
+        pass: issues.is_empty(),
+        findings: issues.clone(),
+    });
+    Ok((final_text, issues))
+}
+
+async fn produce_final_text<R: Runtime>(
+    app: &AppHandle<R>,
+    current_plan: &str,
+    mode: &Mode,
+    request: &PipelineRequest,
+    budget: &crate::budget::SharedBudget,
+    run_id: &str,
+) -> Result<(String, Vec<String>), AppError> {
+    let ctx = FinalStageCtx {
+        app,
+        plan_ref: current_plan,
+        mode,
+        request,
+        budget,
+        run_id,
+        fidelity: transcription_fidelity_enabled(),
+    };
+
+    // 转写契约第一输出
+    let (mut final_text, mut truncated) = run_audit_format(&ctx, None).await?;
+
+    // TRANSCRIPTION_ISSUE：标记行永远剥离（不进交付包）；开关开时走一次定点回炉；
+    // 回炉后的新方案是保真比对与重试的正源（调用方 checkpoint 仍存修复前方案，续跑语义不变）。
+    let mut repaired_plan: Option<String> = None;
+    {
+        let (stripped, marker_descs) = extract_and_strip_transcription_issues(&final_text);
+        final_text = stripped;
+        if ctx.fidelity && !marker_descs.is_empty() {
+            let (text, t, new_plan) = repair_transcription_issues(&ctx, &marker_descs).await?;
+            final_text = text;
+            truncated = t;
+            repaired_plan = Some(new_plan);
+        }
+    }
+    let ctx = FinalStageCtx {
+        plan_ref: repaired_plan.as_deref().unwrap_or(current_plan),
+        ..ctx
+    };
+    fidelity_retry_loop(&ctx, final_text, truncated).await
 }
 
 /// 单次调用结束后发射用量事件（usage为None时不发射——网关未返回不阻塞流程）
@@ -1347,8 +1670,9 @@ async fn run_pipeline_inner<R: Runtime>(
         }
     }
 
-    // ---- 阶段 2：校验员按标准格式输出最终提示词包（硬校验失败打回重格式化 ≤2 次）----
+    // ---- 阶段 2：校验员转写契约输出 + 保真/硬校验打回（与 resume 共用 produce_final_text 单源实现）----
     // R3：阶段 2 入口同样落检查点（含收敛后的 current_plan），终稿失败可直接续终稿
+    //     （检查点存修复前方案：TRANSCRIPTION_ISSUE 回炉只影响本次终稿产出，续跑语义不变）
     {
         let cp = crate::commands::checkpoint::PipelineCheckpoint {
             // B-3：mode 单源 to_str_name（旧规则用 Debug 字符串变换，两处序列化口径漂移风险）
@@ -1367,38 +1691,7 @@ async fn run_pipeline_inner<R: Runtime>(
             tracing::warn!(error = %e.message, "阶段 2 检查点落盘失败（不阻断）");
         }
     }
-    let (mut final_text, mut truncated) = run_audit_format(&app, &current_plan, None, &request, &budget, &run_id).await?;
-    let mut issues = Vec::new();
-    for _ in 0..2 {
-        issues = collect_hard_issues(mode, &final_text, request.original_lyrics_text());
-        // 截断与格式问题同一打回通道——截断 issue 置顶，校验员按"精简后重输"处置
-        if truncated {
-            issues.insert(0, TRUNCATION_ISSUE.to_string());
-        }
-        if issues.is_empty() {
-            break;
-        }
-        let _ = emit(PipelineEvent::Retry {
-            role: PipelineRole::Auditor,
-            reason: issues.join("；"),
-        });
-        let (text, t) = run_audit_format(&app, &current_plan, Some(&issues), &request, &budget, &run_id).await?;
-        final_text = text;
-        truncated = t;
-    }
-    // 最终校验：最后一次重格式化（如有）的输出必须重新校验——
-    // 此前 issues 停留在上一次 collect，最后一次格式化的结果从未被校验（真 bug）
-    if !issues.is_empty() {
-        issues = collect_hard_issues(mode, &final_text, request.original_lyrics_text());
-        // 末次输出的截断标志同样参与最终裁决
-        if truncated {
-            issues.insert(0, TRUNCATION_ISSUE.to_string());
-        }
-    }
-    let _ = emit(PipelineEvent::AuditResult {
-        pass: issues.is_empty(),
-        findings: issues.clone(),
-    });
+    let (final_text, issues) = produce_final_text(&app, &current_plan, mode, &request, &budget, &run_id).await?;
     if !issues.is_empty() {
         // 降级输出（对齐"永远有产出"原则）：打回耗尽仍返回最后一次方案，
         // 格式问题已通过 AuditResult(pass=false) 事件显式告知前端（不空手报错）
@@ -1491,7 +1784,6 @@ pub async fn pipeline_resume<R: Runtime>(
     run_id: String,
 ) -> Result<String, AppError> {
     use crate::budget::Budget;
-    use crate::models::PipelineEnvelope;
     crate::models::validate_request(&request, None)?;
     let cp = crate::commands::checkpoint::load(&app, &run_id).ok_or_else(|| {
         crate::errors::AppError::new(
@@ -1505,42 +1797,9 @@ pub async fn pipeline_resume<R: Runtime>(
     }
     // 续跑用新预算（15 分钟满额），不继承已耗尽的旧预算——旧预算耗尽正是失败原因
     let budget = std::sync::Arc::new(Budget::with_timeout(PIPELINE_TIMEOUT));
-    let rid = run_id.clone();
-    let emit = |event: PipelineEvent| {
-        let _ = app.emit("pipeline", PipelineEnvelope::new(rid.clone(), event));
-    };
-    // 断点方案直接进阶段 2（校验员格式输出 + 硬校验打回 ≤2 次），与主流程同语义
+    // 断点方案直接进阶段 2（转写契约 + 保真/硬校验打回 ≤2 次），与主流程共用 produce_final_text 单源实现
     let mode = &request.mode;
-    let (mut final_text, mut truncated) =
-        run_audit_format(&app, &cp.current_plan, None, &request, &budget, &run_id).await?;
-    let mut issues = Vec::new();
-    for _ in 0..2 {
-        issues = collect_hard_issues(mode, &final_text, request.original_lyrics_text());
-        if truncated {
-            issues.insert(0, TRUNCATION_ISSUE.to_string());
-        }
-        if issues.is_empty() {
-            break;
-        }
-        let _ = emit(PipelineEvent::Retry {
-            role: PipelineRole::Auditor,
-            reason: issues.join("；"),
-        });
-        let (text, t) =
-            run_audit_format(&app, &cp.current_plan, Some(&issues), &request, &budget, &run_id).await?;
-        final_text = text;
-        truncated = t;
-    }
-    if !issues.is_empty() {
-        issues = collect_hard_issues(mode, &final_text, request.original_lyrics_text());
-        if truncated {
-            issues.insert(0, TRUNCATION_ISSUE.to_string());
-        }
-    }
-    let _ = emit(PipelineEvent::AuditResult {
-        pass: issues.is_empty(),
-        findings: issues.clone(),
-    });
+    let (final_text, _issues) = produce_final_text(&app, &cp.current_plan, mode, &request, &budget, &run_id).await?;
     crate::commands::checkpoint::clear(&app, &run_id);
     Ok(final_text)
 }
@@ -1585,6 +1844,76 @@ pub async fn interject_feedback(run_id: Option<String>, note: String) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- C2/ADR-1：定点重写拼接 + 转写标记剥离（红灯先行——桩返回 None/空时必须失败） ----
+
+    #[test]
+    fn splice_replaces_only_target_section() {
+        let base = "Style Prompt: test, folk, piano\n\
+[Intro]\n\
+[piano, 能量:2]\n\
+(oom~)\n\
+[Verse]\n\
+[piano, 能量:3]\n\
+深夜 灯亮 键盘响\n\
+窗外 雨落 心火燃\n\
+[Chorus]\n\
+[piano, bass, 能量:7]\n\
+雨声 先落下来\n";
+        let rewrites = "[Verse]\n\
+[piano, 能量:3]\n\
+深夜 灯亮 琴声远\n\
+窗外 雨落 心火燃\n";
+        let spliced = splice_sections(base, rewrites).expect("应有段落被替换");
+        // 未点名段落逐字节不变
+        assert!(spliced.contains("[Intro]\n[piano, 能量:2]\n(oom~)\n"), "Intro 被改动: {}", spliced);
+        assert!(spliced.contains("[Chorus]\n[piano, bass, 能量:7]\n雨声 先落下来\n"), "Chorus 被改动: {}", spliced);
+        // 违规段被替换
+        assert!(spliced.contains("琴声远"), "Verse 未替换: {}", spliced);
+        assert!(!spliced.contains("键盘响"), "旧词残留: {}", spliced);
+    }
+
+    #[test]
+    fn splice_repeated_tags_paired_positionally() {
+        let base = "[Hook]\n干就 完了 干就 完了\n[Verse]\n白天 挨骂 晚上 加班\n[Hook]\n干就 完了 干就 完了\n";
+        let rewrites = "[Hook]\n冲就 对了 冲就 对了\n[Hook]\n拼就 赢了 拼就 赢了\n";
+        let spliced = splice_sections(base, rewrites).expect("两段 Hook 均应被替换");
+        assert!(spliced.contains("[Hook]\n冲就 对了 冲就 对了\n[Verse]"), "第一个 Hook 按位替换: {}", spliced);
+        assert!(spliced.ends_with("[Hook]\n拼就 赢了 拼就 赢了\n"), "第二个 Hook 按位替换: {}", spliced);
+        assert!(spliced.contains("白天 挨骂 晚上 加班"), "Verse 被改动: {}", spliced);
+    }
+
+    #[test]
+    fn splice_no_matching_tag_returns_none() {
+        let base = "[Verse]\n深夜 灯亮 键盘响\n";
+        let rewrites = "[Refrain]\n完全 陌生的 段落\n";
+        assert!(splice_sections(base, rewrites).is_none(), "无匹配标签应回退全文重输");
+    }
+
+    #[test]
+    fn transcription_marker_extracted_and_stripped() {
+        let text = "TRANSCRIPTION_ISSUE: 第2行字数不符（原 7 字 vs 新 8 字）\nStyle Prompt: test\n[Verse]\n歌词 行";
+        let (stripped, descs) = extract_and_strip_transcription_issues(text);
+        assert_eq!(descs, vec!["第2行字数不符（原 7 字 vs 新 8 字）".to_string()], "标记描述应被提取");
+        assert!(!stripped.contains("TRANSCRIPTION_ISSUE"), "标记不得留在交付包: {}", stripped);
+        assert!(stripped.contains("Style Prompt: test"), "正文不得受损: {}", stripped);
+    }
+
+    #[test]
+    fn transcription_marker_absent_yields_no_desc() {
+        let (stripped, descs) = extract_and_strip_transcription_issues("Style Prompt: test\n[Verse]\n歌词 行");
+        assert!(descs.is_empty());
+        assert_eq!(stripped, "Style Prompt: test\n[Verse]\n歌词 行");
+    }
+
+    #[test]
+    fn transcription_contract_locked() {
+        // 契约三要素锁定（防退化成无约束格式化）
+        let c = roles::TRANSCRIPTION_CONTRACT;
+        assert!(c.contains("【转写契约"), "缺契约头");
+        assert!(c.contains("TRANSCRIPTION_ISSUE"), "缺标记申报通道");
+        assert!(c.contains("三类格式操作"), "缺允许操作清单");
+    }
 
     #[test]
     fn steps_for_mode_b_includes_lyricist() {

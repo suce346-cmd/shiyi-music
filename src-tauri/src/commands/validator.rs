@@ -350,6 +350,85 @@ fn is_bare_package_line(l: &str) -> bool {
     ["voice", "vocal", "人声", "room", "空间", "hall", "能量", "energy", "混响", "reverb", "氛围", "atmosphere", "guitar", "piano", "cello", "drums", "bass", "synth"].iter().any(|k| ll.contains(k))
 }
 
+/// 歌词行判定的排除前缀表（单源）：抖音逐行字数门与 C2 保真校验共用同一分类。
+/// '（' 与「注：」「结构归类」开头的方案元信息行同样不算歌词（两侧对称排除，保真比对不受干扰）。
+const LYRIC_LINE_EXCLUDED_PREFIXES: &[&str] = &[
+    "[", "#", "-", "*", "（", "注：", "结构归类", "Style", "风格", "参数", "Weirdness",
+];
+
+/// 歌词行判定（单源）：排除空行/结构标签/说明行/元信息/Style Prompt/参数行/裸包装行。
+/// 无逗号超长行仍视为歌词行（由字数门报错，Q2收窄判定口径）。
+fn is_lyric_line(l: &str) -> bool {
+    !l.is_empty()
+        && !LYRIC_LINE_EXCLUDED_PREFIXES.iter().any(|p| l.starts_with(p))
+        && !is_bare_package_line(l)
+}
+
+/// 保真比对行集：歌词行 + 1-based 行号 + 去全部空白（与 count_lyric_chars 断句口径一致）。
+fn normalized_lyric_lines(text: &str) -> Vec<(usize, String)> {
+    text.lines()
+        .map(|l| l.trim())
+        .enumerate()
+        .filter(|(_, l)| is_lyric_line(l))
+        .map(|(i, l)| (i + 1, l.chars().filter(|c| !c.is_whitespace()).collect()))
+        .collect()
+}
+
+/// 终稿多出的歌词行（multiset 消费后仍剩余的终稿行）→ 逐条报（含行号与行原文）。
+fn extra_line_issues(final_lines: &[(usize, String)], remaining: &mut Vec<(usize, String)>) -> Vec<String> {
+    let mut issues = Vec::new();
+    for (no, line) in final_lines {
+        match remaining.iter().position(|(_, p)| p == line) {
+            Some(i) => {
+                remaining.remove(i);
+            }
+            None => issues.push(format!(
+                "保真校验: 终稿第{}行歌词「{}」未见于收敛方案（转写不得改写歌词正文）",
+                no, line
+            )),
+        }
+    }
+    issues
+}
+
+/// 终稿缺失的歌词行（multiset 消费后仍剩余的方案行）→ 逐条报（含行号与行原文）。
+fn missing_line_issues(remaining: &[(usize, String)]) -> Vec<String> {
+    remaining
+        .iter()
+        .map(|(no, line)| {
+            format!(
+                "保真校验: 收敛方案第{}行歌词「{}」在终稿中缺失（转写不得删改歌词正文）",
+                no, line
+            )
+        })
+        .collect()
+}
+
+/// 歌词行 multiset diff：终稿多出/缺失各报一条，详列上限 6 条（其余计数汇总）。
+fn lyric_multiset_issues(plan_lines: &[(usize, String)], final_lines: &[(usize, String)]) -> Vec<String> {
+    let mut remaining = plan_lines.to_vec();
+    let mut issues = extra_line_issues(final_lines, &mut remaining);
+    issues.extend(missing_line_issues(&remaining));
+    // 打回信息可执行化：只详列前 6 处，其余计数汇总（与 lyric_fill 的 mismatches 汇总同思路）
+    if issues.len() > 6 {
+        let total = issues.len();
+        issues.truncate(6);
+        issues.push(format!("保真校验: 另有 {} 处歌词行差异未逐一列出", total - 6));
+    }
+    issues
+}
+
+/// C2/ADR-1：转写保真校验——比对收敛方案与终稿的歌词正文（multiset diff）。
+/// mode_c 返回空：validate_lyric_fill 已以原歌词为基准逐行硬校验，且尾部 ≤2 行收尾的
+/// 合法差异会使 plan 基比对产生假阳性（ADR-1 附注）。
+/// 说明行/标签/参数行不比——转写契约允许转写者补齐/修正这些格式要素。
+pub fn check_transcription_fidelity(converged_plan: &str, final_text: &str, mode: &str) -> Vec<String> {
+    if mode == "mode_c" {
+        return Vec::new();
+    }
+    lyric_multiset_issues(&normalized_lyric_lines(converged_plan), &normalized_lyric_lines(final_text))
+}
+
 /// Mode C：校验填词（字数对齐）
 pub fn validate_lyric_fill(original: &str, new: &str) -> ValidationResult {
     let mut issues = Vec::new();
@@ -502,22 +581,8 @@ pub fn validate_douyin(text: &str) -> ValidationResult {
         issues.push(msg);
     }
 
-    // 4. 每行歌词 ≤ 单源字数（排除结构标签/说明行/Style Prompt/参数行）
-    let lyric_lines: Vec<&str> = text
-        .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty())
-        .filter(|l| !l.starts_with('['))
-        .filter(|l| !l.starts_with('#'))
-        .filter(|l| !l.starts_with('-'))
-        .filter(|l| !l.starts_with('*'))
-        .filter(|l| !l.starts_with("Style"))
-        .filter(|l| !l.starts_with("风格"))
-        .filter(|l| !l.starts_with("参数"))
-        .filter(|l| !l.starts_with("Weirdness"))
-        // 裸 Style Prompt/裸说明行识别（Q2收窄判定；无逗号超长行仍视为歌词行，由下方字数门报错）
-        .filter(|l| !is_bare_package_line(l))
-        .collect();
+    // 4. 每行歌词 ≤ 单源字数（排除结构标签/说明行/Style Prompt/参数行——分类器单源 is_lyric_line）
+    let lyric_lines: Vec<&str> = text.lines().map(|l| l.trim()).filter(|l| is_lyric_line(l)).collect();
     let mut overlong = 0usize;
     for line in lyric_lines {
         // 去掉半角标点与空白（断句空格不计入字数，历史修复）
@@ -707,6 +772,86 @@ mod tests {
 参数: Weirdness=50 | Style Influence=50 | Audio Influence=0";
         let r = validate_douyin(text);
         assert!(!r.passed, "仅有字样无叙事结构应被拒（issues: {:?}）", r.issues);
+    }
+
+    // ---- C2/ADR-1：转写保真校验（红灯先行——桩返回空时篡改/增删用例必须失败） ----
+
+    /// 收敛方案 fixture：A 模式完整方案（歌词行 5 行：oom + 4 正文行）
+    fn fidelity_plan() -> String {
+        "Style Prompt: 深夜室内民谣, F#小调, felt piano, nylon guitar, 男声低语, 小房间混响, 从压抑到微亮\n\
+[Intro]\n\
+[felt piano, soft pad, 能量:2]\n\
+(oom~)\n\
+[Verse]\n\
+[felt piano, nylon guitar, 能量:3]\n\
+深夜 灯亮 键盘响\n\
+窗外 雨落 心火燃\n\
+[Chorus]\n\
+[felt piano, nylon guitar, upright bass, 能量:7]\n\
+雨声 先落下来\n\
+心火 不肯灭\n\
+参数: Weirdness=25 | Style Influence=80 | Audio Influence=0"
+            .to_string()
+    }
+
+    /// 纯格式化转写（契约允许）：标签改名 + 说明行改写 + 断句空格变化 → 必须通过
+    #[test]
+    fn fidelity_pure_reformat_passes() {
+        let final_text = "Style Prompt: 深夜室内民谣, F#小调, felt piano, nylon guitar, 男声低语, 小房间混响, 从压抑到微亮\n\
+[Instrumental Intro]\n\
+[felt piano only, 能量:2]\n\
+(oom~)\n\
+[Verse]\n\
+[felt piano and nylon guitar, 能量:3]\n\
+深夜  灯亮 键盘响 \n\
+窗外 雨落 心火燃\n\
+[Chorus]\n\
+[felt piano, nylon guitar, upright bass, 能量:7]\n\
+雨声 先落下来\n\
+心火 不肯灭\n\
+参数: Weirdness=25 | Style Influence=80 | Audio Influence=0";
+        let issues = check_transcription_fidelity(&fidelity_plan(), final_text, "mode_a");
+        assert!(issues.is_empty(), "纯格式化不应报保真问题: {:?}", issues);
+    }
+
+    /// 歌词改写（转写篡改）：第 7 行"键盘响"→"琴声远" → 报且含行号与两侧原文
+    #[test]
+    fn fidelity_rewritten_line_fails_with_line_no_and_both_sides() {
+        let final_text = fidelity_plan().replace("深夜 灯亮 键盘响", "深夜 灯亮 琴声远");
+        let issues = check_transcription_fidelity(&fidelity_plan(), &final_text, "mode_a");
+        assert!(!issues.is_empty(), "改写歌词行应报保真问题");
+        assert!(issues.iter().any(|i| i.contains("第7行")), "缺终稿行号: {:?}", issues);
+        assert!(issues.iter().any(|i| i.contains("琴声远")), "缺终稿原文: {:?}", issues);
+        assert!(issues.iter().any(|i| i.contains("键盘响")), "缺收敛方案原文: {:?}", issues);
+    }
+
+    /// 加行 + 删行 → 双向都报
+    #[test]
+    fn fidelity_added_and_dropped_lines_fail() {
+        let final_text = fidelity_plan()
+            .replace("窗外 雨落 心火燃\n", "") // 删行
+            .replace("雨声 先落下来", "雨声 先落下来\n临时 凑数 一行词"); // 加行
+        let issues = check_transcription_fidelity(&fidelity_plan(), &final_text, "mode_a");
+        assert!(issues.iter().any(|i| i.contains("未见于收敛方案")), "加行未报: {:?}", issues);
+        assert!(issues.iter().any(|i| i.contains("在终稿中缺失")), "删行未报: {:?}", issues);
+    }
+
+    /// 方案元信息行（结构归类说明）不参与比对——终稿省略不算缺失
+    #[test]
+    fn fidelity_meta_lines_not_flagged() {
+        let plan = fidelity_plan().replace(
+            "参数: Weirdness=25",
+            "结构归类：叙事型弧线，参数沿用弧线区间\n参数: Weirdness=25",
+        );
+        let issues = check_transcription_fidelity(&plan, &fidelity_plan(), "mode_a");
+        assert!(issues.is_empty(), "元信息行不应参与保真比对: {:?}", issues);
+    }
+
+    /// mode_c 交由 validate_lyric_fill 原词基准硬校验——保真层 no-op（不双报）
+    #[test]
+    fn fidelity_mode_c_delegates_to_hard_validation() {
+        let issues = check_transcription_fidelity(&fidelity_plan(), "完全 不同 的 歌词", "mode_c");
+        assert!(issues.is_empty(), "mode_c 保真层应 no-op: {:?}", issues);
     }
 
     #[test]
