@@ -786,6 +786,7 @@ async fn run_host_initial<R: Runtime>(
 fn build_summarize_user_prompt(
     current_plan: &str,
     round_changes: &[(PipelineRole, Vec<ReviewChange>, String)],
+    original_lyrics: Option<&str>,
 ) -> String {
     // 方案截断（汇总输入同样封顶）
     let mut user = format!("【当前方案】\n{}\n\n【本轮各角色修订片段与校验员观点】\n", truncate_plan(current_plan));
@@ -797,6 +798,13 @@ fn build_summarize_user_prompt(
         for c in changes {
             user.push_str(&format!("- target: {} | content: {} | reason: {}\n", c.target, c.content, c.reason));
         }
+    }
+    // L-4：原歌词比对基准（与阶段 2 同措辞）；None（A/B/D 或未填）不追加，行为零变化
+    if let Some(original) = original_lyrics {
+        user.push_str(&format!(
+            "\n\n【原歌词（逐行字数对齐依据，整合修订时改词必须逐行等字数）】\n{}",
+            original
+        ));
     }
     user.push_str("\n请把修订整合进当前方案，输出新版完整方案（只含生产方案：Style Prompt + 歌词（含说明行）+ 参数，不要重复输出分析数据包）。");
     user.push_str("如需下一轮讨论，在方案末尾单独一行【任务分发】后点名各角色下一轮要解决的具体问题；若已无必要则只输出方案，不输出该段。");
@@ -819,7 +827,9 @@ async fn run_host_summarize<R: Runtime>(
         let _ = app.emit("pipeline", PipelineEnvelope::new(run_id.to_string(), event));
     };
     let host = roles::host();
-    let user = build_summarize_user_prompt(current_plan, round_changes);
+    // L-4 新规则：Mode C 原歌词贯穿全链路——阶段 0（初稿）与阶段 2（格式输出）都带原词，
+    // 旧规则唯独汇总阶段不带，主持人整合修订时无比对基准，属盲改。措辞与阶段 2 同口径。
+    let user = build_summarize_user_prompt(current_plan, round_changes, req.original_lyrics_text());
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Host);
     let _ = emit(PipelineEvent::HostStart { stage: HostStage::Summarize });
     let messages = vec![
@@ -1633,9 +1643,26 @@ mod tests {
             vec![], // 异议但未给具体修订
             "整体太模板化，缺乏独特意象".to_string(),
         )];
-        let user = build_summarize_user_prompt("当前方案文本", &rc);
+        let user = build_summarize_user_prompt("当前方案文本", &rc, None);
         assert!(user.contains("（总体意见：整体太模板化，缺乏独特意象）"), "无修订的异议必须进汇总 prompt: {}", user);
         assert!(user.contains("情感分析师"), "got: {}", user);
+        assert!(!user.contains("【原歌词"), "无原歌词不得追加比对基准段");
+    }
+
+    /// L-4：Mode C 汇总 prompt 必须携带原歌词比对基准（旧规则汇总阶段丢原词，主持人盲改）
+    #[test]
+    fn summarize_prompt_carries_original_lyrics_for_mode_c() {
+        let rc = vec![(
+            PipelineRole::Reviser,
+            vec![],
+            "第二行意象偏弱".to_string(),
+        )];
+        let user = build_summarize_user_prompt("当前方案文本", &rc, Some("原歌词第一行\n原歌词第二行"));
+        assert!(user.contains("【原歌词（逐行字数对齐依据"), "汇总 prompt 必须带原歌词段: {}", user);
+        assert!(user.contains("原歌词第二行"), "原词全文必须进汇总 prompt");
+        // 无原词（A/B/D）不追加
+        let plain = build_summarize_user_prompt("当前方案文本", &rc, None);
+        assert!(!plain.contains("【原歌词"));
     }
 
     /// 校验员讨论轮 prompt 同样携带无修订的总体意见 + Mode C 专项保留
