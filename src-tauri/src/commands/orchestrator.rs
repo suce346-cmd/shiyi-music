@@ -860,6 +860,23 @@ async fn run_host_summarize<R: Runtime>(
 // 校验员（阶段 2：最终格式输出端口）
 // ---------------------------------------------------------------------------
 
+/// Mode C 改词专项（阶段 2 auditor 格式输出的 user 侧追加块）。
+/// L-2 单源：行数口径与 validator 同一数字——validator 允许尾部 ≤LYRIC_FILL_TAIL_ALLOW 行收尾
+/// （validator.rs:266），旧规则此处写"总行数完全一致/禁止增删"，与校验员系统 prompt 和
+/// 硬校验的"尾部 ≤2 行"互相打架，产生无意义打回循环。
+fn mode_c_special_block() -> String {
+    let tail = crate::rules::LYRIC_FILL_TAIL_ALLOW;
+    format!(
+        "\n\n【Mode C 改词专项（必须满足，校验会打回）】\n\
+1. 歌词是原歌词的逐行改写：新歌词总行数与原歌词一致（原歌词每行对应新歌词一行，仅允许尾部 ≤{} 行收尾）\n\
+2. 每行字数（不含断句空格）与原歌词对应行完全一致\n\
+3. 禁止中途增删歌词行、禁止自由创作新歌词段落（尾部收尾行不计入增删）；段落结构必须与原歌词一致（原歌词几段新歌词就几段，原歌词无 Hook/Chorus 段则禁止新增，禁止为 Hook 加段）\n\
+4. 全部歌词行总数等于原歌词行数，尾部收尾最多加 {} 行\n\
+5. 说明行必须带方括号（[乐器+行为, 空间, 力度]），禁止裸写说明行",
+        tail, tail
+    )
+}
+
 /// 阶段 2：校验员按标准格式输出最终提示词包（硬校验失败打回重格式化）。
 /// 返回（文本, 是否截断）———截断由调用方注入打回 issue，不在本函数内重试（复用打回循环的次数上限）。
 async fn run_audit_format<R: Runtime>(
@@ -895,14 +912,7 @@ async fn run_audit_format<R: Runtime>(
     }
     // Mode C 专项：auditor 通用规范不含"改词"约束，必须显式声明
     if req.mode == Mode::ModeC {
-        user.push_str(
-            "\n\n【Mode C 改词专项（必须满足，校验会打回）】\n\
-1. 歌词是原歌词的逐行改写：新歌词总行数必须与原歌词完全一致（原歌词每行对应新歌词一行）\n\
-2. 每行字数（不含断句空格）与原歌词对应行完全一致\n\
-3. 禁止增删歌词行、禁止自由创作新歌词段落；段落结构必须与原歌词一致（原歌词几段新歌词就几段，原歌词无 Hook/Chorus 段则禁止新增，禁止为 Hook 加段）\n\
-4. 全部歌词行总数必须等于原歌词行数\n\
-5. 说明行必须带方括号（[乐器+行为, 空间, 力度]），禁止裸写说明行",
-        );
+        user.push_str(&mode_c_special_block());
     }
     if let Some(issues) = issues {
         user.push_str(&format!(
@@ -1663,6 +1673,18 @@ mod tests {
         // 无原词（A/B/D）不追加
         let plain = build_summarize_user_prompt("当前方案文本", &rc, None);
         assert!(!plain.contains("【原歌词"));
+    }
+
+    /// L-2：Mode C 专项块尾部收尾口径与 validator 单源（≤LYRIC_FILL_TAIL_ALLOW 行），
+    /// 旧规则写"总行数完全一致/禁止增删"，与校验员系统 prompt、硬校验的"尾部 ≤2 行"打架。
+    #[test]
+    fn mode_c_special_block_tail_single_source() {
+        let b = mode_c_special_block();
+        let tail = crate::rules::LYRIC_FILL_TAIL_ALLOW;
+        assert!(b.contains(&format!("仅允许尾部 ≤{} 行收尾", tail)), "缺尾部收尾允许: {}", b);
+        assert!(b.contains(&format!("尾部收尾最多加 {} 行", tail)), "缺收尾上限: {}", b);
+        assert!(!b.contains("总行数必须与原歌词完全一致"), "残留与 validator 冲突的严格等行数措辞");
+        assert!(!b.contains("禁止增删歌词行"), "残留与尾部收尾允许矛盾的旧措辞");
     }
 
     /// 校验员讨论轮 prompt 同样携带无修订的总体意见 + Mode C 专项保留
