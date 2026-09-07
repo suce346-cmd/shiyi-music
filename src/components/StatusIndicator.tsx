@@ -9,6 +9,8 @@ interface Props {
   status: LLMStatus;
   errorMessage?: string;
   onRetry?: () => void;
+  /** U-3：重试是否可执行（无可重试上下文时禁用按钮，不再渲染死按钮） */
+  canRetry?: boolean;
   /** R3：从上次继续（检查点续跑；无检查点时后端明确报错） */
   onResume?: () => void;
   /** 生成中显示"停止"按钮 */
@@ -36,7 +38,7 @@ const config: Record<LLMStatus, { icon: typeof IconLoader; color: string; bg: st
   error: { icon: IconAlertTriangle, color: "text-danger", bg: "bg-danger/8" },
 };
 
-export default function StatusIndicator({ status, errorMessage, onRetry, onResume, onCancel, getRunId, locale }: Props) {
+export default function StatusIndicator({ status, errorMessage, onRetry, onResume, onCancel, getRunId, locale, canRetry = true }: Props) {
   /** 插话输入展开态 + 发送中 + 结果提示 */
   const [showInterject, setShowInterject] = useState(false);
   const [note, setNote] = useState("");
@@ -75,7 +77,7 @@ export default function StatusIndicator({ status, errorMessage, onRetry, onResum
         {status === "error" && errorMessage && (
           <span className="text-[11px] opacity-70 truncate flex-1">{errorMessage}</span>
         )}
-        {status === "error" && onRetry && (
+        {status === "error" && onRetry && canRetry && (
           <button onClick={onRetry}
             className="flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-medium
                        bg-danger/10 hover:bg-danger/20 border border-danger/20

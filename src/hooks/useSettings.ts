@@ -125,7 +125,10 @@ export function useSettings() {
     (async () => {
       try {
         // 1. 迁移：localStorage 明文 → 钥匙串（仅未迁移过且存在明文时）
+        // U-2：仅全部写入成功才置迁移标记（旧规则失败也置——明文永远留在 localStorage，
+        // "下次启动再试"永不发生）；失败保留明文等下次启动重试
         if (!localStorage.getItem(MIGRATED_KEY)) {
+          let migrated = true;
           try {
             const raw = localStorage.getItem(STORAGE_KEY);
             if (raw) {
@@ -136,9 +139,12 @@ export function useSettings() {
               }
             }
           } catch {
-            // 迁移失败不阻断启动（用户可重新输入，下次启动再试）
+            // 迁移失败不阻断启动（用户可重新输入，下次启动再试）；明文保留，不置标记
+            migrated = false;
           }
-          try { localStorage.setItem(MIGRATED_KEY, "1"); } catch { /* 忽略 */ }
+          if (migrated) {
+            try { localStorage.setItem(MIGRATED_KEY, "1"); } catch { /* 忽略 */ }
+          }
         }
         // 2. 回填：钥匙串 → 内存（全局 + 各角色）
         const next: AppSettings = { ...settingsRef.current };

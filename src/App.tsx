@@ -509,6 +509,10 @@ export default function App() {
     }
   }, [mode, settings, conversation, lastUserInput, saveToHistory, currentHistoryId, updateHistoryEntry, pipeline, ensureLlmListener]);
 
+  /** U-3：重试可执行判定——mode_c 无 lastFeedback 时重试必然无路可走（原歌词会丢），按钮禁用而非死按 */
+  const canRetry =
+    status === "error" &&
+    (Boolean(lastFeedback) || (mode !== "mode_c" && Boolean(lastUserInput)));
   const handleRetry = useCallback(async () => {
     if (status === "error" && lastFeedback) {
       await handleRefine(lastFeedback, "fast");
@@ -710,7 +714,7 @@ export default function App() {
                 className="w-20 bg-surface-0 border border-border/60 rounded-lg px-2 py-1 text-[12px] text-text-1 focus:outline-none focus:border-brand-500/40 transition-all duration-150" />
             </div>
           </div>
-          <button onClick={handleTestApi} disabled={testingApi || !settings.apiKey}
+          <button onClick={handleTestApi} disabled={testingApi || !settings.apiKey || !secretsReady}
             className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-[12px] font-medium
                        bg-surface-2 hover:bg-surface-3 border border-border/50 text-text-2
                        disabled:opacity-50 transition-all duration-150 active:scale-[0.98]">
@@ -914,7 +918,7 @@ export default function App() {
           <div className="flex-1 flex flex-col overflow-hidden">
             {status !== "idle" && (
               <div className="shrink-0">
-                <StatusIndicator status={status} errorMessage={errorMessage} onRetry={handleRetry} onResume={handleResume} onCancel={handleCancelCurrent} getRunId={pipeline.getRunId} locale={settings.language} />
+                <StatusIndicator status={status} errorMessage={errorMessage} onRetry={handleRetry} canRetry={canRetry} onResume={handleResume} onCancel={handleCancelCurrent} getRunId={pipeline.getRunId} locale={settings.language} />
                 {/* 生成队列面板（等待项列表；完成项点击查看） */}
                 <QueuePanel
                   queue={queue.queue}
@@ -962,7 +966,8 @@ export default function App() {
                     className="text-[11px] text-brand-400 hover:text-brand-300 font-medium shrink-0 ml-2">关闭</button>
                 </div>
               )}
-              <InputPanel key={mode} mode={mode} disabled={status === "loading" || status === "streaming"}
+              {/* U-4：钥匙串回填完成前（secretsReady=false）哨兵还不是真 key，输入面板整体禁用防带哨兵直发 */}
+              <InputPanel key={mode} mode={mode} disabled={status === "loading" || status === "streaming" || !secretsReady}
                 settings={settings} onGenerate={handleGenerate} inputRef={inputRef}  locale={settings.language} />
             </div>
           </div>

@@ -10,7 +10,12 @@ on:
 jobs:
   # B5：测试门禁——测试不过不构建、不产出工件
   test:
-    runs-on: macos-latest
+    # O-6：test 矩阵补 windows（build 已产出 windows 工件，门禁此前只跑 macOS，Windows 回归裸奔）
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
