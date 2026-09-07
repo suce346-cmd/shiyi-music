@@ -383,7 +383,7 @@ export default function App() {
         { role: "user", content: displayInput },
         { role: "assistant", content: raw },
       ];
-      const entry: HistoryEntry = { id: newId(), mode: runMode, input: displayInput, output: raw, conversation: allTurns, usage: { ...pipeline.usage }, timestamp: Date.now() };
+      const entry: HistoryEntry = { id: newId(), mode: runMode, input: displayInput, output: raw, conversation: allTurns, usage: { ...pipeline.usageRef.current }, timestamp: Date.now() };
       setCurrentHistoryId(entry.id);
       const updated = [entry, ...historyRef.current];
       setHistoryEntries(updated); scheduleSave(updated);
@@ -503,9 +503,9 @@ export default function App() {
       { role: "assistant", content: raw },
     ];
     if (currentHistoryId) {
-      updateHistoryEntry(currentHistoryId, raw, allTurns, { ...pipeline.usage });
+      updateHistoryEntry(currentHistoryId, raw, allTurns, { ...pipeline.usageRef.current });
     } else {
-      saveToHistory(conversation[0]?.content || lastUserInput, raw, allTurns, mode, { ...pipeline.usage });
+      saveToHistory(conversation[0]?.content || lastUserInput, raw, allTurns, mode, { ...pipeline.usageRef.current });
     }
   }, [mode, settings, conversation, lastUserInput, saveToHistory, currentHistoryId, updateHistoryEntry, pipeline, ensureLlmListener]);
 
@@ -567,9 +567,9 @@ export default function App() {
         { role: "assistant", content: raw },
       ];
       if (currentHistoryId) {
-        updateHistoryEntry(currentHistoryId, raw, allTurns, { ...pipeline.usage });
+        updateHistoryEntry(currentHistoryId, raw, allTurns, { ...pipeline.usageRef.current });
       } else {
-        saveToHistory(conversation[0]?.content || lastUserInput, raw, allTurns, mode, { ...pipeline.usage });
+        saveToHistory(conversation[0]?.content || lastUserInput, raw, allTurns, mode, { ...pipeline.usageRef.current });
       }
     } catch (e) {
       if (token !== runTokenRef.current) return; // 过期 run 的错误丢弃
@@ -695,6 +695,13 @@ export default function App() {
                   updateSettings({ generation: { ...settings.generation, temperature: v } });
                   setTestResult(null);
                 }}
+                onBlur={e => {
+                  // 失焦归一（同 max_tokens）：显示值收敛进 0~2
+                  const n = Number(e.target.value);
+                  if (e.target.value !== "" && Number.isFinite(n) && (n < 0 || n > 2)) {
+                    updateSettings({ generation: { ...settings.generation, temperature: Math.min(2, Math.max(0, n)) } });
+                  }
+                }}
                 placeholder="默认"
                 className="w-20 bg-surface-0 border border-border/60 rounded-lg px-2 py-1 text-[12px] text-text-1 focus:outline-none focus:border-brand-500/40 transition-all duration-150" />
             </div>
@@ -709,6 +716,13 @@ export default function App() {
                   const v = e.target.value === "" ? undefined : Math.round(Number(e.target.value));
                   updateSettings({ generation: { ...settings.generation, max_tokens: v } });
                   setTestResult(null);
+                }}
+                onBlur={e => {
+                  // 失焦归一（F-1 根治之一）：显示值收敛进 1000~30000，与落盘/请求同值
+                  const n = Math.round(Number(e.target.value));
+                  if (e.target.value !== "" && Number.isFinite(n) && (n < 1000 || n > 30000)) {
+                    updateSettings({ generation: { ...settings.generation, max_tokens: Math.min(30000, Math.max(1000, n)) } });
+                  }
                 }}
                 placeholder="默认"
                 className="w-20 bg-surface-0 border border-border/60 rounded-lg px-2 py-1 text-[12px] text-text-1 focus:outline-none focus:border-brand-500/40 transition-all duration-150" />

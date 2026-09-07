@@ -48,7 +48,14 @@ fn extract_section_tags(text: &str) -> Vec<String> {
 /// 支持 `**Style Prompt**：` / `Style Prompt: ` / `风格:` 三种写法——
 /// 旧 orchestrator 行级提取器认得 "风格" 前缀（语义下沉至此，无行为回退）。
 /// 返回冒号后正文供过短/BPM 校验使用，不再被 "Style Prompt**: " 标签前缀虚增长度。
+///
+/// 标签回退（B 实测根治）：模型偶发丢标签但按格式规范把风格写在第一行
+/// （v0.5.0 实网 B 模式 3 连打回均因此）。无标签时回退取首个"像风格正文"的行——
+/// 跳过结构标签/说明行（`[` 开头）、参数行、标题行；找不到则维持 None。
+/// 回退严格优于现状：最坏情况是长度/信息块检查跑在一行错误文本上产生打回
+/// （可重试），而现状是"未找到 Style Prompt 字段"直接死路。
 pub(crate) fn extract_style_prompt(text: &str) -> Option<String> {
+    let mut label_seen = false;
     for line in text.lines() {
         let t = line.trim().trim_start_matches("**").trim();
         if t.starts_with("Style Prompt") || t.starts_with("风格") {
@@ -57,9 +64,28 @@ pub(crate) fn extract_style_prompt(text: &str) -> Option<String> {
             if !body.is_empty() {
                 return Some(body.to_string());
             }
+            label_seen = true;
         }
     }
-    None
+    // 有标签但正文为空 → 维持"未找到"语义（不回退，避免误抓歌词行）
+    if label_seen {
+        return None;
+    }
+    // 标签回退（B 实测根治）：格式规范要求风格写在第一行，模型偶发丢标签但
+    // 风格正文仍占第一行位置——仅当首个非空行本身像风格正文时回退提取；
+    // 首行是结构标签/说明行/参数行/标题则视为无风格行（None → 走"未找到"打回）
+    let first = text
+        .lines()
+        .map(|l| l.trim().trim_start_matches("**").trim())
+        .find(|l| !l.is_empty())?;
+    if first.starts_with('[')
+        || first.starts_with("参数")
+        || first.starts_with("Parameter")
+        || first.starts_with('#')
+    {
+        return None;
+    }
+    Some(first.to_string())
 }
 
 /// 从说明行解析乐器数量（从尾部连续去掉空间/人声/力度尾项）
@@ -454,6 +480,29 @@ mod tests {
         let r = validate_production("mode_a", &long_prompt);
         assert!(!r.passed);
         assert!(r.issues.iter().any(|i| i.contains("350")));
+    }
+
+    /// 标签回退（B 实测根治）：模型丢标签但首行写风格正文时仍能提取——
+    /// v0.5.0 实网 B 模式 3 连打回均因"未找到 Style Prompt 字段"
+    #[test]
+    fn style_prompt_fallback_first_line_without_label() {
+        let text = "潮湿室内民谣, 男中音气声低语, 钢琴与尼龙弦吉他\n[Intro]\n[felt piano, room tone, 能量:2]\n雨声 先落下来";
+        assert_eq!(
+            extract_style_prompt(text).as_deref(),
+            Some("潮湿室内民谣, 男中音气声低语, 钢琴与尼龙弦吉他"),
+        );
+        // 带标签的文本标签优先（回退不劫持正常路径）
+        let labeled = "Style Prompt: 深夜室内民谣\n[Intro]\n[felt piano]";
+        assert_eq!(extract_style_prompt(labeled).as_deref(), Some("深夜室内民谣"));
+    }
+
+    /// 回退边界：首行是结构标签/说明行/参数行时不误提取（维持 None → 走"未找到"打回）
+    #[test]
+    fn style_prompt_fallback_skips_structural_lines() {
+        let section_first = "[Intro]\n[felt piano, room tone, 能量:2]\n雨声 先落下来";
+        assert_eq!(extract_style_prompt(section_first), None);
+        let params_first = "参数: Weirdness=25 | Style Influence=80 | Audio Influence=0\n[Intro]";
+        assert_eq!(extract_style_prompt(params_first), None);
     }
 
     #[test]

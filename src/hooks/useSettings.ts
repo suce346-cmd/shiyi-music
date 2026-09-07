@@ -186,8 +186,11 @@ export function useSettings() {
   return { settings, updateSettings, showSettings, setShowSettings, secretsReady };
 }
 
-/** 持久化非敏感字段——apiKey/api_key 写哨兵（真实值只在钥匙串） */
-function persistNonSecrets(s: AppSettings) {
+/** 持久化非敏感字段——apiKey/api_key 写哨兵（真实值只在钥匙串）。
+ * 唯一写出口统一过 sanitizeStored：读写同一清洗函数，运行期输入的越界值
+ * （如 max_tokens 32000）不再原样落盘，后端不会在生成时整请求拒绝（F-1 根治）。
+ * export 供单测（唯一写出口的清洗语义必须钉死）。 */
+export function persistNonSecrets(s: AppSettings) {
   try {
     const scrubbed: AppSettings = {
       ...s,
@@ -199,7 +202,7 @@ function persistNonSecrets(s: AppSettings) {
         ]),
       ),
     };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(scrubbed));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitizeStored(scrubbed)));
   } catch { /* 配额等失败静默（与旧行为一致） */ }
 }
 

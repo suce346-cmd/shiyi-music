@@ -11,6 +11,7 @@ import type {
   ExpertCard,
 } from "../types";
 import { errText } from "../types";
+import { sanitizeStored } from "./useSettings";
 
 /** 各模式的流水线角色阵容（与后端 orchestrator.rs seats_for_mode 对齐：动态角色 + 主持 + 校验落座） */
 export const MODE_EXPERTS: Record<Mode, Omit<ExpertCard, "status" | "note">[]> = {
@@ -195,6 +196,9 @@ export function usePipeline() {
   const speechCbRef = useRef<((s: ChatTurn) => void) | null>(null);
   /** 当前模式跟踪（meta 到达后按此模式重建围坐） */
   const modeRef = useRef<Mode>("mode_d");
+  /** usage 实时引用（step_usage 同步更新）：历史保存读此 ref，
+   * 不读 state 闭包——闭包在生成点击时定格，读到的一永远是 0/0（历史 usage 归零根因） */
+  const usageRef = useRef<{ prompt_tokens: number; completion_tokens: number }>({ ...ZERO_USAGE });
   /** 后端元数据（启动获取一次；失败回退本地缓存/内置表，不阻断） */
   const [meta, setMeta] = useState<PipelineMeta | null>(() => {
     try {
@@ -364,16 +368,18 @@ export function usePipeline() {
           // 用户取消——回到空闲，不标红为错误
           setState((prev) => ({ ...prev, error: null, phase: "done", active: false, currentStage: null }));
           break;
-        case "step_usage":
-          // 累计本轮 token 用量（过期 run 的事件已在顶部丢弃）
-          setState((prev) => ({
-            ...prev,
-            usage: {
-              prompt_tokens: prev.usage.prompt_tokens + e.prompt_tokens,
-              completion_tokens: prev.usage.completion_tokens + e.completion_tokens,
-            },
-          }));
+        case "step_usage": {
+          // 累计本轮 token 用量（过期 run 的事件已在顶部丢弃）。
+          // usageRef 是累计真源（历史保存同源读取它），state 只做展示镜像——
+          // 读 state 闭包会拿到点击生成时定格的旧值（历史 usage 归零的根因）
+          const next = {
+            prompt_tokens: usageRef.current.prompt_tokens + e.prompt_tokens,
+            completion_tokens: usageRef.current.completion_tokens + e.completion_tokens,
+          };
+          usageRef.current = next;
+          setState((prev) => ({ ...prev, usage: next }));
           break;
+        }
         case "failed":
           // active:false + 清 currentStage：防后端只发 Failed 不返回 Err 时 UI 永久卡"进行中"
           setState((prev) => ({ ...prev, error: e.error, phase: "done", active: false, currentStage: null }));
@@ -411,6 +417,7 @@ export function usePipeline() {
         doneStages: [],
         usage: { ...ZERO_USAGE },
       });
+      usageRef.current = { ...ZERO_USAGE };
 
       try {
         await startListening(token, runId);
@@ -441,8 +448,9 @@ export function usePipeline() {
         thinking: opts.settings.thinking ?? false,
         role_overrides: buildRoleOverrides(opts.settings),
         refine_targets: refineTargets,
-        // 生成参数直传（缺省后端用默认；旧后端忽略未知字段）
-        generation: opts.settings.generation,
+        // 生成参数（缺省后端用默认）——F-1 根治：跨入后端前过同一清洗函数，
+        // 运行期输入的越界值（如 max_tokens 32000）在此收敛，后端 validate 不再整请求拒绝
+        generation: sanitizeStored(opts.settings).generation,
         // 任务归属 id（后端 envelope/取消/插话定向）
         run_id: runId,
       };
@@ -514,6 +522,7 @@ export function usePipeline() {
         doneStages: [],
         usage: { ...ZERO_USAGE },
       });
+      usageRef.current = { ...ZERO_USAGE };
     },
     [cleanup]
   );
@@ -547,7 +556,9 @@ export function usePipeline() {
         thinking: opts.settings.thinking ?? false,
         role_overrides: buildRoleOverrides(opts.settings),
         refine_targets: undefined,
-        generation: opts.settings.generation,
+        // F-1 根治：跨入后端的 generation 过同一清洗函数（内存态运行期输入的越界值在此收敛，
+        // 后端 validate 不再整请求拒绝）——读写请求三个边界共用 sanitizeStored 单源
+        generation: sanitizeStored(opts.settings).generation,
         run_id: runId,
       };
       try {
@@ -565,5 +576,5 @@ export function usePipeline() {
   );
 
   // 保留 run/refine/reset 命名（App 调用不变）+ B3 的 cancel + A9 的 getRunId + R3 的 resume
-  return { ...state, run, refine, reset, cancel, getRunId, resume };
+  return { ...state, run, refine, reset, cancel, getRunId, resume, usageRef };
 }
