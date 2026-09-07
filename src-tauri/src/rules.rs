@@ -55,7 +55,7 @@ pub const ARC_PARAMS: &[(&str, u32, u32, u32, u32)] = &[
     ("单峰", 20, 30, 75, 85),
     ("回环", 20, 28, 78, 85),
 ];
-/// 抖音默认参数区间（叙事型结构可回落 A/B 弧线区间，须说明理由）
+/// 抖音默认参数区间（叙事型例外与硬校验同口径：仅当结构含 ≥2 个叙事段 Verse/Pre-Chorus/Bridge 且方案写明'叙事型'归类，方可回落 A/B 弧线区间；二者缺一按本区间打回）
 pub const DOUYIN_WEIRD_MIN: u32 = 12;
 pub const DOUYIN_WEIRD_MAX: u32 = 20;
 pub const DOUYIN_STYLE_MIN: u32 = 85;
@@ -65,6 +65,46 @@ pub const MODE_B_WEIRD_MIN: u32 = 20;
 pub const MODE_B_WEIRD_MAX: u32 = 35;
 pub const MODE_B_STYLE_MIN: u32 = 75;
 pub const MODE_B_STYLE_MAX: u32 = 85;
+
+/// C1：CHECKLIST_A 弧线区间的并集（10 条弧线 min/max 派生）——ARC_PARAMS 的执行点之一。
+/// 精确到单条弧线的门需终稿带弧线类型机读标注（项目书 §6 既有问题区记录，后续组件补）。
+pub fn arc_param_union() -> (u32, u32, u32, u32) {
+    ARC_PARAMS.iter().fold(
+        (u32::MAX, 0, u32::MAX, 0),
+        |(wlo, whi, slo, shi), (_, wmin, wmax, smin, smax)| {
+            (wlo.min(*wmin), whi.max(*wmax), slo.min(*smin), shi.max(*smax))
+        },
+    )
+}
+
+/// C1/ADR-2：规则注册表——每条硬门规则一个条目，"每条规则唯一执行者"的机读清单。
+/// 守护测试 `rule_registry_constants_have_executors` 保证：constants 列出的每个常量
+/// 必须在执行文件中有真实消费者（死常量在 CI 即失败）。
+pub struct RuleSpec {
+    pub id: &'static str,
+    pub modes: &'static [&'static str],
+    pub symbols: &'static [&'static str],
+    pub executor: &'static str,
+}
+
+pub const RULE_REGISTRY: &[RuleSpec] = &[
+    RuleSpec { id: "style_prompt_max", modes: &["mode_a", "mode_b"], symbols: &["STYLE_PROMPT_MAX_CHARS"], executor: "validate_production" },
+    RuleSpec { id: "style_prompt_min", modes: &["mode_a", "mode_b", "mode_d"], symbols: &["STYLE_PROMPT_MIN_CHARS"], executor: "check_style_prompt_blocks" },
+    RuleSpec { id: "min_section_tags", modes: &["mode_a", "mode_b"], symbols: &["MIN_SECTION_TAGS"], executor: "validate_production" },
+    RuleSpec { id: "min_energy_gap", modes: &["mode_a", "mode_b"], symbols: &["MIN_ENERGY_GAP"], executor: "validate_production" },
+    RuleSpec { id: "instrument_gap_weak_strong_max", modes: &["mode_a", "mode_b"], symbols: &["MIN_INSTRUMENT_GAP", "MIN_INSTRUMENT_WEAK", "MIN_INSTRUMENT_STRONG", "INSTRUMENT_MAX"], executor: "validate_production" },
+    RuleSpec { id: "audio_influence_zero", modes: &["mode_a", "mode_b"], symbols: &[], executor: "check_audio_influence" },
+    // ARC_PARAMS 经 arc_param_union() 折叠后在 validator 消费，对外消费符号登记访问器
+    RuleSpec { id: "mode_a_param_arc_union", modes: &["mode_a"], symbols: &["arc_param_union"], executor: "validate_production" },
+    RuleSpec { id: "mode_b_param_range", modes: &["mode_b"], symbols: &["MODE_B_WEIRD_MIN", "MODE_B_WEIRD_MAX", "MODE_B_STYLE_MIN", "MODE_B_STYLE_MAX"], executor: "validate_production" },
+    RuleSpec { id: "mode_d_param_range", modes: &["mode_d"], symbols: &["DOUYIN_WEIRD_MIN", "DOUYIN_WEIRD_MAX", "DOUYIN_STYLE_MIN", "DOUYIN_STYLE_MAX"], executor: "validate_douyin" },
+    RuleSpec { id: "hook_min_count", modes: &["mode_d"], symbols: &["HOOK_MIN_COUNT"], executor: "validate_douyin" },
+    RuleSpec { id: "verse_max_lines", modes: &["mode_d"], symbols: &["VERSE_MAX_LINES"], executor: "validate_douyin" },
+    RuleSpec { id: "douyin_line_max", modes: &["mode_d"], symbols: &["DOUYIN_LINE_MAX_CHARS"], executor: "validate_douyin" },
+    RuleSpec { id: "douyin_desc_line_max", modes: &["mode_d"], symbols: &["DOUYIN_DESC_LINE_MAX_CHARS"], executor: "validate_douyin" },
+    RuleSpec { id: "douyin_bpm_min", modes: &["mode_d"], symbols: &["DOUYIN_BPM_MIN"], executor: "check_style_prompt_blocks" },
+    RuleSpec { id: "lyric_fill_tail_allow", modes: &["mode_c"], symbols: &["LYRIC_FILL_TAIL_ALLOW"], executor: "validate_lyric_fill" },
+];
 
 /// 模式校验清单（数字唯一 prose 载体；与上方常量同文件维护）。
 /// 入参为 `Mode::to_str_name()`（mode_a/mode_b/mode_c/mode_d），未知模式回退通用清单。
@@ -82,7 +122,7 @@ pub fn checklist(mode: &str) -> &'static str {
 const CHECKLIST_A: &str = "【校验清单 A·单源】Style Prompt≤350字符且≥30字符；结构标签≥2段；能量差≥3级（0-10）；配器差≥2件、单段3-7件（最弱段即下限3件）、最强段≥5件；弧线参数：标准叙事22-28/78-83、全程高能10-15/85-90、高开低走25-35/70-80、平铺氛围15-25/80-90、起伏戏剧28-35/75-82、阶梯上升20-28/78-88、渐进爆发15-25/80-90、U型25-35/70-82、单峰20-30/75-85、回环20-28/78-85；Audio Influence=0；断句单空格、禁/与、标点全半角。";
 const CHECKLIST_B: &str = "【校验清单 B·单源】Style Prompt≤350字符且≥30字符；结构标签≥2段；能量差≥3级（0-10）；配器差≥2件、单段3-7件（最弱段即下限3件）、最强段≥5件；参数固定区间：Weirdness 20-35、Style Influence 75-85（B 专属区间为准，弧线区间不适用 B）；Audio Influence=0；断句单空格、禁/与、标点全半角。";
 const CHECKLIST_C: &str = "【校验清单 C·单源】逐行等字数（差一字即失败，尾部≤2行收尾）；行数与原歌词一致；段落结构与原歌词一致（禁新增Hook/Chorus段）；韵脚位置与模式保留；说明行带方括号；Style Prompt≤350字符；断句单空格、禁/与、标点全半角。";
-const CHECKLIST_D: &str = "【校验清单 D·单源】Hook≥2次；单段Verse≤4行；每行≤10字；结尾骤停（一刀切，含abruptly/cut标识）；BPM≥90；Style Prompt≤350字符且≥30字符；说明行≤80字符；参数抖音12-20/85-95（叙事型结构可回落A/B弧线区间须说明理由）；Audio Influence=0；断句单空格、禁/与、标点全半角。";
+const CHECKLIST_D: &str = "【校验清单 D·单源】Hook≥2次；单段Verse≤4行；每行≤10字；结尾骤停（一刀切，含abruptly/cut标识）；BPM≥90；Style Prompt≤350字符且≥30字符；说明行≤80字符；参数抖音12-20/85-95（仅当含≥2叙事段Verse/Pre-Chorus/Bridge且方案写明'叙事型'归类，方可回落A/B弧线区间，二者缺一打回）；Audio Influence=0；断句单空格、禁/与、标点全半角。";
 
 /// 阶段 0 地基 primer（模式专属，每模式≤800字；M9 顺序：受众→物件→约束→旋律）。
 /// 主持人零 CSV 语义不变，仅拼接本静态文本；缺失回退无 primer（旧行为）。
@@ -105,6 +145,31 @@ const PRIMER_D: &str = "【阶段0地基·D】前3秒：开场3秒内建钩子�
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// D2 守护：注册表每条规则的执行器必须在 validator/orchestrator 源码中存在，
+    /// 且每个登记的消费符号在 rules.rs 之外有消费者——删掉执行点即红，
+    /// 防止常量再次退化成"只有承诺没有执行"的死常量（诊断铁证：参数区间零执行）。
+    #[test]
+    fn rule_registry_symbols_have_executors() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let validator = std::fs::read_to_string(src.join("commands/validator.rs")).expect("读 validator.rs 失败");
+        let orchestrator = std::fs::read_to_string(src.join("commands/orchestrator.rs")).expect("读 orchestrator.rs 失败");
+        assert!(RULE_REGISTRY.len() >= 15, "注册表条目数异常: {}", RULE_REGISTRY.len());
+        for rule in RULE_REGISTRY {
+            assert!(
+                validator.contains(rule.executor) || orchestrator.contains(rule.executor),
+                "规则 {} 的执行器 {} 未在 validator/orchestrator 中实现",
+                rule.id, rule.executor
+            );
+            for sym in rule.symbols {
+                assert!(
+                    validator.contains(sym) || orchestrator.contains(sym),
+                    "死常量回归：{} 被规则 {} 注册但 rules.rs 之外无消费者",
+                    sym, rule.id
+                );
+            }
+        }
+    }
 
     #[test]
     fn primer_within_800_chars_per_mode() {

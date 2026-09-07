@@ -196,9 +196,92 @@ pub fn validate_production(mode: &str, text: &str) -> ValidationResult {
         if let Some(msg) = check_audio_influence(text) {
             issues.push(msg);
         }
+        // C1/ADR-2：参数区间硬门——CHECKLIST_A/B 承诺的区间准绳由代码执行。
+        // 此前 rules::MODE_B_*/ARC_PARAMS 仅有常量与提示词表述、无任何执行点（诊断复现：50/50 双双通过）。
+        issues.extend(param_range_issues(mode, text));
     }
 
     if issues.is_empty() { ValidationResult::ok() } else { ValidationResult::fail(issues) }
+}
+
+/// C1/ADR-2：A/B 参数区间硬门调度（调用方已限定 mode_a/mode_b）。
+/// 参数行可解析→按模式逐条报越界；含参数行但解析失败→报格式；
+/// 无参数行→不在此报（check_audio_influence 的"缺参数行"已覆盖，避免重复判断）。
+fn param_range_issues(mode: &str, text: &str) -> Vec<String> {
+    match parse_weird_style(text) {
+        Some((w, s)) => {
+            if mode == "mode_b" {
+                mode_b_param_issues(w, s)
+            } else {
+                mode_a_param_issues(w, s)
+            }
+        }
+        None => {
+            if text.contains("Weirdness") {
+                vec!["参数行 Weirdness/Style Influence 无法解析（应为 `参数: Weirdness=… | Style Influence=… | Audio Influence=0`）".to_string()]
+            } else {
+                Vec::new()
+            }
+        }
+    }
+}
+
+/// B 专属区间门（MODE_B_* 常量的唯一执行点）。
+fn mode_b_param_issues(w: u32, s: u32) -> Vec<String> {
+    let mut issues = Vec::new();
+    if !(rules::MODE_B_WEIRD_MIN..=rules::MODE_B_WEIRD_MAX).contains(&w) {
+        issues.push(format!(
+            "参数越界: Weirdness={}（B 专属区间 {}-{}）",
+            w, rules::MODE_B_WEIRD_MIN, rules::MODE_B_WEIRD_MAX
+        ));
+    }
+    if !(rules::MODE_B_STYLE_MIN..=rules::MODE_B_STYLE_MAX).contains(&s) {
+        issues.push(format!(
+            "参数越界: Style Influence={}（B 专属区间 {}-{}）",
+            s, rules::MODE_B_STYLE_MIN, rules::MODE_B_STYLE_MAX
+        ));
+    }
+    issues
+}
+
+/// 弧线区间并集门（ARC_PARAMS 经 arc_param_union 派生，激活常量）；精确到单弧线的门
+/// 需终稿带弧线类型机读标注（交付报告既有问题区记录，后续组件补）。
+fn mode_a_param_issues(w: u32, s: u32) -> Vec<String> {
+    let (wlo, whi, slo, shi) = rules::arc_param_union();
+    if !(wlo..=whi).contains(&w) || !(slo..=shi).contains(&s) {
+        vec![format!(
+            "参数越界: Weirdness={}/Style Influence={}（弧线区间并集 {}-{}/{}-{}，弧线参数须落在所选弧线区间内）",
+            w, s, wlo, whi, slo, shi
+        )]
+    } else {
+        Vec::new()
+    }
+}
+
+/// C1/ADR-2：抖音参数区间硬门（3c）。越界且不满足叙事型例外→报。
+/// 叙事型例外（ADR-2 假设的结构化近似）：LLM 判语义（方案中声明"叙事型"归类），
+/// 代码判结构事实（≥2 个非 Hook 叙事段）——两项齐备才放行，缺一即打回。
+fn douyin_param_issue(text: &str, tags: &[String]) -> Option<String> {
+    let (w, s) = parse_weird_style(text)?;
+    let in_douyin = (rules::DOUYIN_WEIRD_MIN..=rules::DOUYIN_WEIRD_MAX).contains(&w)
+        && (rules::DOUYIN_STYLE_MIN..=rules::DOUYIN_STYLE_MAX).contains(&s);
+    if in_douyin {
+        return None;
+    }
+    let narrative_sections = tags
+        .iter()
+        .filter(|t| {
+            let l = t.to_lowercase();
+            l.contains("verse") || l.contains("pre-chorus") || l.contains("bridge")
+        })
+        .count();
+    if narrative_sections >= 2 && text.contains("叙事型") {
+        return None;
+    }
+    Some(format!(
+        "参数越界: Weirdness={}/Style Influence={}（抖音区间 {}-{}/{}-{}；仅当结构含≥2个叙事段（Verse/Pre-Chorus/Bridge）且方案写明'叙事型'归类方可回落 A/B 弧线区间）",
+        w, s, rules::DOUYIN_WEIRD_MIN, rules::DOUYIN_WEIRD_MAX, rules::DOUYIN_STYLE_MIN, rules::DOUYIN_STYLE_MAX
+    ))
 }
 
 /// K-3：解析参数行 Audio Influence（Mode A/B 硬门）。双向：缺参数行 / 值非 0 / 无法解析都拦。
@@ -223,6 +306,26 @@ fn check_audio_influence(text: &str) -> Option<String> {
         Ok(v) => Some(format!("Audio Influence 须为 0（无参考音频，当前 {}）", v)),
         Err(_) => Some("参数行 Audio Influence 无法解析（应为 `Audio Influence=0`）".to_string()),
     }
+}
+
+/// C1/ADR-2：解析参数行 (Weirdness, Style Influence)。
+/// 缺行返回 None——缺行本身由 check_audio_influence 报告，此处不重复报。
+fn parse_weird_style(text: &str) -> Option<(u32, u32)> {
+    let line = text
+        .lines()
+        .find(|l| l.trim_start().starts_with("参数") && l.contains("Weirdness"))?;
+    let parse_after = |key: &str| -> Option<u32> {
+        let after = line.split(key).nth(1)?;
+        let num: String = after
+            .trim_start()
+            .trim_start_matches(['=', '：', ':'])
+            .trim_start()
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        num.parse::<u32>().ok()
+    };
+    Some((parse_after("Weirdness")?, parse_after("Style Influence")?))
 }
 
 /// Mode C 字数计数：去空白 + 去标点（Q2：与 prompts.rs“标点不计入字数”同口径；
@@ -393,6 +496,12 @@ pub fn validate_douyin(text: &str) -> ValidationResult {
         }
     }
 
+    // 3c. C1/ADR-2：参数抖音区间硬门——CHECKLIST_D 承诺"抖音12-20/85-95（仅当含≥2叙事段且写明'叙事型'归类方可回落A/B弧线区间）"。
+    // 此前仅提示词表述（roles.rs 四处）+ 死常量（rules::DOUYIN_WEIRD/STYLE），代码零执行。
+    if let Some(msg) = douyin_param_issue(text, &tags) {
+        issues.push(msg);
+    }
+
     // 4. 每行歌词 ≤ 单源字数（排除结构标签/说明行/Style Prompt/参数行）
     let lyric_lines: Vec<&str> = text
         .lines()
@@ -473,6 +582,132 @@ pub fn validate_for_mode(mode: &str, text: &str, extra: Option<&str>) -> Validat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- C1/ADR-2：参数区间硬门（红灯先行——实现前这些用例必须失败） ----
+
+    /// 构造一份结构/配器/能量全合法的 mode_b 终稿，参数值可注入
+    fn valid_mode_b_text_with_params(w: u32, s: u32) -> String {
+        format!(
+            "Style Prompt: 深夜室内民谣, F#小调 60BPM, felt piano, nylon guitar, upright bass, brushed snare, soft pad, 男声低语克制, 小房间混响, 从压抑到微亮\n\
+[Intro]\n\
+[felt piano, soft pad, nylon guitar, close-room, no voice, 能量:2]\n\
+(oom~)\n\
+[Verse]\n\
+[felt piano, nylon guitar, upright bass, brushed snare, close-room, 能量:3]\n\
+深夜 灯亮 键盘响\n\
+窗外 雨落 心火燃\n\
+[Chorus]\n\
+[felt piano, nylon guitar, upright bass, brushed snare, soft pad, warm bass, 能量:6]\n\
+我不睡 我不退\n\
+熬过今夜 见光来\n\
+[Outro]\n\
+[felt piano, soft pad, nylon guitar, fading, 能量:2]\n\
+(雨停)\n\
+参数: Weirdness={w} | Style Influence={s} | Audio Influence=0"
+        )
+    }
+
+    /// 基线回归：合法参数（25/80）必须继续通过——参数门不得误伤既有合法输出
+    #[test]
+    fn param_gate_mode_b_baseline_in_range_passes() {
+        let r = validate_production("mode_b", &valid_mode_b_text_with_params(25, 80));
+        assert!(r.passed, "基线文本应通过（issues: {:?}）", r.issues);
+    }
+
+    /// 越界拒绝：Weirdness=50 超 B 专属区间 20-35、Style Influence=50 低于 75
+    #[test]
+    fn param_gate_mode_b_out_of_range_fails() {
+        let r = validate_production("mode_b", &valid_mode_b_text_with_params(50, 50));
+        assert!(!r.passed, "越界参数应被拒（issues: {:?}）", r.issues);
+        assert!(r.issues.iter().any(|i| i.contains("Weirdness=50") && i.contains("20-35")), "issues: {:?}", r.issues);
+        assert!(r.issues.iter().any(|i| i.contains("Style Influence=50") && i.contains("75-85")), "issues: {:?}", r.issues);
+    }
+
+    /// B 区间边界值（20/35/75/85）全部放行
+    #[test]
+    fn param_gate_mode_b_boundaries_pass() {
+        for (w, s) in [(20u32, 75u32), (35, 85), (20, 85), (35, 75)] {
+            let r = validate_production("mode_b", &valid_mode_b_text_with_params(w, s));
+            assert!(r.passed, "边界值 w={w} s={s} 应通过（issues: {:?}）", r.issues);
+        }
+    }
+
+    /// mode_a 弧线并集门：Weirdness=50 超全部弧线区间上界 → 拒；25 → 放行（既有 fixture 亦覆盖）
+    #[test]
+    fn param_gate_mode_a_arc_union_rejects_wild_values() {
+        let text = "**Style Prompt**: dark indie folk 60BPM F#小调\n\
+[Verse 1]\n\
+[acoustic guitar fingerpicked, cello soft pads, brushed drums keep time, intimate room]\n\
+我们 很早前 就 谋过面\n\
+[Chorus]\n\
+[acoustic guitar strummed, cello dark bowing, warm piano cushions, light drums, deep bass pulses, wide hall]\n\
+我梦过 你的未来\n\
+能量轨迹：Verse 1 能量 3，Chorus 能量 8\n\
+参数: Weirdness={w} | Style Influence={s} | Audio Influence=0";
+        let bad = validate_production("mode_a", &text.replace("{w}", "50").replace("{s}", "50"));
+        assert!(!bad.passed, "mode_a 并集门外取值应被拒（issues: {:?}）", bad.issues);
+        let ok = validate_production("mode_a", &text.replace("{w}", "25").replace("{s}", "80"));
+        assert!(ok.passed, "mode_a 并集门内取值应通过（issues: {:?}）", ok.issues);
+    }
+
+    /// mode_d 越界（50/50）且非叙事型结构 → 拒
+    #[test]
+    fn param_gate_mode_d_out_of_range_fails() {
+        let text = "Style Prompt: dark electronic rock, 128BPM, 808 sub, dense hi-hats, raspy male voice, office room tone, 先压后炸\n\
+[Hook]\n\
+[808 sub, hi-hats, guitar, 能量:9]\n\
+干就 完了 干就 完了\n\
+[Verse]\n\
+[808 bass, hi-hats, muted guitar, 能量:6]\n\
+白天 挨骂 晚上 加班\n\
+[Hook]\n\
+[808 sub, hi-hats, guitar, 能量:9]\n\
+干就 完了 干就 完了\n\
+[all instruments cut]\n\
+参数: Weirdness=50 | Style Influence=50 | Audio Influence=0";
+        let r = validate_douyin(text);
+        assert!(!r.passed, "越界参数应被拒（issues: {:?}）", r.issues);
+        assert!(r.issues.iter().any(|i| i.contains("12-20")), "issues: {:?}", r.issues);
+    }
+
+    /// 叙事型例外（ADR-2）：越界参数 + ≥2 个非 Hook 叙事段（Verse×2）+ 方案含"叙事型"归类说明 → 放行
+    #[test]
+    fn param_gate_mode_d_narrative_exception_passes() {
+        let text = "Style Prompt: dark narrative rock, 128BPM, 808 sub, dense hi-hats, raspy male voice, office room tone, 叙事型结构铺垫后爆发\n\
+[Verse]\n\
+[808 bass, hi-hats, muted guitar, 能量:6]\n\
+白天 挨骂 晚上 加班\n\
+方案 越改 越像 批斗\n\
+[Hook]\n\
+[808 sub, hi-hats, guitar, 能量:9]\n\
+干就 完了 干就 完了\n\
+[Verse]\n\
+[808 bass, hi-hats, muted guitar, 能量:6]\n\
+深夜 加班 灯不灭\n\
+[Hook]\n\
+[808 sub, hi-hats, guitar, 能量:9]\n\
+干就 完了 干就 完了\n\
+[all instruments cut]\n\
+参数: Weirdness=50 | Style Influence=50 | Audio Influence=0";
+        let r = validate_douyin(text);
+        assert!(r.passed, "叙事型例外应放行（issues: {:?}）", r.issues);
+    }
+
+    /// 叙事型例外不因仅有"叙事型"字样而放行——结构不足（0 个叙事段）仍拒
+    #[test]
+    fn param_gate_mode_d_narrative_exception_requires_structure() {
+        let text = "Style Prompt: dark electronic rock, 128BPM, 808 sub, dense hi-hats, raspy male voice, office room tone, 叙事型结构\n\
+[Hook]\n\
+[808 sub, hi-hats, guitar, 能量:9]\n\
+干就 完了 干就 完了\n\
+[Hook]\n\
+[808 sub, hi-hats, guitar, 能量:9]\n\
+干就 完了 干就 完了\n\
+[all instruments cut]\n\
+参数: Weirdness=50 | Style Influence=50 | Audio Influence=0";
+        let r = validate_douyin(text);
+        assert!(!r.passed, "仅有字样无叙事结构应被拒（issues: {:?}）", r.issues);
+    }
 
     #[test]
     fn style_prompt_too_long_fails() {
