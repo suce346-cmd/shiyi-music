@@ -559,6 +559,50 @@ mod tests {
         assert!(subset.is_empty(), "校验员 suno_rules 必须全量（无子集）");
     }
 
+    /// C4/D4：TERRITORY 表与角色人设领地声明双向锁定——改表忘改人设（或反向）即红。
+    #[test]
+    fn territory_table_matches_role_declarations() {
+        use crate::rules::{territory_adjudication_text, TERRITORY_RULES};
+        // 表 → 人设：每个终裁者必须是真实角色，且其人设含领地声明段
+        let owner_prompts = [
+            (lyricist().name, lyricist().system_prompt),
+            (style_analyst().name, style_analyst().system_prompt),
+            (producer().name, producer().system_prompt),
+            (emotion().name, emotion().system_prompt),
+        ];
+        // 表行 → 各角色领地声明的实际措辞（声明文字改动时此处同步——双向锁定的正向）
+        let declarations: &[(&str, &str)] = &[
+            ("作词人", "金句/Hook 的文字形态与写法归你"),
+            ("流行风格分析师", "你只管次数、位置、骤停与传播动态"),
+            ("制作人", "人声设计终裁权在你"),
+            ("情感分析师", "参数与弧线匹配终裁权在你"),
+        ];
+        for (rule_id, domain, owner) in TERRITORY_RULES {
+            let p = owner_prompts
+                .iter()
+                .find(|(n, _)| n == owner)
+                .unwrap_or_else(|| panic!("TERRITORY 终裁者 {} 不是已知角色", owner))
+                .1;
+            // 各角色领地声明的实际措辞（声明文字改动时此处同步——双向锁定的正向）
+            let phrase = declarations
+                .iter()
+                .find(|(n, _)| n == owner)
+                .expect("终裁者必须有声明短语映射")
+                .1;
+            assert!(p.contains(phrase), "{} 人设缺领地声明措辞（表行 {}:{}），期望含: {}", owner, rule_id, domain, phrase);
+            let note = territory_adjudication_text("角色A", "角色B", "lyrics");
+            assert!(
+                note.contains(&format!("{}：{}归{}", rule_id, domain, owner)),
+                "裁决指引缺表行 {}：{}归{}", rule_id, domain, owner
+            );
+        }
+        // 人设 → 表：四处领地声明的核心文字都能对应到表行（反向锁定）
+        assert!(emotion().system_prompt.contains("参数与弧线匹配终裁权在你"), "情感分析师缺 R-3 参数弧线终裁");
+        assert!(producer().system_prompt.contains("人声设计终裁权在你"), "制作人缺 R-3 人声终裁");
+        assert!(lyricist().system_prompt.contains("金句/Hook 的文字形态与写法归你"), "作词人缺 R-2 文字形态领地");
+        assert!(style_analyst().system_prompt.contains("归作词人（R-2）"), "风格分析师缺 R-2 引用");
+    }
+
     /// Q5单源锁：A/B 弧线全表数字不得出现在人设（改数只改 rules.rs+CSV）；
     /// C3 后人设参数数字一律走 ${占位符} 经 rules::interpolate 注入（守护测试在 rules.rs）。
     #[test]

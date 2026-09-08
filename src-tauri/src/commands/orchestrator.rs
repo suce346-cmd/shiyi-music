@@ -813,6 +813,35 @@ async fn run_host_initial<R: Runtime>(
 }
 
 /// 主持人汇总 user prompt 构建（纯函数，可测）。
+/// C4/D4：冲突修订对——(角色A下标, 修订A下标, 角色B下标, 修订B下标, target)。
+type ConflictPair = (usize, usize, usize, usize, String);
+
+/// 修订对冲突判定（保守口径单源）：同 target、非空、且文本互不包含
+/// （包含 = 细化，相同 = 同意，都放行）。
+fn is_conflict_pair(ca: &ReviewChange, cb: &ReviewChange) -> bool {
+    let (a, b) = (ca.content.trim(), cb.content.trim());
+    !a.is_empty() && !b.is_empty() && ca.target == cb.target && !a.contains(b) && !b.contains(a)
+}
+
+/// 冲突预检（保守判定）：同 target、跨角色、且修订文本互不包含 → 候选冲突；
+/// 一方包含另一方视为细化（后者是对前者的补充）不算冲突，相同内容同理；
+/// 同角色多条同 target 是作者自己的并列意见，不属跨角色冲突，不标。
+fn detect_revision_conflicts(round_changes: &[(PipelineRole, Vec<ReviewChange>, String)]) -> Vec<ConflictPair> {
+    let mut pairs = Vec::new();
+    for (ai, (_, changes_a, _)) in round_changes.iter().enumerate() {
+        for (pi, ca) in changes_a.iter().enumerate() {
+            for (bi, (_, changes_b, _)) in round_changes.iter().enumerate().skip(ai + 1) {
+                for (qi, cb) in changes_b.iter().enumerate() {
+                    if is_conflict_pair(ca, cb) {
+                        pairs.push((ai, pi, bi, qi, ca.target.clone()));
+                    }
+                }
+            }
+        }
+    }
+    pairs
+}
+
 /// round_changes 三元组 =（角色, 修订片段, 角色总体意见）——意见必达：即使无具体修订，
 /// "提出总体异议但没给改法"也要让主持人知道并自行权衡。
 fn build_summarize_user_prompt(
@@ -820,14 +849,27 @@ fn build_summarize_user_prompt(
     round_changes: &[(PipelineRole, Vec<ReviewChange>, String)],
     original_lyrics: Option<&str>,
 ) -> String {
+    // C4/D4：冲突预检——同 target 跨角色互不相容的修订对，条目前注入裁决指引
+    let conflicts = detect_revision_conflicts(round_changes);
     // 方案截断（汇总输入同样封顶）
     let mut user = format!("【当前方案】\n{}\n\n【本轮各角色修订片段与校验员观点】\n", truncate_plan(current_plan));
-    for (role, changes, role_reason) in round_changes {
+    for (ri, (role, changes, role_reason)) in round_changes.iter().enumerate() {
         user.push_str(&format!("## {} 的修订：\n", role.name()));
         if !role_reason.is_empty() {
             user.push_str(&format!("（总体意见：{}）\n", role_reason));
         }
-        for c in changes {
+        for (ci, c) in changes.iter().enumerate() {
+            // 该条目属某冲突对 → 条目前注入裁决指引（冲突对双侧条目都标）
+            for (ai, pi, bi, qi, target) in &conflicts {
+                let involved = (*ai == ri && *pi == ci) || (*bi == ri && *qi == ci);
+                if involved {
+                    user.push_str(&crate::rules::territory_adjudication_text(
+                        round_changes[*ai].0.name(),
+                        round_changes[*bi].0.name(),
+                        target,
+                    ));
+                }
+            }
             user.push_str(&format!("- target: {} | content: {} | reason: {}\n", c.target, c.content, c.reason));
         }
     }
@@ -1856,6 +1898,64 @@ pub async fn interject_feedback(run_id: Option<String>, note: String) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- C4/D4：冲突预检标注（红灯先行——检测桩返回空时冲突用例必须失败） ----
+
+    /// 单修订角色条目构造
+    fn rc(role: PipelineRole, target: &str, content: &str) -> (PipelineRole, Vec<ReviewChange>, String) {
+        (
+            role,
+            vec![ReviewChange { target: target.to_string(), content: content.to_string(), reason: "r".to_string() }],
+            "总体意见".to_string(),
+        )
+    }
+
+    #[test]
+    fn summarize_no_conflict_no_warning() {
+        let rc_list = vec![
+            rc(PipelineRole::Lyricist, "lyrics", "歌词改成甲方案"),
+            rc(PipelineRole::Producer, "style_prompt", "配器改成乙方案"),
+        ];
+        let out = build_summarize_user_prompt("当前方案文本", &rc_list, None);
+        assert!(!out.contains("⚠️ 冲突"), "无冲突不应注入: {}", out);
+    }
+
+    #[test]
+    fn summarize_single_conflict_marked_on_both_sides() {
+        let rc_list = vec![
+            rc(PipelineRole::Lyricist, "lyrics", "金句改成：凌晨四点的灯"),
+            rc(PipelineRole::StyleAnalyst, "lyrics", "金句改成：别关那盏灯"),
+        ];
+        let out = build_summarize_user_prompt("当前方案文本", &rc_list, None);
+        assert_eq!(out.matches("⚠️ 冲突").count(), 2, "冲突对双侧条目都要标注: {}", out);
+        assert!(out.contains("作词人"), "缺角色A: {}", out);
+        assert!(out.contains("流行风格分析师"), "缺角色B: {}", out);
+        assert!(out.contains("取舍理由"), "缺裁决要求: {}", out);
+        assert!(out.contains("R-2：金句/Hook 文字形态归作词人"), "裁决指引应出自 TERRITORY 表: {}", out);
+    }
+
+    #[test]
+    fn summarize_multiple_conflicts_all_marked() {
+        let mut lyricist_entry = rc(PipelineRole::Lyricist, "lyrics", "歌词改成甲方案");
+        lyricist_entry.1.push(ReviewChange { target: "style_prompt".to_string(), content: "人声改成沙哑".to_string(), reason: "r".to_string() });
+        let rc_list = vec![
+            lyricist_entry,
+            rc(PipelineRole::StyleAnalyst, "lyrics", "歌词改成乙方案"),
+            rc(PipelineRole::Producer, "style_prompt", "人声改成清亮"),
+        ];
+        let out = build_summarize_user_prompt("当前方案文本", &rc_list, None);
+        assert_eq!(out.matches("⚠️ 冲突").count(), 4, "两对冲突、双侧标注: {}", out);
+    }
+
+    #[test]
+    fn summarize_containment_treated_as_refinement_not_conflict() {
+        let rc_list = vec![
+            rc(PipelineRole::Lyricist, "lyrics", "歌词改成：把副歌改短一些，突出金句"),
+            rc(PipelineRole::StyleAnalyst, "lyrics", "把副歌改短一些"),
+        ];
+        let out = build_summarize_user_prompt("当前方案文本", &rc_list, None);
+        assert!(!out.contains("⚠️ 冲突"), "包含关系是细化不是冲突: {}", out);
+    }
 
     // ---- C2/ADR-1：定点重写拼接 + 转写标记剥离（红灯先行——桩返回 None/空时必须失败） ----
 

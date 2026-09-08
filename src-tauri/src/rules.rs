@@ -190,6 +190,29 @@ fn arc_table_lines() -> String {
         .join("\n")
 }
 
+/// C4/D4：领地终裁表——冲突裁决的唯一结构化真源（依据, 领域, 终裁者）；
+/// 与 roles.rs 各角色领地声明文字同源（双向锁定测试）。
+pub const TERRITORY_RULES: &[(&str, &str, &str)] = &[
+    ("R-2", "金句/Hook 文字形态", "作词人"),
+    ("R-2", "Hook 次数/位置/骤停/传播动态", "流行风格分析师"),
+    ("R-3", "人声设计", "制作人"),
+    ("R-3", "参数与弧线匹配", "情感分析师"),
+];
+
+/// C4/D4：冲突裁决指引文本（注入主持人汇总输入的冲突条目前）。
+/// 内容由 TERRITORY_RULES 生成——表改这里自动跟随，不允许手写裁决清单。
+pub fn territory_adjudication_text(role_a: &str, role_b: &str, target: &str) -> String {
+    let rules = TERRITORY_RULES
+        .iter()
+        .map(|(id, domain, owner)| format!("{}：{}归{}", id, domain, owner))
+        .collect::<Vec<_>>()
+        .join("；");
+    format!(
+        "\n⚠️ 冲突：{} 与 {} 同时修订了 {}。\n请按领地声明裁决（{}），并在方案后注明取舍理由。\n",
+        role_a, role_b, target, rules
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
