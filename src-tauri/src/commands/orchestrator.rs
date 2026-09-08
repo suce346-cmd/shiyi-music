@@ -2830,6 +2830,8 @@ mod tests {
     /// 常量有意变更时：跑 `cargo test --lib dump_mode_prompts` 重新生成快照并在提交说明中声明。
     #[test]
     fn mode_prompts_byte_identical_to_snapshot() {
+        // Windows checkout 可能 CRLF（git autocrlf）——归一化后比较（内容等价性，换行符不属快照语义）
+        let normalize = |s: &str| s.replace("\r\n", "\n");
         for m in [Mode::ModeA, Mode::ModeB, Mode::ModeC, Mode::ModeD] {
             let name = m.to_str_name();
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -2837,7 +2839,7 @@ mod tests {
                 .join(format!("{}.txt", name));
             let expected = std::fs::read_to_string(&path)
                 .unwrap_or_else(|e| panic!("快照缺失 {}（先跑 dump_mode_prompts）: {}", name, e));
-            assert_eq!(prompt_for_mode(&m), expected, "{} prompt 与快照不一致", name);
+            assert_eq!(normalize(&prompt_for_mode(&m)), normalize(&expected), "{} prompt 与快照不一致", name);
         }
     }
 

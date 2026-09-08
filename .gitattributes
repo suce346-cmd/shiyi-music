@@ -1,0 +1,2 @@
+# P4 修复：Windows CI 快照测试因 checkout 换行符转换失败——fixture 强制 LF
+tests/fixtures/prompts/*.txt eol=lf
