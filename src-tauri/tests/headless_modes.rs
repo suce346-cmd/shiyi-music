@@ -108,7 +108,13 @@ async fn headless_mode_a() {
     )
     .await
     .expect("Mode A 无头实网应产出终稿（R1 保底 + R2 流式重试已落地）");
-    assert!(text.contains("Style Prompt") || text.contains("风格"), "终稿应含 Style Prompt，实际前200字：{}", text.chars().take(200).collect::<String>());
+    // P4 口径修正：标签回退是 v0.5.1 特性（模型丢标签但首行写风格正文仍可提取）——
+    // 断言与产品同口径：extract_style_prompt 可提取即可，不要求字面标签存在
+    assert!(
+        suno_prompt_generator_lib::commands::validator::extract_style_prompt(&text).is_some(),
+        "终稿应可提取 Style Prompt（含标签回退），实际前200字：{}",
+        text.chars().take(200).collect::<String>()
+    );
     assert_final_passes_hard_validation(Mode::ModeA, &text, None);
     println!("HEADLESS-A-OK chars={}", text.chars().count());
 }
