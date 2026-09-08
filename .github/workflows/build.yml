@@ -160,9 +160,15 @@ jobs:
           path: ./artifacts
           merge-multiple: true
 
+      # v0.5.2 事故：files 通配 bundle/ 全目录，把 dmg 构建器内部文件
+      # （bundle_dmg.sh / icon.icns / template.applescript / eula 模板）当成附件发了出去。
+      # 收窄到用户可见产物；新增平台产物时在这里补模式。
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           draft: true
           generate_release_notes: true
-          files: ./artifacts/**/*
+          files: |
+            ./artifacts/**/*.dmg
+            ./artifacts/**/*-setup.exe
+            ./artifacts/**/*.msi
