@@ -54,7 +54,7 @@ fn extract_section_tags(text: &str) -> Vec<String> {
 /// 跳过结构标签/说明行（`[` 开头）、参数行、标题行；找不到则维持 None。
 /// 回退严格优于现状：最坏情况是长度/信息块检查跑在一行错误文本上产生打回
 /// （可重试），而现状是"未找到 Style Prompt 字段"直接死路。
-pub(crate) fn extract_style_prompt(text: &str) -> Option<String> {
+pub fn extract_style_prompt(text: &str) -> Option<String> {
     let mut label_seen = false;
     for line in text.lines() {
         let t = line.trim().trim_start_matches("**").trim();
