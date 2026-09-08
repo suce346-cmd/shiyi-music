@@ -44,6 +44,13 @@ pub struct HistoryEntry {
     #[serde(default)]
     pub usage: Option<Usage>,
     pub timestamp: i64,
+    /// C5/ADR-3：降级标记（call_degraded/budget_degraded/gate_degraded 及明细）。
+    /// 旧记录无此字段 → None（当时本就不记录降级，不回溯标注）。
+    #[serde(default)]
+    pub degraded: Option<Vec<String>>,
+    /// C5/ADR-3：终稿硬校验结论（Some(true)=通过）。导出完整度声明使用。
+    #[serde(default)]
+    pub validation_passed: Option<bool>,
 }
 
 fn history_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, AppError> {
@@ -106,10 +113,26 @@ pub async fn history_export_text(
     Ok(render_export(e, &format))
 }
 
+/// C5/ADR-3：完整度声明（导出头部）——降级会话不与健康会话同等可信（任务书 §5.6.1）。
+/// 未知结论如实标注（旧记录当时不记录降级，不回溯造假）。
+fn honesty_declaration(e: &HistoryEntry) -> String {
+    let degraded_part = match &e.degraded {
+        Some(flags) if !flags.is_empty() => format!("本次生成存在降级：{}", flags.join("；")),
+        _ => "本次生成全环节正常".to_string(),
+    };
+    let gate_part = match e.validation_passed {
+        Some(true) => "硬校验 通过".to_string(),
+        Some(false) => "硬校验 未完全通过（详见对话记录）".to_string(),
+        None => "硬校验 结论未知".to_string(),
+    };
+    format!("> 完整度声明：{}，{}，请据此评估方案可信度。\n\n", degraded_part, gate_part)
+}
+
 fn render_export(e: &HistoryEntry, format: &str) -> String {
     let mut out = String::new();
     if format == "md" {
         out.push_str(&format!("# {} · {}\n\n", mode_label(&e.mode), e.id));
+        out.push_str(&honesty_declaration(e));
         out.push_str(&format!("> 输入：{}\n\n", e.input));
         if let Some(conv) = &e.conversation {
             for t in conv {
@@ -130,6 +153,7 @@ fn render_export(e: &HistoryEntry, format: &str) -> String {
             ));
         }
     } else {
+        out.push_str(&honesty_declaration(e));
         out.push_str(&format!("【{}】{}\n\n输入：{}\n\n", mode_label(&e.mode), e.id, e.input));
         if let Some(conv) = &e.conversation {
             for t in conv {
@@ -174,6 +198,8 @@ mod tests {
             conversation: Some(vec![ChatTurn { role: "user".into(), content: "hi".into(), timestamp: 1, speaker: None }]),
             usage: Some(Usage { prompt_tokens: 10, completion_tokens: 20 }),
             timestamp: 2,
+            degraded: None,
+            validation_passed: None,
         };
         let back: HistoryEntry = serde_json::from_str(&serde_json::to_string(&full).unwrap()).unwrap();
         assert_eq!(back.usage.unwrap().prompt_tokens, 10);
@@ -190,6 +216,8 @@ mod tests {
             conversation: None,
             usage: Some(Usage { prompt_tokens: 5, completion_tokens: 6 }),
             timestamp: 0,
+            degraded: None,
+            validation_passed: None,
         };
         let md = render_export(&e, "md");
         assert!(md.contains("# Mode D"), "got: {}", &md[..md.len().min(120)]);
@@ -198,5 +226,53 @@ mod tests {
         let txt = render_export(&e, "txt");
         assert!(txt.contains("【Mode D】"));
         assert!(txt.contains("--- 方案 ---"));
+    }
+
+    /// C5/ADR-3：导出头部完整度声明——降级可辨识（任务书 §5.6.1：降级会话不与健康会话同等可信）
+    #[test]
+    fn render_export_honesty_declaration() {
+        let base = HistoryEntry {
+            id: "x".into(),
+            mode: "mode_a".into(),
+            input: "灵感".into(),
+            output: "方案".into(),
+            conversation: None,
+            usage: None,
+            timestamp: 0,
+            degraded: None,
+            validation_passed: None,
+        };
+        // 全绿：声明"全环节正常 + 硬校验 通过"
+        let e = HistoryEntry { degraded: None, validation_passed: Some(true), ..base.clone() };
+        let md = render_export(&e, "md");
+        assert!(md.contains("完整度声明：本次生成全环节正常"), "缺正常声明: {}", &md[..md.len().min(200)]);
+        assert!(md.contains("硬校验 通过"), "缺通过结论: {}", &md[..md.len().min(200)]);
+        // 降级 + 打回耗尽：声明"存在降级 + 未完全通过"
+        let e2 = HistoryEntry {
+            degraded: Some(vec!["call_degraded：作词人输出解析失败".into(), "gate_degraded：硬校验打回耗尽".into()]),
+            validation_passed: Some(false),
+            ..base
+        };
+        let md2 = render_export(&e2, "md");
+        assert!(md2.contains("完整度声明：本次生成存在降级：call_degraded：作词人输出解析失败；gate_degraded：硬校验打回耗尽"), "缺降级明细: {}", &md2[..md2.len().min(240)]);
+        assert!(md2.contains("硬校验 未完全通过（详见对话记录）"), "缺未完全通过结论");
+        // txt 格式同样带声明
+        let txt2 = render_export(&e2, "txt");
+        assert!(txt2.contains("完整度声明"), "txt 缺完整度声明");
+        // 硬校验结论未知（旧记录）→ 如实标注"结论未知"
+        let e3 = HistoryEntry { validation_passed: None, ..e2 };
+        let md3 = render_export(&e3, "md");
+        assert!(md3.contains("硬校验 结论未知"), "旧记录硬校验结论应如实标注未知");
+    }
+
+    /// C5：v0.5.1 旧记录（无 degraded/validation_passed 字段）零迁移直接读
+    #[test]
+    fn old_history_entry_loads_without_degradation_fields() {
+        let old = serde_json::json!({
+            "id": "old", "mode": "mode_b", "input": "i", "output": "o", "timestamp": 9
+        });
+        let e: HistoryEntry = serde_json::from_value(old).unwrap();
+        assert!(e.degraded.is_none());
+        assert!(e.validation_passed.is_none());
     }
 }

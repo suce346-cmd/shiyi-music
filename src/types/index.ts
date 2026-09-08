@@ -60,6 +60,10 @@ export interface HistoryEntry {
   /** 该次生成的累计 token 用量。旧记录没有此字段 */
   usage?: { prompt_tokens: number; completion_tokens: number };
   timestamp: number;
+  /** C5/ADR-3：降级标记（flag：明细 列表）。旧记录没有此字段 */
+  degraded?: string[];
+  /** C5/ADR-3：终稿硬校验结论。旧记录没有此字段（与后端 serde 字段名同形 snake_case） */
+  validation_passed?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -108,7 +112,8 @@ export type PipelineEvent =
   | { type: "discussion_round"; round: number; roles: PipelineRoleKey[]; reason: string }
   | { type: "failed"; error: string }
   | { type: "cancelled" }
-  | { type: "step_usage"; role: PipelineRoleKey; prompt_tokens: number; completion_tokens: number };
+  | { type: "step_usage"; role: PipelineRoleKey; prompt_tokens: number; completion_tokens: number }
+  | { type: "degraded"; flag: string; detail: string };
 
 /** 事件信封（后端统一包 envelope 传输；run_id 归属，旧裸事件不再出现） */
 export interface PipelineEnvelope {

@@ -199,6 +199,9 @@ export function usePipeline() {
   /** usage 实时引用（step_usage 同步更新）：历史保存读此 ref，
    * 不读 state 闭包——闭包在生成点击时定格，读到的一永远是 0/0（历史 usage 归零根因） */
   const usageRef = useRef<{ prompt_tokens: number; completion_tokens: number }>({ ...ZERO_USAGE });
+  /** C5/ADR-3：降级标记累积引用（degraded 事件同步追加）：历史保存同源读取；
+   * 条目格式 "flag：detail"，空数组=无降级（entry.degraded 不写，与旧记录一致） */
+  const degradedRef = useRef<string[]>([]);
   /** 后端元数据（启动获取一次；失败回退本地缓存/内置表，不阻断） */
   const [meta, setMeta] = useState<PipelineMeta | null>(() => {
     try {
@@ -380,10 +383,25 @@ export function usePipeline() {
           setState((prev) => ({ ...prev, usage: next }));
           break;
         }
+        case "degraded": {
+          // C5/ADR-3：降级标记累积（历史保存同源读 degradedRef；对话流同步可见）
+          degradedRef.current = [...degradedRef.current, `${e.flag}：${e.detail}`];
+          speechCbRef.current?.(makeSpeech(
+            "auditor",
+            `⚠️ 降级记录：${e.detail}`,
+          ));
+          break;
+        }
         case "failed":
           // active:false + 清 currentStage：防后端只发 Failed 不返回 Err 时 UI 永久卡"进行中"
           setState((prev) => ({ ...prev, error: e.error, phase: "done", active: false, currentStage: null }));
           break;
+        default: {
+          // C5/D6 兜底：未知事件类型显式忽略（后端只增枚举值时旧前端不崩）
+          const _exhaustive: never = e;
+          void _exhaustive;
+          break;
+        }
       }
     });
   }, [cleanup, updateExpert]);
@@ -418,6 +436,7 @@ export function usePipeline() {
         usage: { ...ZERO_USAGE },
       });
       usageRef.current = { ...ZERO_USAGE };
+      degradedRef.current = [];
 
       try {
         await startListening(token, runId);
@@ -523,6 +542,7 @@ export function usePipeline() {
         usage: { ...ZERO_USAGE },
       });
       usageRef.current = { ...ZERO_USAGE };
+      degradedRef.current = [];
     },
     [cleanup]
   );
@@ -576,5 +596,6 @@ export function usePipeline() {
   );
 
   // 保留 run/refine/reset 命名（App 调用不变）+ B3 的 cancel + A9 的 getRunId + R3 的 resume
-  return { ...state, run, refine, reset, cancel, getRunId, resume, usageRef };
+  // C5：degradedRef 与 usageRef 同模式——历史保存同源读取降级标记累积
+  return { ...state, run, refine, reset, cancel, getRunId, resume, usageRef, degradedRef };
 }

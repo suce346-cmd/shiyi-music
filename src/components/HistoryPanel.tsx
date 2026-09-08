@@ -140,6 +140,14 @@ export default function HistoryPanel({ entries, allEntriesCount, filter, onFilte
                     <span className="text-[10px] text-text-muted">
                       {new Date(entry.timestamp).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}
                     </span>
+                    {/* C5/ADR-3：降级徽章——该次生成存在降级环节，可信度需结合完整度声明评估 */}
+                    {entry.degraded && entry.degraded.length > 0 && (
+                      <span
+                        title={entry.degraded.join("\n")}
+                        className="text-[9px] px-1 py-px rounded bg-amber-500/15 text-amber-500 shrink-0 cursor-help">
+                        ⚠ 降级 {entry.degraded.length}
+                      </span>
+                    )}
                   </div>
                   <p className="text-[12px] text-text-2 truncate">{entry.input}</p>
                   {entry.output && (

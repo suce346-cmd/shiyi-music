@@ -69,6 +69,19 @@ mod tests {
     use super::*;
     use serde_json::Value;
 
+    /// C5/ADR-3：Degraded 事件 wire format 锁——前端 union 依赖 type:"degraded" + flag/detail 字段名
+    #[test]
+    fn degraded_event_wire_format() {
+        let v: Value = serde_json::to_value(PipelineEvent::Degraded {
+            flag: "gate_degraded".into(),
+            detail: "硬校验打回耗尽".into(),
+        })
+        .unwrap();
+        assert_eq!(v["type"], "degraded", "snake_case tag: {}", v);
+        assert_eq!(v["flag"], "gate_degraded");
+        assert_eq!(v["detail"], "硬校验打回耗尽");
+    }
+
     #[test]
     fn mode_to_str_name() {
         assert_eq!(Mode::ModeA.to_str_name(), "mode_a");
@@ -775,6 +788,9 @@ pub enum PipelineEvent {
     Cancelled,
     /// 单次调用的 token 用量（前端累计展示，不阻塞流程）
     StepUsage { role: PipelineRole, prompt_tokens: u32, completion_tokens: u32 },
+    /// C5/ADR-3：降级标记（前端累积进 HistoryEntry.degraded → 导出完整度声明 + 历史徽章）。
+    /// flag ∈ call_degraded / budget_degraded / gate_degraded；detail 为人类可读明细。
+    Degraded { flag: String, detail: String },
 }
 
 /// 事件信封——run_id 归属 + 事件本体（前端按 run_id 过滤，替代旧纯 token 补丁的后端原生支持）

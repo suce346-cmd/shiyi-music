@@ -383,7 +383,14 @@ export default function App() {
         { role: "user", content: displayInput },
         { role: "assistant", content: raw },
       ];
-      const entry: HistoryEntry = { id: newId(), mode: runMode, input: displayInput, output: raw, conversation: allTurns, usage: { ...pipeline.usageRef.current }, timestamp: Date.now() };
+      // C5/ADR-3：降级标记 + 硬校验结论随条目落盘（空数组不写，与旧记录一致）
+      const degradedFlags = pipeline.degradedRef.current;
+      const entry: HistoryEntry = {
+        id: newId(), mode: runMode, input: displayInput, output: raw,
+        conversation: allTurns, usage: { ...pipeline.usageRef.current }, timestamp: Date.now(),
+        ...(degradedFlags.length > 0 ? { degraded: [...degradedFlags] } : {}),
+        ...(pipeline.validation ? { validation_passed: pipeline.validation.passed } : {}),
+      };
       setCurrentHistoryId(entry.id);
       const updated = [entry, ...historyRef.current];
       setHistoryEntries(updated); scheduleSave(updated);

@@ -560,6 +560,13 @@ async fn execute_review<R: Runtime>(
             result = result2;
         }
     }
+    // C5/ADR-3：call_degraded 降级源——输出解析失败（重试后仍不可信），意见作废仅作警示
+    if result.degraded {
+        let _ = emit(PipelineEvent::Degraded {
+            flag: "call_degraded".into(),
+            detail: format!("{} 输出解析失败，意见作废（已降级警示）", role.name()),
+        });
+    }
     let _ = emit(PipelineEvent::StepDone {
         role,
         summary: humanize_review(role, &result),
@@ -1287,6 +1294,17 @@ async fn fidelity_retry_loop<R: Runtime>(
         }
         issues = collect_final_issues(ctx, &final_text, truncated);
     }
+    // C5/ADR-3：gate_degraded——打回耗尽降级返回（AuditResult pass=false 同源）
+    if !issues.is_empty() {
+        emit_pipeline_event(
+            ctx.app,
+            ctx.run_id,
+            PipelineEvent::Degraded {
+                flag: "gate_degraded".into(),
+                detail: "硬校验打回耗尽，降级返回最后一次方案".into(),
+            },
+        );
+    }
     emit_pipeline_event(ctx.app, ctx.run_id, PipelineEvent::AuditResult {
         pass: issues.is_empty(),
         findings: issues.clone(),
@@ -1598,6 +1616,8 @@ async fn run_pipeline_inner<R: Runtime>(
             format!("增量优化：本轮只跑 {}（上一版其他角色意见保留）", names.join("、")),
         ));
     }
+    // C5/ADR-3：收敛观测——循环走满未 break = 轮次上限强制收敛（budget_degraded 源）
+    let mut converged = false;
     for round in 1..=MAX_DISCUSSION_ROUNDS {
         let mut all_agree = true;
         // 三元组 =（角色, 修订片段, 角色总体意见）——异议必达，无具体修订的意见也要汇总
@@ -1669,6 +1689,11 @@ async fn run_pipeline_inner<R: Runtime>(
         )
         .await?;
         if auditor_result.degraded {
+            // C5/ADR-3：call_degraded——校验员讨论轮输出不可信
+            let _ = emit(PipelineEvent::Degraded {
+                flag: "call_degraded".into(),
+                detail: "校验员 输出解析失败，意见作废（已降级警示）".into(),
+            });
             revisions_log.push((
                 PipelineRole::Auditor.name().to_string(),
                 humanize_review(PipelineRole::Auditor, &auditor_result),
@@ -1686,6 +1711,7 @@ async fn run_pipeline_inner<R: Runtime>(
             ));
         }
         if all_agree {
+            converged = true;
             break; // 动态角色 + 校验员全部无异议 → 收敛
         }
         // ③ 主持人汇总修订 + 校验员观点 → 新版完整方案 + 下轮任务分发
@@ -1722,6 +1748,13 @@ async fn run_pipeline_inner<R: Runtime>(
                 tracing::warn!(error = %e.message, "检查点落盘失败（不阻断）");
             }
         }
+    }
+    // C5/ADR-3：budget_degraded——轮次上限强制收敛（非全体共识下的产出）
+    if !converged {
+        let _ = emit(PipelineEvent::Degraded {
+            flag: "budget_degraded".into(),
+            detail: format!("讨论轮次上限（{} 轮）强制收敛，非全体共识产出", MAX_DISCUSSION_ROUNDS),
+        });
     }
 
     // ---- 阶段 2：校验员转写契约输出 + 保真/硬校验打回（与 resume 共用 produce_final_text 单源实现）----
