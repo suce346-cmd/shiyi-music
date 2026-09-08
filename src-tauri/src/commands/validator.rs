@@ -351,9 +351,11 @@ fn is_bare_package_line(l: &str) -> bool {
 }
 
 /// 歌词行判定的排除前缀表（单源）：抖音逐行字数门与 C2 保真校验共用同一分类。
-/// '（' 与「注：」「结构归类」开头的方案元信息行同样不算歌词（两侧对称排除，保真比对不受干扰）。
+/// '（' 与「注：」「结构归类」开头的方案元信息行同样不算歌词（两侧对称排除，保真比对不受干扰）；
+/// TRANSCRIPTION_ISSUE 标记行不算歌词（P4 实网防御：标记若残留在任何输出中，不得按歌词计字数）。
 const LYRIC_LINE_EXCLUDED_PREFIXES: &[&str] = &[
     "[", "#", "-", "*", "（", "注：", "结构归类", "Style", "风格", "参数", "Weirdness",
+    "TRANSCRIPTION_ISSUE",
 ];
 
 /// 歌词行判定（单源）：排除空行/结构标签/说明行/元信息/Style Prompt/参数行/裸包装行。
@@ -852,6 +854,27 @@ mod tests {
     fn fidelity_mode_c_delegates_to_hard_validation() {
         let issues = check_transcription_fidelity(&fidelity_plan(), "完全 不同 的 歌词", "mode_c");
         assert!(issues.is_empty(), "mode_c 保真层应 no-op: {:?}", issues);
+    }
+
+    /// P4 实网防御：TRANSCRIPTION_ISSUE 标记行残留时不得按歌词计（mode_d 首轮实网误报根因）
+    #[test]
+    fn transcription_marker_line_never_counted_as_lyric() {
+        let text = "Style Prompt: dark electronic rock, 128BPM, 808 sub, dense hi-hats, raspy male voice, office room tone, 先压后炸\n\
+[Hook]\n\
+[808 sub, hi-hats, guitar, 能量:9]\n\
+干就 完了 干就 完了\n\
+[Hook]\n\
+[808 sub, hi-hats, guitar, 能量:9]\n\
+干就 完了 干就 完了\n\
+[all instruments cut]\n\
+TRANSCRIPTION_ISSUE: 收敛方案含 ``` 围栏与参数行格式错误，需主持人回炉修正这行远超十字\n\
+参数: Weirdness=15 | Style Influence=90 | Audio Influence=0";
+        let r = validate_douyin(text);
+        assert!(
+            !r.issues.iter().any(|i| i.contains("TRANSCRIPTION_ISSUE")),
+            "标记行不得计入歌词行字数门: {:?}",
+            r.issues
+        );
     }
 
     #[test]
