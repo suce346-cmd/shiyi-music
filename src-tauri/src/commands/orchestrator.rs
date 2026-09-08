@@ -1024,7 +1024,7 @@ async fn run_audit_format<R: Runtime>(
     }
     if let Some(issues) = issues {
         user.push_str(&format!(
-            "\n\n【格式问题（逐条修正后重新输出完整包）】\n{}",
+            "\n\n【格式问题（逐条修正后重新输出完整包）】\n转写契约的\"原样保留\"不适用于下列违规项——它们必须修正到合规（修正优先于原样保留）；其余内容仍逐字转写。\n{}",
             issues.iter().map(|i| format!("- {}", i)).collect::<Vec<_>>().join("\n")
         ));
     }
