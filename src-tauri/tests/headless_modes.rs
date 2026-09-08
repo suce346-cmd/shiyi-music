@@ -79,6 +79,23 @@ async fn run_headless(
     }
 }
 
+/// P4/§6.2 集成断言（C1-C5 升级的新规则）：终稿必须通过全部硬校验（含 C1 参数门/C2 保真链路）。
+/// 失败 = 打回耗尽降级（gate_degraded），打印行号级 issue 明细供定位——
+/// 这是"收敛承诺传递到终稿"的实网观测点（项目书 §6.4 验收标准）。
+fn assert_final_passes_hard_validation(mode: Mode, text: &str, original_lyrics: Option<&str>) {
+    let v = suno_prompt_generator_lib::commands::validator::validate_for_mode(
+        mode.to_str_name(),
+        text,
+        original_lyrics,
+    );
+    assert!(
+        v.passed,
+        "{} 终稿未通过全部硬校验（打回耗尽降级）：\n{}",
+        match_mode(&mode),
+        v.issues.iter().map(|i| format!("- {}", i)).collect::<Vec<_>>().join("\n")
+    );
+}
+
 /// Mode A：短词 → 完整方案（终稿含 Style Prompt；座位=4）
 #[tokio::test]
 #[ignore]
@@ -92,6 +109,7 @@ async fn headless_mode_a() {
     .await
     .expect("Mode A 无头实网应产出终稿（R1 保底 + R2 流式重试已落地）");
     assert!(text.contains("Style Prompt") || text.contains("风格"), "终稿应含 Style Prompt，实际前200字：{}", text.chars().take(200).collect::<String>());
+    assert_final_passes_hard_validation(Mode::ModeA, &text, None);
     println!("HEADLESS-A-OK chars={}", text.chars().count());
 }
 
@@ -108,6 +126,7 @@ async fn headless_mode_b() {
     .await
     .expect("Mode B 无头实网应产出终稿");
     assert!(!text.trim().is_empty(), "Mode B 终稿不应为空");
+    assert_final_passes_hard_validation(Mode::ModeB, &text, None);
     println!("HEADLESS-B-OK chars={}", text.chars().count());
 }
 
@@ -124,6 +143,7 @@ async fn headless_mode_c() {
     .await
     .expect("Mode C 无头实网应产出终稿（原词直传 + 重试不丢词）");
     assert!(!text.trim().is_empty(), "Mode C 终稿不应为空");
+    assert_final_passes_hard_validation(Mode::ModeC, &text, Some("昨夜星辰昨夜风\n画楼西畔桂堂东\n身无彩凤双飞翼"));
     println!("HEADLESS-C-OK chars={}", text.chars().count());
 }
 
@@ -140,6 +160,7 @@ async fn headless_mode_d() {
     .await
     .expect("Mode D 无头实网应产出终稿（R4 错峰 + R1 保底已落地）");
     assert!(!text.trim().is_empty(), "Mode D 终稿不应为空");
+    assert_final_passes_hard_validation(Mode::ModeD, &text, None);
     println!("HEADLESS-D-OK chars={}", text.chars().count());
 }
 
