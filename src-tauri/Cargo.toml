@@ -1,6 +1,6 @@
 [package]
 name = "suno-prompt-generator"
-version = "0.5.2"
+version = "0.5.3"
 description = "Suno Prompt Generator — desktop app for generating Suno AI music prompts"
 authors = ["shiyi"]
 license = "MIT"

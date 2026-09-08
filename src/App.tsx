@@ -389,7 +389,9 @@ export default function App() {
         id: newId(), mode: runMode, input: displayInput, output: raw,
         conversation: allTurns, usage: { ...pipeline.usageRef.current }, timestamp: Date.now(),
         ...(degradedFlags.length > 0 ? { degraded: [...degradedFlags] } : {}),
-        ...(pipeline.validation ? { validation_passed: pipeline.validation.passed } : {}),
+        ...(pipeline.validationRef.current
+          ? { validation_passed: pipeline.validationRef.current.passed }
+          : {}),
       };
       setCurrentHistoryId(entry.id);
       const updated = [entry, ...historyRef.current];

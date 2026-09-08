@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.3（2026-09-08）GUI 实测修复——导出 ACL · 校验结论落盘
+
+0.5.2 发布后按验收流程在本机跑了四模式 GUI 实测（D/A/B/C 各一次），实网暴露两个只在真实 GUI 链路出现的缺陷，本版修复：
+
+- **导出功能不可用（P1）**：导出/设置备份走 `plugin:fs|write_text_file`，但 capabilities 只配了 `fs:default`（只读权限集），点击导出必报 "not allowed by ACL"。0.5.1 起即 latent，GUI 实测首次踩中。修复：capabilities 增加 `fs:allow-write-text-file`（scope `**`——路径来自用户自己的保存对话框）。
+- **history.validation_passed 恒缺（P1）**：保存历史条目时读 `pipeline.validation`（React state 闭包在生成点击时定格为 null），audit_result 的更新对保存点不可见——四模式实测记录全部缺校验结论、导出头部声明恒为"结论未知"。与 usageRef 当初的归零完全同构。修复：新增 `validationRef`（audit_start 清零 / audit_result 写入 / run 启动与 reset 复位），保存改读 ref，与 degradedRef/usageRef 同模式。
+
 ## 0.5.2（2026-09-08）圆桌逻辑升级——规则闭环 · 转写契约 · 诚实降级
 
 吸收《多Agent协作对话系统》任务书机制设计，对圆桌流水线做逻辑升级（详见 `docs/2026-09-08-roundtable-logic-upgrade-plan.md`，ADR-1/2/3 已 Accepted）。

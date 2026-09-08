@@ -6,6 +6,10 @@
   "permissions": [
     "core:default",
     "fs:default",
+    {
+      "identifier": "fs:allow-write-text-file",
+      "allow": [{ "path": "**" }]
+    },
     "dialog:default",
     "opener:default"
   ]

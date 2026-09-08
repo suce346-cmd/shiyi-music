@@ -202,6 +202,10 @@ export function usePipeline() {
   /** C5/ADR-3：降级标记累积引用（degraded 事件同步追加）：历史保存同源读取；
    * 条目格式 "flag：detail"，空数组=无降级（entry.degraded 不写，与旧记录一致） */
   const degradedRef = useRef<string[]>([]);
+  /** C5：硬校验结论实时引用（audit_start 清零 / audit_result 同步写入）：历史保存同源读取。
+   * 不读 state——pipeline.validation 在保存闭包里定格为点击时的 null（validation_passed
+   * 恒缺的根因，与 usageRef 当初的归零同构） */
+  const validationRef = useRef<{ passed: boolean; issues: string[] } | null>(null);
   /** 后端元数据（启动获取一次；失败回退本地缓存/内置表，不阻断） */
   const [meta, setMeta] = useState<PipelineMeta | null>(() => {
     try {
@@ -327,6 +331,7 @@ export function usePipeline() {
             doneStages: prev.doneStages.filter((s) => s !== "auditor"),
             validation: null,
           }));
+          validationRef.current = null;
           updateExpert("auditor", { status: "working", note: "格式输出中…" });
           break;
         case "audit_result":
@@ -342,6 +347,7 @@ export function usePipeline() {
             // 审查通过时清掉打回错误
             error: e.pass ? null : prev.error,
           }));
+          validationRef.current = { passed: e.pass, issues: e.findings };
           speechCbRef.current?.(makeSpeech(
             "auditor",
             e.pass
@@ -437,6 +443,7 @@ export function usePipeline() {
       });
       usageRef.current = { ...ZERO_USAGE };
       degradedRef.current = [];
+      validationRef.current = null;
 
       try {
         await startListening(token, runId);
@@ -543,6 +550,7 @@ export function usePipeline() {
       });
       usageRef.current = { ...ZERO_USAGE };
       degradedRef.current = [];
+      validationRef.current = null;
     },
     [cleanup]
   );
@@ -596,6 +604,6 @@ export function usePipeline() {
   );
 
   // 保留 run/refine/reset 命名（App 调用不变）+ B3 的 cancel + A9 的 getRunId + R3 的 resume
-  // C5：degradedRef 与 usageRef 同模式——历史保存同源读取降级标记累积
-  return { ...state, run, refine, reset, cancel, getRunId, resume, usageRef, degradedRef };
+  // C5：degradedRef / validationRef 与 usageRef 同模式——历史保存同源读取（ref 不受闭包定格影响）
+  return { ...state, run, refine, reset, cancel, getRunId, resume, usageRef, degradedRef, validationRef };
 }
