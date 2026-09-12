@@ -732,6 +732,11 @@ fn host_initial_system(mode: &Mode) -> String {
     // C3/D3：阶段 0 纳入单源——主持人与审改员/校验员同一清单（数字口径同源，加载一致）
     system.push_str("\n\n");
     system.push_str(crate::rules::checklist(mode.to_str_name()));
+    // D-Envelope：方案信封契约（开关关=不注入，回退自由格式）
+    if crate::rules::plan_envelope_enabled() {
+        system.push_str("\n\n");
+        system.push_str(crate::rules::ENVELOPE_SPEC);
+    }
     system
 }
 
@@ -816,9 +821,70 @@ async fn run_host_initial<R: Runtime>(
     }
     let _ = emit(PipelineEvent::HostDone { stage: HostStage::Initial });
     emit_usage(app, PipelineRole::Host, &resp, run_id);
-    Ok(resp.raw)
+    // D-Envelope：信封门——不合契约带纠错重写一次（独立额度，不占校验员打回）；
+    // 说明行超长同门处理（写入点前置，链路最左修最便宜）
+    enforce_envelope(app, resp.raw, system, user, req, budget, run_id).await
 }
 
+/// D-Envelope 信封门：解析失败或缺契约 → 带具体纠错清单重写一次（独立额度）；
+/// 仍不合规 → 发 envelope_fallback 降级标记，原样返回（下游走旧启发式路径，诚实可见）。
+/// 附带说明行机械前置校验（LYRICS 节说明行 ≤DESC_LINE_MAX_CHARS，写入点前置——终稿硬门前的左移）。
+async fn enforce_envelope<R: Runtime>(
+    app: &AppHandle<R>,
+    plan: String,
+    system: String,
+    user_prompt: String,
+    req: &PipelineRequest,
+    budget: &crate::budget::SharedBudget,
+    run_id: &str,
+) -> Result<String, AppError> {
+    if !crate::rules::plan_envelope_enabled() {
+        return Ok(plan);
+    }
+    let defect = crate::rules::envelope_defect(&plan);
+    let Some(defect_msg) = defect else {
+        return Ok(plan);
+    };
+    // 诊断：记录不合规输出首部（定位模型格式偏差形态——信封合规率优化的证据源）
+    tracing::warn!(
+        run_id = %run_id,
+        defect = %defect_msg,
+        output_head = %plan.chars().take(300).collect::<String>(),
+        "信封门：主持人输出不符合契约，进入纠错重写"
+    );
+    let corrective = format!(
+        "{}\n\n【格式纠正】你上一版方案存在以下契约违规：\n{}\n请严格按信封契约重新输出完整方案（内容尽量保留，格式必须全部合规）：\n\n{}",
+        crate::rules::ENVELOPE_SPEC,
+        defect_msg,
+        plan
+    );
+    let (base_url, api_key, model) = resolve_api(req, PipelineRole::Host);
+    let resp = llm::call_llm_silent(
+        &base_url, &api_key, &model,
+        vec![
+            json!({"role":"system","content":system}),
+            json!({"role":"user","content":user_prompt}),
+            json!({"role":"assistant","content":plan}),
+            json!({"role":"user","content":corrective}),
+        ],
+        llm::MAX_TOKENS_CAP,
+        req.thinking,
+        budget,
+        &req.generation.clone().unwrap_or_default(),
+        run_id,
+        llm::FINAL_STAGE_RESERVE,
+    )
+    .await?;
+    emit_usage(app, PipelineRole::Host, &resp, run_id);
+    if crate::rules::envelope_defect(&resp.raw).is_none() {
+        return Ok(resp.raw);
+    }
+    emit_pipeline_event(app, run_id, PipelineEvent::Degraded {
+        flag: "envelope_fallback".into(),
+        detail: "方案两次未通过信封契约，回退自由格式路径（保真校验降权，硬校验照常）".into(),
+    });
+    Ok(plan)
+}
 /// 主持人汇总 user prompt 构建（纯函数，可测）。
 /// C4/D4：冲突修订对——(角色A下标, 修订A下标, 角色B下标, 修订B下标, target)。
 type ConflictPair = (usize, usize, usize, usize, String);
@@ -913,9 +979,14 @@ async fn run_host_summarize<R: Runtime>(
     let user = build_summarize_user_prompt(current_plan, round_changes, req.original_lyrics_text());
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Host);
     let _ = emit(PipelineEvent::HostStart { stage: HostStage::Summarize });
+    // D-Envelope：汇总阶段 system 同样注入信封契约（与阶段 0 同源）
+    let mut host_system = crate::rules::interpolate(host.system_prompt);
+    if crate::rules::plan_envelope_enabled() {
+        host_system.push_str("\n\n");
+        host_system.push_str(crate::rules::ENVELOPE_SPEC);
+    }
     let messages = vec![
-        // C3：角色提示词过数值单源插值（主持人人设无占位符时原样返回）
-        json!({"role":"system","content":crate::rules::interpolate(host.system_prompt)}),
+        json!({"role":"system","content":host_system}),
         json!({"role":"user","content":user}),
     ];
     let resp = llm::call_llm_silent(
@@ -935,7 +1006,10 @@ async fn run_host_summarize<R: Runtime>(
     }
     let _ = emit(PipelineEvent::HostDone { stage: HostStage::Summarize });
     emit_usage(app, PipelineRole::Host, &resp, run_id);
-    Ok(split_tasks(&resp.raw))
+    let (plan, tasks) = split_tasks(&resp.raw);
+    // D-Envelope：整合后的方案过信封门（格式+说明行长度，独立额度）
+    let plan = enforce_envelope(app, plan, host_system, user, req, budget, run_id).await?;
+    Ok((plan, tasks))
 }
 
 // ---------------------------------------------------------------------------
@@ -960,7 +1034,7 @@ fn mode_c_special_block() -> String {
 }
 
 /// 校验员格式输出 system 构建单源（全文重输与定点重写共用——契约/知识注入口径一致）。
-fn auditor_format_system(req: &PipelineRequest) -> Result<String, AppError> {
+fn auditor_format_system(req: &PipelineRequest, plan: Option<&str>) -> Result<String, AppError> {
     let auditor = roles::auditor();
     let kb = load_knowledge()?;
     // Mode C 切换专用格式规范（通用规范诱导新增歌词段，与逐行对齐约束冲突）
@@ -976,6 +1050,14 @@ fn auditor_format_system(req: &PipelineRequest) -> Result<String, AppError> {
     // C2/ADR-1：转写契约注入（开关关=不注入，回 v0.5.1 重写语义）
     if transcription_fidelity_enabled() {
         system.push_str(roles::TRANSCRIPTION_CONTRACT);
+    }
+    // D-Envelope：方案合规信封时，转写指令按节替换——只转写 LYRICS 节，STYLE/PARAMS 节排版，
+    // NOTES 节丢弃（40 例实测 81% 误报的根治：非歌词制品物理上进不了转写视野）
+    let envelope_ok = plan
+        .map(|p| crate::rules::plan_envelope_enabled() && crate::rules::parse_plan_sections(p).is_some())
+        .unwrap_or(false);
+    if envelope_ok {
+        system.push_str("\n\n【信封转写规则（覆盖格式化冲动）】方案已按信封分节：\n1. <<<LYRICS>>> 节：逐字转写为终稿歌词区（结构标签/说明行/歌词行，行序字数不变）\n2. <<<STYLE>>> 节：排版为终稿的 Style Prompt 行（不得增删内容）\n3. <<<PARAMS>>> 节：排版为终稿末尾参数行\n4. <<<NOTES>>> 节：元信息，整节丢弃，任何内容不得进入终稿\n除上述四条外，方案的其余部分（如存在）一律忽略。\n");
     }
     Ok(system)
 }
@@ -1008,7 +1090,7 @@ async fn run_audit_format<R: Runtime>(
     plan: &str,
     issues: Option<&[String]>,
 ) -> Result<(String, bool), AppError> {
-    let system = auditor_format_system(ctx.request)?;
+    let system = auditor_format_system(ctx.request, Some(plan))?;
     let mut user = if ctx.fidelity {
         format!("以下是已收敛的最终方案，请按【转写契约】转写为最终提示词包（转写不是重写）：\n\n{}", plan)
     } else {
@@ -1039,7 +1121,7 @@ async fn run_audit_targeted_rewrite<R: Runtime>(
     final_text: &str,
     issues: &[String],
 ) -> Result<(String, bool), AppError> {
-    let system = auditor_format_system(ctx.request)?;
+    let system = auditor_format_system(ctx.request, Some(plan))?;
     let mut user = format!(
         "【定点重写】终稿的以下歌词行违反转写保真（两侧对照见问题清单）。只输出需要修正的段落：每段以原结构标签行开头，违规行按收敛方案逐字转写修正，其余歌词行逐字保留，不要输出其他段落、不要解释。\n\n【保真校验问题】\n{}\n\n【终稿（被点名的段落在此，供定位）】\n{}\n\n【收敛方案（歌词唯一正源）】\n{}",
         issues.iter().map(|i| format!("- {}", i)).collect::<Vec<_>>().join("\n"),
@@ -1251,6 +1333,53 @@ fn collect_final_issues<R: Runtime>(
     issues
 }
 
+/// D-责任分离（2026-09-09）：打回 issue 责任归属。
+/// Plan = 方案内容缺陷（主持人回炉修：配器/字数/Hook/骤停/行宽/行数/Style 长度/参数）；
+/// Transcription = 排版缺陷（校验员回炉修：保真搬运差异/格式要素缺失/截断）。
+/// 匹配串与 validator.rs 的 issue 文案逐字对齐（单测锁口径）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IssueOwner {
+    Plan,
+    Transcription,
+}
+
+fn classify_issue_owner(issue: &str) -> IssueOwner {
+    // 转写类：保真搬运差异（envelope 下只含 LYRICS 节真实歌词差异）
+    if issue.starts_with("保真校验") {
+        return IssueOwner::Transcription;
+    }
+    if issue == TRUNCATION_ISSUE {
+        return IssueOwner::Transcription;
+    }
+    // 排版要素缺失/变形（转写契约允许校验员补齐/修正的格式要素）
+    if issue.contains("未找到 Style Prompt 字段") || issue.contains("Style Prompt 标签") {
+        return IssueOwner::Transcription;
+    }
+    if issue.contains("缺参数行") || issue.contains("未发现能量标注") || issue.contains("未找到任何说明行") {
+        return IssueOwner::Transcription;
+    }
+    if issue.contains("结构标签不足") {
+        return IssueOwner::Transcription;
+    }
+    // 方案内容类：结构/编曲/字数/长度/参数值
+    if issue.contains("Hook 出现")
+        || issue.contains("配器")
+        || issue.contains("字数不符")
+        || issue.contains("歌词行超")
+        || issue.contains("行数")
+        || issue.contains("骤停")
+        || issue.contains("能量差")
+        || issue.contains("Style Prompt 长度")
+        || issue.contains("Style Prompt 过短")
+        || issue.contains("参数越界")
+        || issue.contains("说明行超")
+    {
+        return IssueOwner::Plan;
+    }
+    // 未识别文案保守归方案侧（内容缺陷的代价是降级，排版误归主持人的代价是多一轮整合——保守取重）
+    IssueOwner::Plan
+}
+
 /// 单次打回动作：纯保真违规 → 定点重写拼接（其余段落字节不动）返回 true；
 /// 混有硬校验问题 / 模型未输出可拼接段落 → 返回 false（调用方回退全文重输）。
 async fn one_fidelity_retry<R: Runtime>(
@@ -1296,45 +1425,87 @@ async fn handle_loop_markers<R: Runtime>(
 
 /// 保真 + 硬校验打回循环（≤2）。循环内 collect 覆盖最后一次重写输出
 /// （历史真 bug：末次输出从未被校验——已修）。
+///
+/// D-责任分离（2026-09-09，替代旧单通道）：打回按责任归属拆双通道——
+/// - Auditor 通道（≤2）：转写类 issue（保真/格式要素缺失/截断）——定点重写或全文重输
+/// - Host 通道（≤2）：方案内容类 issue（配器/字数/Hook/骤停/行宽/行数/Style 长度）——
+///   主持人整合修复 → 以新方案重新转写（校验员额度随新方案重置）
+/// 修复旧缺陷：真违规（配器丢失等）此前与保真误报共挤 2 次额度，全部打回耗尽降级。
 async fn fidelity_retry_loop<R: Runtime>(
     ctx: &FinalStageCtx<'_, R>,
     mut plan: String,
     mut final_text: String,
     mut truncated: bool,
 ) -> Result<(String, Vec<String>), AppError> {
-    let mut issues = collect_final_issues(ctx, &plan, &final_text, truncated);
-    for _ in 0..2 {
+    let collect = |plan: &str, text: &str, truncated: bool| -> Vec<(IssueOwner, String)> {
+        collect_final_issues(ctx, plan, text, truncated)
+            .into_iter()
+            .map(|i| (classify_issue_owner(&i), i))
+            .collect()
+    };
+    let mut auditor_rounds = 0u32;
+    let mut host_rounds = 0u32;
+    let mut issues = collect(&plan, &final_text, truncated);
+    loop {
+        let aud: Vec<String> = issues.iter().filter(|(o, _)| *o == IssueOwner::Transcription).map(|(_, i)| i.clone()).collect();
+        let plan_issues: Vec<String> = issues.iter().filter(|(o, _)| *o == IssueOwner::Plan).map(|(_, i)| i.clone()).collect();
         if issues.is_empty() {
             break;
         }
-        emit_pipeline_event(ctx.app, ctx.run_id, PipelineEvent::Retry {
-            role: PipelineRole::Auditor,
-            reason: issues.join("；"),
-        });
-        if !one_fidelity_retry(ctx, &plan, &mut final_text, &mut truncated, &issues).await {
-            let (text, t) = run_audit_format(ctx, &plan, Some(&issues)).await?;
+        if !aud.is_empty() && auditor_rounds < 2 {
+            auditor_rounds += 1;
+            emit_pipeline_event(ctx.app, ctx.run_id, PipelineEvent::Retry {
+                role: PipelineRole::Auditor,
+                reason: aud.join("；"),
+            });
+            if !one_fidelity_retry(ctx, &plan, &mut final_text, &mut truncated, &aud).await {
+                let (text, t) = run_audit_format(ctx, &plan, Some(&aud)).await?;
+                final_text = text;
+                truncated = t;
+            }
+            handle_loop_markers(ctx, &mut plan, &mut final_text, &mut truncated).await?;
+            issues = collect(&plan, &final_text, truncated);
+            continue;
+        }
+        if !plan_issues.is_empty() && host_rounds < 2 {
+            host_rounds += 1;
+            emit_pipeline_event(ctx.app, ctx.run_id, PipelineEvent::Retry {
+                role: PipelineRole::Host,
+                reason: plan_issues.join("；"),
+            });
+            // 主持人回炉：方案内容缺陷按"谁发现谁修"责任链交主持人整合（信封门在其出口兜格式）
+            let synthetic = auditor_repair_changes(&plan_issues);
+            let (new_plan, _) = run_host_summarize(ctx.app, &plan, &synthetic, ctx.request, ctx.budget, ctx.run_id).await?;
+            plan = new_plan;
+            // 新方案 → 重新转写（校验员额度随新方案重置）
+            let (text, t) = run_audit_format(ctx, &plan, None).await?;
             final_text = text;
             truncated = t;
+            handle_loop_markers(ctx, &mut plan, &mut final_text, &mut truncated).await?;
+            auditor_rounds = 0;
+            issues = collect(&plan, &final_text, truncated);
+            continue;
         }
-        handle_loop_markers(ctx, &mut plan, &mut final_text, &mut truncated).await?;
-        issues = collect_final_issues(ctx, &plan, &final_text, truncated);
+        break;
     }
-    // C5/ADR-3：gate_degraded——打回耗尽降级返回（AuditResult pass=false 同源）
+    // C5/ADR-3：gate_degraded——回炉耗尽降级返回（detail 标注残留归属，诚实可见）
     if !issues.is_empty() {
+        let plan_left = issues.iter().filter(|(o, _)| *o == IssueOwner::Plan).count();
+        let aud_left = issues.len() - plan_left;
         emit_pipeline_event(
             ctx.app,
             ctx.run_id,
             PipelineEvent::Degraded {
                 flag: "gate_degraded".into(),
-                detail: "硬校验打回耗尽，降级返回最后一次方案".into(),
+                detail: format!("回炉耗尽，降级返回最后一次方案（残留：方案内容类 {} 条 / 转写类 {} 条）", plan_left, aud_left),
             },
         );
     }
     emit_pipeline_event(ctx.app, ctx.run_id, PipelineEvent::AuditResult {
         pass: issues.is_empty(),
-        findings: issues.clone(),
+        findings: issues.iter().map(|(_, i)| i.clone()).collect(),
     });
-    Ok((final_text, issues))
+    Ok((final_text, issues.iter().map(|(_, i)| i.clone()).collect()))
 }
 
 async fn produce_final_text<R: Runtime>(
@@ -1951,6 +2122,34 @@ pub async fn interject_feedback(run_id: Option<String>, note: String) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- D-责任分离：issue 责任分类（口径与 validator 文案逐字对齐） ----
+
+    #[test]
+    fn classify_fidelity_issues_go_to_auditor() {
+        assert_eq!(classify_issue_owner("保真校验: 收敛方案第5行歌词「xx」在终稿中缺失"), IssueOwner::Transcription);
+        assert_eq!(classify_issue_owner(TRUNCATION_ISSUE), IssueOwner::Transcription);
+        assert_eq!(classify_issue_owner("未找到 Style Prompt 字段"), IssueOwner::Transcription);
+        assert_eq!(classify_issue_owner("缺参数行（末尾须输出 `Weirdness=..`）"), IssueOwner::Transcription);
+        assert_eq!(classify_issue_owner("结构标签不足 2 个（当前 1）"), IssueOwner::Transcription);
+    }
+
+    #[test]
+    fn classify_plan_content_issues_go_to_host() {
+        assert_eq!(classify_issue_owner("最弱段配器 2 件（要求 >= 3 件）"), IssueOwner::Plan);
+        assert_eq!(classify_issue_owner("Hook 出现 0 次（要求 >= 2）"), IssueOwner::Plan);
+        assert_eq!(classify_issue_owner("说明行超 80 字符（99 字符）: [x]"), IssueOwner::Plan);
+        assert_eq!(classify_issue_owner("缺少骤停标记（结尾应一刀切）"), IssueOwner::Plan);
+        assert_eq!(classify_issue_owner("共 2 行字数不符"), IssueOwner::Plan);
+        assert_eq!(classify_issue_owner("Style Prompt 长度 380 超限（> 350）"), IssueOwner::Plan);
+        assert_eq!(classify_issue_owner("参数越界: Weirdness=50"), IssueOwner::Plan);
+        assert_eq!(classify_issue_owner("歌词行超 10 字（13 字）: x"), IssueOwner::Plan);
+    }
+
+    #[test]
+    fn classify_unknown_conservative_plan() {
+        assert_eq!(classify_issue_owner("某种未来新增的未知缺陷"), IssueOwner::Plan, "未识别文案保守归方案侧");
+    }
 
     // ---- C4/D4：冲突预检标注（红灯先行——检测桩返回空时冲突用例必须失败） ----
 
@@ -2853,5 +3052,16 @@ mod tests {
             let name = m.to_str_name();
             std::fs::write(dir.join(format!("{}.txt", name)), prompt_for_mode(&m)).unwrap();
         }
+    }
+
+    /// D-Envelope 诊断：导出 mode_d 完整 host system（含信封契约），供线下探测模型格式遵从形态。
+    #[test]
+    #[ignore]
+    fn dump_host_system_d() {
+        let sys = host_initial_system(&Mode::ModeD);
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/large-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("host_system_d.txt"), sys).unwrap();
+        println!("dumped to target/large-test/host_system_d.txt");
     }
 }

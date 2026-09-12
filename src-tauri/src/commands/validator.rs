@@ -424,9 +424,26 @@ fn lyric_multiset_issues(plan_lines: &[(usize, String)], final_lines: &[(usize, 
 /// mode_c 返回空：validate_lyric_fill 已以原歌词为基准逐行硬校验，且尾部 ≤2 行收尾的
 /// 合法差异会使 plan 基比对产生假阳性（ADR-1 附注）。
 /// 说明行/标签/参数行不比——转写契约允许转写者补齐/修正这些格式要素。
+///
+/// D-Envelope（2026-09-09）：方案合规信封时只比对 LYRICS 节——围栏/表格/参数行/元话语
+/// 物理上在节外，启发式分类器在方案侧退役（40 例实测 81% 误报根除）。
+/// 方案不合信封（旧检查点续跑/信封降级回退/开关关）→ 回退启发式全文本路径。
 pub fn check_transcription_fidelity(converged_plan: &str, final_text: &str, mode: &str) -> Vec<String> {
     if mode == "mode_c" {
         return Vec::new();
+    }
+    if crate::rules::plan_envelope_enabled() {
+        if let Some(sections) = crate::rules::parse_plan_sections(converged_plan) {
+            let plan_lines: Vec<(usize, String)> = sections
+                .lyrics_lines()
+                .into_iter()
+                .filter(|l| is_lyric_line(l))
+                .enumerate()
+                .map(|(i, l)| (i + 1, l.chars().filter(|c| !c.is_whitespace()).collect()))
+                .collect();
+            let final_lines = normalized_lyric_lines(final_text);
+            return lyric_multiset_issues(&plan_lines, &final_lines);
+        }
     }
     lyric_multiset_issues(&normalized_lyric_lines(converged_plan), &normalized_lyric_lines(final_text))
 }
@@ -1424,5 +1441,24 @@ TRANSCRIPTION_ISSUE: 收敛方案含 ``` 围栏与参数行格式错误，需主
         let r = validate_douyin(text);
         // 歌词行 4 字/6 字都不超长；Style/参数行不再被误计
         assert!(!r.issues.iter().any(|i| i.contains("超 10 字")), "issues: {:?}", r.issues);
+}
+
+/// D-Envelope 保真回归（40 例实测 81% 误报的死刑验证）：
+/// 围栏/表格/参数行/元话语在方案 NOTES 或节外——一律不得报"歌词缺失"；
+/// LYRICS 节内真实歌词差异——必须带行号报出。
+#[test]
+fn fidelity_envelope_ignores_markdown_artifacts() {
+    let plan = "<<<LYRICS>>>\n[Intro]\n[clean pad, 能量:2]\n凌晨 两点半\n<<<STYLE>>>\nStyle Prompt: dark trap\n<<<PARAMS>>>\nWeirdness=18|StyleInfluence=92|AudioInfluence=0\n<<<NOTES>>>\n```markdown\n|参数|值|\n|---|---|\n已收敛，无需下一轮讨论。\n```";
+    // 终稿与 LYRICS 节一致（围栏/表格/元话语哪怕全丢也不算违规）
+    let final_ok = "Style Prompt: dark trap, 140BPM\n[Intro]\n[clean pad, 能量:2]\n凌晨 两点半\n参数: Weirdness=18|StyleInfluence=92|AudioInfluence=0";
+    assert!(
+        check_transcription_fidelity(plan, final_ok, "mode_d").is_empty(),
+        "markdown 制品不得再触发保真误报"
+    );
+    // LYRICS 节歌词被改 → 必须报（带行号）
+    let final_bad = "Style Prompt: dark trap, 140BPM\n[Intro]\n[clean pad, 能量:2]\n凌晨 三点半\n参数: Weirdness=18|StyleInfluence=92|AudioInfluence=0";
+    let issues = check_transcription_fidelity(plan, final_bad, "mode_d");
+    assert!(!issues.is_empty(), "LYRICS 节真实歌词差异必须报出");
+    assert!(issues[0].contains("第"), "报错应带行号: {:?}", issues);
 }
 }

@@ -27,3 +27,4 @@ app-icon.svg
 
 # Local tool artifacts
 .mimosa
+target/
