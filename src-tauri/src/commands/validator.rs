@@ -94,7 +94,7 @@ fn parse_section_instruments(line: &str) -> usize {
     let parts: Vec<&str> = line.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
     let non_instrument_keywords = [
         "voice", "vocal", "人声", "声", "room", "空间", "hall", "大厅", "能量",
-        "力度", "no voice", "无", "氛围", "atmosphere", "reverb", "混响",
+        "力度", "no voice", "无", "氛围", "atmosphere", "reverb", "混响", "极简段",
     ];
     let mut count = parts.len();
     while count > 0 {
@@ -124,6 +124,26 @@ fn extract_section_instrument_counts(text: &str) -> Vec<(String, usize)> {
             // 说明行：为该节配器数
             if let Some(section) = &current_section {
                 result.push((section.clone(), parse_section_instruments(t)));
+            }
+        }
+    }
+    result
+}
+
+/// D-极简段豁免（2026-09-13，与 D 模式叙事型例外同设计模式）：
+/// 说明行含"极简段"标记的段落，豁免最弱段件数下限（MIN_INSTRUMENT_WEAK）——
+/// 抒情/叙事曲的 Bridge/Intro 用 1-2 件乐器是合法音乐设计（40 例实证 P6 三连
+/// [Intro]:2件 被规则逼降级）。豁免须显式声明，可审计；能量差/配器差/上限照查。
+fn declared_minimal_sections(text: &str) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut current_section: Option<String> = None;
+    for line in text.lines() {
+        let t = line.trim();
+        if t.starts_with('[') && t.ends_with(']') && !t.contains(',') {
+            current_section = Some(t.to_string());
+        } else if t.starts_with('[') && t.ends_with(']') && t.contains(',') && t.contains("极简段") {
+            if let Some(section) = &current_section {
+                result.push(section.clone());
             }
         }
     }
@@ -172,6 +192,12 @@ pub fn validate_production(mode: &str, text: &str) -> ValidationResult {
     // 1件→修→8件过限）变为按段加/减乐器。明细单源 = extract_section_instrument_counts。
     if mode == "mode_a" || mode == "mode_b" {
         let counts = extract_section_instrument_counts(text);
+        // D-极简段豁免：声明"极简段"的段落不计入最弱段下限检查（能量差/差值/上限照查）
+        let minimal: Vec<String> = declared_minimal_sections(text);
+        let counted: Vec<&(String, usize)> = counts
+            .iter()
+            .filter(|(tag, _)| !minimal.iter().any(|m| tag.contains(m.as_str()) || m.contains(tag.as_str())))
+            .collect();
         if !counts.is_empty() {
             let detail = counts
                 .iter()
@@ -186,8 +212,8 @@ pub fn validate_production(mode: &str, text: &str) -> ValidationResult {
                     min_count, max_count, rules::MIN_INSTRUMENT_GAP, detail
                 ));
             }
-            if min_count < rules::MIN_INSTRUMENT_WEAK {
-                let weak: Vec<String> = counts.iter().filter(|(_, c)| *c < rules::MIN_INSTRUMENT_WEAK).map(|(t, c)| format!("{}:{}件", t, c)).collect();
+            if !counted.is_empty() && counted.iter().any(|(_, c)| *c < rules::MIN_INSTRUMENT_WEAK) {
+                let weak: Vec<String> = counted.iter().filter(|(_, c)| *c < rules::MIN_INSTRUMENT_WEAK).map(|(t, c)| format!("{}:{}件", t, c)).collect();
                 issues.push(format!(
                     "最弱段配器不足（要求 >= {} 件）——需按段补乐器: {}；当前各段件数 [{}]",
                     rules::MIN_INSTRUMENT_WEAK,
@@ -898,6 +924,20 @@ mod tests {
         );
         let issues = check_transcription_fidelity_impl(&plan, &fidelity_plan(), "mode_a", false);
         assert!(issues.is_empty(), "元信息行不应参与保真比对: {:?}", issues);
+    }
+
+    /// D-极简段豁免：声明"极简段"的 2 件段落豁免下限；未声明的仍拦截
+    #[test]
+    fn minimal_section_declaration_exempts_weak_floor() {
+        // 其余规则全满足：能量 1→8（差7≥3）、强段 5 件、带参数行
+        let base = "Style Prompt: 抒情民谣, 72BPM\n[Intro]\n[felt piano, rain room, 极简段, 能量:1]\n我 走 在 巷 口\n[Verse]\n[felt piano, nylon guitar, upright bass, brushed drums, warm strings, 能量:8]\n雨声 先落下来\n心火 不肯灭\n参数: Weirdness=25 | Style Influence=80 | Audio Influence=0";
+        let r = validate_production("mode_a", base);
+        assert!(r.passed, "声明极简段的段落应豁免下限: {:?}", r.issues);
+        // 未声明：去掉极简段标记（保留同器材配置）→ 必须拦
+        let undeclared = base.replace(", 极简段,", ", room,");
+        let r2 = validate_production("mode_a", &undeclared);
+        assert!(!r2.passed, "未声明极简段不得豁免: {:?}", r2.issues);
+        assert!(r2.issues.iter().any(|i| i.contains("最弱段配器不足")));
     }
 
     /// mode_c 交由 validate_lyric_fill 原词基准硬校验——保真层 no-op（不双报）
