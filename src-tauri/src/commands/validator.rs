@@ -247,9 +247,29 @@ pub fn validate_production(mode: &str, text: &str) -> ValidationResult {
         // C1/ADR-2：参数区间硬门——CHECKLIST_A/B 承诺的区间准绳由代码执行。
         // 此前 rules::MODE_B_*/ARC_PARAMS 仅有常量与提示词表述、无任何执行点（诊断复现：50/50 双双通过）。
         issues.extend(param_range_issues(mode, text));
+        // O5（2026-09-13）：断句/禁用标点硬门——校验清单声明"断句单空格、禁 / 与 、"，
+        // 此前仅提示词承诺无执行点（清单-代码口径漂移复发案例）。歌词行检出即报（带行号）。
+        issues.extend(forbidden_break_marks(text));
     }
 
     if issues.is_empty() { ValidationResult::ok() } else { ValidationResult::fail(issues) }
+}
+
+/// O5：歌词行禁用断句符号检出（`/` 斜杠、`、` 顿号——Suno 会读出或忽略）。
+/// 只查歌词行（行型解析），说明行/标签/参数行不查。
+fn forbidden_break_marks(text: &str) -> Vec<String> {
+    let mut issues = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        let t = line.trim();
+        if is_lyric_line(t) && (t.contains('/') || t.contains('、')) {
+            issues.push(format!(
+                "第{}行使用了禁用断句符号（/ 或 、——Suno 会读出或忽略），请改用单空格断句: {}",
+                i + 1,
+                t
+            ));
+        }
+    }
+    issues
 }
 
 /// C1/ADR-2：A/B 参数区间硬门调度（调用方已限定 mode_a/mode_b）。
@@ -539,6 +559,8 @@ pub fn validate_lyric_fill(original: &str, new: &str) -> ValidationResult {
     if orig_lines.is_empty() || new_lines.is_empty() {
         return ValidationResult::fail(vec!["原歌词或新歌词为空".to_string()]);
     }
+    // O5：C 模式同禁断句符号（校验清单同源）
+    issues.extend(forbidden_break_marks(new));
 
     // 字数逐行对比：前 N 行（N=原歌词行数）逐行等字数（去空白+去标点，Q2 与 prompt 同口径）。
     // 允许尾部 ≤2 行收尾（如 Outro 一句）；超过报"多余歌词行"。
@@ -938,6 +960,15 @@ mod tests {
         let r2 = validate_production("mode_a", &undeclared);
         assert!(!r2.passed, "未声明极简段不得豁免: {:?}", r2.issues);
         assert!(r2.issues.iter().any(|i| i.contains("最弱段配器不足")));
+    }
+
+    /// O5：禁用断句符号检出（/ 与 、）
+    #[test]
+    fn forbidden_break_marks_detected() {
+        let text = "Style Prompt: folk\n[Verse]\n[guitar, 能量:5]\n雨停 了 / 天 晴\n心火 不肯灭\n下一行 没问题";
+        let issues = forbidden_break_marks(text);
+        assert_eq!(issues.len(), 1, "应只报含 / 的歌词行: {:?}", issues);
+        assert!(issues[0].contains("第4行"), "应带行号: {:?}", issues);
     }
 
     /// mode_c 交由 validate_lyric_fill 原词基准硬校验——保真层 no-op（不双报）
