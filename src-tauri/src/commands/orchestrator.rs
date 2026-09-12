@@ -1358,13 +1358,15 @@ fn collect_final_issues<R: Runtime>(
 /// Plan = 方案内容缺陷（主持人回炉修：配器/字数/Hook/骤停/行宽/行数/Style 长度/参数）；
 /// Transcription = 排版缺陷（校验员回炉修：保真搬运差异/格式要素缺失/截断）。
 /// 匹配串与 validator.rs 的 issue 文案逐字对齐（单测锁口径）。
+/// plan 参数用于定责分叉：如"未找到任何说明行"——方案有说明行=转写丢失（校验员），
+/// 方案本身没有=方案缺陷（主持人让制作人按 R-4 补写）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum IssueOwner {
     Plan,
     Transcription,
 }
 
-fn classify_issue_owner(issue: &str) -> IssueOwner {
+fn classify_issue_owner(issue: &str, plan: &str) -> IssueOwner {
     // 转写类：保真搬运差异（envelope 下只含 LYRICS 节真实歌词差异）
     if issue.starts_with("保真校验") {
         return IssueOwner::Transcription;
@@ -1376,8 +1378,15 @@ fn classify_issue_owner(issue: &str) -> IssueOwner {
     if issue.contains("未找到 Style Prompt 字段") || issue.contains("Style Prompt 标签") {
         return IssueOwner::Transcription;
     }
-    if issue.contains("缺参数行") || issue.contains("未发现能量标注") || issue.contains("未找到任何说明行") {
+    if issue.contains("缺参数行") || issue.contains("未发现能量标注") {
         return IssueOwner::Transcription;
+    }
+    if issue.contains("未找到任何说明行") {
+        // 定责分叉：方案 LYRICS 节有说明行 → 转写丢失（校验员补回）；方案本身没有 → 方案缺陷
+        let plan_has_desc = crate::rules::parse_plan_sections(plan)
+            .map(|s| s.lyrics_lines().iter().any(|l| l.starts_with('[') && l.ends_with(']') && l.contains(',')))
+            .unwrap_or(false);
+        return if plan_has_desc { IssueOwner::Transcription } else { IssueOwner::Plan };
     }
     if issue.contains("结构标签不足") {
         return IssueOwner::Transcription;
@@ -1462,7 +1471,7 @@ async fn fidelity_retry_loop<R: Runtime>(
     let collect = |plan: &str, text: &str, truncated: bool| -> Vec<(IssueOwner, String)> {
         collect_final_issues(ctx, plan, text, truncated)
             .into_iter()
-            .map(|i| (classify_issue_owner(&i), i))
+            .map(|i| (classify_issue_owner(&i, plan), i))
             .collect()
     };
     let mut auditor_rounds = 0u32;
@@ -2147,30 +2156,41 @@ mod tests {
 
     // ---- D-责任分离：issue 责任分类（口径与 validator 文案逐字对齐） ----
 
+    const EMPTY_PLAN: &str = "";
+
     #[test]
     fn classify_fidelity_issues_go_to_auditor() {
-        assert_eq!(classify_issue_owner("保真校验: 收敛方案第5行歌词「xx」在终稿中缺失"), IssueOwner::Transcription);
-        assert_eq!(classify_issue_owner(TRUNCATION_ISSUE), IssueOwner::Transcription);
-        assert_eq!(classify_issue_owner("未找到 Style Prompt 字段"), IssueOwner::Transcription);
-        assert_eq!(classify_issue_owner("缺参数行（末尾须输出 `Weirdness=..`）"), IssueOwner::Transcription);
-        assert_eq!(classify_issue_owner("结构标签不足 2 个（当前 1）"), IssueOwner::Transcription);
+        assert_eq!(classify_issue_owner("保真校验: 收敛方案第5行歌词「xx」在终稿中缺失", EMPTY_PLAN), IssueOwner::Transcription);
+        assert_eq!(classify_issue_owner(TRUNCATION_ISSUE, EMPTY_PLAN), IssueOwner::Transcription);
+        assert_eq!(classify_issue_owner("未找到 Style Prompt 字段", EMPTY_PLAN), IssueOwner::Transcription);
+        assert_eq!(classify_issue_owner("缺参数行（末尾须输出 `Weirdness=..`）", EMPTY_PLAN), IssueOwner::Transcription);
+        assert_eq!(classify_issue_owner("结构标签不足 2 个（当前 1）", EMPTY_PLAN), IssueOwner::Transcription);
+    }
+
+    #[test]
+    fn classify_desc_line_missing_splits_by_plan() {
+        let plan_with_desc = "<<<LYRICS>>>\n[Intro]\n[pad, 能量:2]\n凌晨\n<<<STYLE>>>\nStyle Prompt: x\n<<<PARAMS>>>\nW=1";
+        // 方案有说明行 → 终稿丢失 = 转写缺陷（校验员补回）
+        assert_eq!(classify_issue_owner("未找到任何说明行（每段应含 [乐器1+行为, ...] 说明行）", plan_with_desc), IssueOwner::Transcription);
+        // 方案本身没有说明行 → 方案缺陷（主持人让制作人按 R-4 补写）
+        assert_eq!(classify_issue_owner("未找到任何说明行（每段应含 [乐器1+行为, ...] 说明行）", EMPTY_PLAN), IssueOwner::Plan);
     }
 
     #[test]
     fn classify_plan_content_issues_go_to_host() {
-        assert_eq!(classify_issue_owner("最弱段配器 2 件（要求 >= 3 件）"), IssueOwner::Plan);
-        assert_eq!(classify_issue_owner("Hook 出现 0 次（要求 >= 2）"), IssueOwner::Plan);
-        assert_eq!(classify_issue_owner("说明行超 80 字符（99 字符）: [x]"), IssueOwner::Plan);
-        assert_eq!(classify_issue_owner("缺少骤停标记（结尾应一刀切）"), IssueOwner::Plan);
-        assert_eq!(classify_issue_owner("共 2 行字数不符"), IssueOwner::Plan);
-        assert_eq!(classify_issue_owner("Style Prompt 长度 380 超限（> 350）"), IssueOwner::Plan);
-        assert_eq!(classify_issue_owner("参数越界: Weirdness=50"), IssueOwner::Plan);
-        assert_eq!(classify_issue_owner("歌词行超 10 字（13 字）: x"), IssueOwner::Plan);
+        assert_eq!(classify_issue_owner("最弱段配器 2 件（要求 >= 3 件）", EMPTY_PLAN), IssueOwner::Plan);
+        assert_eq!(classify_issue_owner("Hook 出现 0 次（要求 >= 2）", EMPTY_PLAN), IssueOwner::Plan);
+        assert_eq!(classify_issue_owner("说明行超 80 字符（99 字符）: [x]", EMPTY_PLAN), IssueOwner::Plan);
+        assert_eq!(classify_issue_owner("缺少骤停标记（结尾应一刀切）", EMPTY_PLAN), IssueOwner::Plan);
+        assert_eq!(classify_issue_owner("共 2 行字数不符", EMPTY_PLAN), IssueOwner::Plan);
+        assert_eq!(classify_issue_owner("Style Prompt 长度 380 超限（> 350）", EMPTY_PLAN), IssueOwner::Plan);
+        assert_eq!(classify_issue_owner("参数越界: Weirdness=50", EMPTY_PLAN), IssueOwner::Plan);
+        assert_eq!(classify_issue_owner("歌词行超 10 字（13 字）: x", EMPTY_PLAN), IssueOwner::Plan);
     }
 
     #[test]
     fn classify_unknown_conservative_plan() {
-        assert_eq!(classify_issue_owner("某种未来新增的未知缺陷"), IssueOwner::Plan, "未识别文案保守归方案侧");
+        assert_eq!(classify_issue_owner("某种未来新增的未知缺陷", EMPTY_PLAN), IssueOwner::Plan, "未识别文案保守归方案侧");
     }
 
     // ---- C4/D4：冲突预检标注（红灯先行——检测桩返回空时冲突用例必须失败） ----

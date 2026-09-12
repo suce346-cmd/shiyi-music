@@ -168,25 +168,47 @@ pub fn validate_production(mode: &str, text: &str) -> ValidationResult {
 
     // 4. 配器差 ≥ 单源下限 + 弱强段下限：解析每段说明行乐器数（Mode A/B 都校验）
     // Q2：此前只查差值与上限，弱段 1 件/强段 4 件可蒙混过关；现补 MIN_INSTRUMENT_WEAK/STRONG 两条下限。
+    // D-靶向修复：issue 附每段件数明细（段名:件数）——回炉修复从"盲修打摆子"（40例实测 P10':
+    // 1件→修→8件过限）变为按段加/减乐器。明细单源 = extract_section_instrument_counts。
     if mode == "mode_a" || mode == "mode_b" {
         let counts = extract_section_instrument_counts(text);
         if !counts.is_empty() {
+            let detail = counts
+                .iter()
+                .map(|(tag, c)| format!("{}:{}", tag, c))
+                .collect::<Vec<_>>()
+                .join(", ");
             let min_count = counts.iter().map(|(_, c)| *c).min().unwrap_or(0);
             let max_count = counts.iter().map(|(_, c)| *c).max().unwrap_or(0);
             if max_count.saturating_sub(min_count) < rules::MIN_INSTRUMENT_GAP {
                 issues.push(format!(
-                    "配器差不足: 最少 {} 件 / 最多 {} 件（要求差 >= {} 件）",
-                    min_count, max_count, rules::MIN_INSTRUMENT_GAP
+                    "配器差不足: 最少 {} 件 / 最多 {} 件（要求差 >= {} 件）；当前各段件数 [{}]",
+                    min_count, max_count, rules::MIN_INSTRUMENT_GAP, detail
                 ));
             }
             if min_count < rules::MIN_INSTRUMENT_WEAK {
-                issues.push(format!("最弱段配器 {} 件（要求 >= {} 件）", min_count, rules::MIN_INSTRUMENT_WEAK));
+                let weak: Vec<String> = counts.iter().filter(|(_, c)| *c < rules::MIN_INSTRUMENT_WEAK).map(|(t, c)| format!("{}:{}件", t, c)).collect();
+                issues.push(format!(
+                    "最弱段配器不足（要求 >= {} 件）——需按段补乐器: {}；当前各段件数 [{}]",
+                    rules::MIN_INSTRUMENT_WEAK,
+                    weak.join(", "),
+                    detail
+                ));
             }
             if max_count < rules::MIN_INSTRUMENT_STRONG {
-                issues.push(format!("最强段配器 {} 件（要求 >= {} 件）", max_count, rules::MIN_INSTRUMENT_STRONG));
+                issues.push(format!(
+                    "最强段配器 {} 件（要求 >= {} 件）；当前各段件数 [{}]",
+                    max_count, rules::MIN_INSTRUMENT_STRONG, detail
+                ));
             }
             if max_count > rules::INSTRUMENT_MAX {
-                issues.push(format!("配器过多: 最多 {} 件（要求 <= {}）", max_count, rules::INSTRUMENT_MAX));
+                let heavy: Vec<String> = counts.iter().filter(|(_, c)| *c > rules::INSTRUMENT_MAX).map(|(t, c)| format!("{}:{}件", t, c)).collect();
+                issues.push(format!(
+                    "配器过多（要求 <= {}）——需按段减乐器: {}；当前各段件数 [{}]",
+                    rules::INSTRUMENT_MAX,
+                    heavy.join(", "),
+                    detail
+                ));
             }
         } else {
             issues.push("未找到任何说明行（每段应含 [乐器1+行为, ...] 说明行）".to_string());
