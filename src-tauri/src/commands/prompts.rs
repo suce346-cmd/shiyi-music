@@ -131,7 +131,7 @@ pub fn mode_a_system_prompt() -> &'static str {
 3. 这个声音状态和这段的能量值、情绪质地是否匹配？
 
 **人声坐标维度（用这些维度来描述你设计的人声，而非从模板中选取）：**
-音域(soprano/alto/tenor/baritone/bass) | 音色(clear/breathy/reedy/husky/smoky/raspy/silky) | 发声(breathy/clean/belted/nasal/falsetto/pressed) | 颤音(none/slight/natural/wide/delayed) | 咬字(crisp/soft/slurred/precise/relaxed) | 节奏感(on-beat/behind-the-beat/syncopated/talk-sung)
+六维思考检查表（音域/音色/发声/颤音/咬字/节奏感——英文标签仅作理解参考；说明行 ≤${DOUYIN_DESC_MAX} 字符装不下全部维度，用中文按需描述最关键的 2-3 维即可，不必罗列）
 
 **能量值与人声的对应关系（参考方向，具体状态由歌词心理决定）：**
 - 0-2：几乎不说话、气声、自言自语 → 适合什么心理状态？克制？麻木？沉思？
@@ -659,7 +659,7 @@ pub fn mode_d_system_prompt() -> &'static str {
 4. 这个声音状态和第一步分析的情绪强度是否匹配？
 
 **人声坐标维度（用这些维度来描述你设计的人声）：**
-音域(soprano/alto/tenor/baritone/bass) | 音色(clear/breathy/reedy/husky/smoky/raspy/silky) | 发声(breathy/clean/belted/nasal/falsetto/pressed) | 颤音(none/slight/natural/wide/delayed) | 咬字(crisp/soft/slurred/precise/relaxed) | 节奏感(on-beat/behind-the-beat/syncopated/talk-sung)
+六维思考检查表（音域/音色/发声/颤音/咬字/节奏感——英文标签仅作理解参考；说明行 ≤${DOUYIN_DESC_MAX} 字符装不下全部维度，用中文按需描述最关键的 2-3 维即可，不必罗列）
 
 **抖音特色人声方向参考（仅供参考，禁止直接复制，必须从灵感推导）：**
 - 喊麦方向：rap-sung, heavy bass, aggressive baritone, call-and-response crowd energy
@@ -964,7 +964,7 @@ pub fn mode_b_system_prompt() -> &'static str {
 3. 这个声音状态和这段的能量值、情绪质地是否匹配？
 
 **人声坐标维度：**
-音域(soprano/alto/tenor/baritone/bass) | 音色(clear/breathy/reedy/husky/smoky/raspy/silky) | 发声(breathy/clean/belted/nasal/falsetto/pressed) | 颤音(none/slight/natural/wide/delayed) | 咬字(crisp/soft/slurred/precise/relaxed) | 节奏感(on-beat/behind-the-beat/syncopated/talk-sung)
+六维思考检查表（音域/音色/发声/颤音/咬字/节奏感——英文标签仅作理解参考；说明行 ≤${DOUYIN_DESC_MAX} 字符装不下全部维度，用中文按需描述最关键的 2-3 维即可，不必罗列）
 
 ### 4. 配器与编曲（意象驱动，不是数量驱动）
 

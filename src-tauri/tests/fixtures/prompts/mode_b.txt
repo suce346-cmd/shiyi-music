@@ -127,7 +127,7 @@
 3. 这个声音状态和这段的能量值、情绪质地是否匹配？
 
 **人声坐标维度：**
-音域(soprano/alto/tenor/baritone/bass) | 音色(clear/breathy/reedy/husky/smoky/raspy/silky) | 发声(breathy/clean/belted/nasal/falsetto/pressed) | 颤音(none/slight/natural/wide/delayed) | 咬字(crisp/soft/slurred/precise/relaxed) | 节奏感(on-beat/behind-the-beat/syncopated/talk-sung)
+六维思考检查表（音域/音色/发声/颤音/咬字/节奏感——英文标签仅作理解参考；说明行 ≤80 字符装不下全部维度，用中文按需描述最关键的 2-3 维即可，不必罗列）
 
 ### 4. 配器与编曲（意象驱动，不是数量驱动）
 
