@@ -1301,6 +1301,27 @@ fn auditor_repair_changes(marker_descs: &[String]) -> Vec<(PipelineRole, Vec<Rev
     )]
 }
 
+/// 回炉修订片段：校验员/硬校验发现的问题合成修订，走 run_host_summarize 既有通道交主持人
+/// 定点整合（"谁发现谁修"责任链）。D-责任分离：方案内容类缺陷的修复指令携带领地归属
+/// （说明行超长 → R-4 制作人压缩；字数 → 作词人/改词人；配器 → 制作人），整合有据可依。
+fn plan_repair_changes(plan_issues: &[String]) -> Vec<(PipelineRole, Vec<ReviewChange>, String)> {
+    let content = plan_issues.join("；");
+    let hint = if plan_issues.iter().any(|i| i.contains("说明行超")) {
+        "（说明行超长按 R-4 归制作人：压缩至 80 字符内，保乐器+行为，乐器信息一个不得丢）"
+    } else {
+        "（请按领地归属分发整合）"
+    };
+    vec![(
+        PipelineRole::Auditor,
+        vec![ReviewChange {
+            target: "other".to_string(),
+            content,
+            reason: format!("终稿硬校验发现方案内容缺陷，请整合修正。{}", hint),
+        }],
+        "硬校验方案内容缺陷回炉".to_string(),
+    )]
+}
+
 /// TRANSCRIPTION_ISSUE 回炉：主持人整合硬伤 → 以修复后方案重转写 → 再剥标记。
 /// 返回（新终稿, 是否截断, 修复后方案——调用方以它为后续保真比对正源）。
 async fn repair_transcription_issues<R: Runtime>(
@@ -1362,6 +1383,7 @@ fn classify_issue_owner(issue: &str) -> IssueOwner {
         return IssueOwner::Transcription;
     }
     // 方案内容类：结构/编曲/字数/长度/参数值
+    // 说明行超 → Plan（R-4：说明行最终形态归制作人，压缩发生在方案侧；保真不比说明行，无冲突）
     if issue.contains("Hook 出现")
         || issue.contains("配器")
         || issue.contains("字数不符")
@@ -1474,7 +1496,7 @@ async fn fidelity_retry_loop<R: Runtime>(
                 reason: plan_issues.join("；"),
             });
             // 主持人回炉：方案内容缺陷按"谁发现谁修"责任链交主持人整合（信封门在其出口兜格式）
-            let synthetic = auditor_repair_changes(&plan_issues);
+            let synthetic = plan_repair_changes(&plan_issues);
             let (new_plan, _) = run_host_summarize(ctx.app, &plan, &synthetic, ctx.request, ctx.budget, ctx.run_id).await?;
             plan = new_plan;
             // 新方案 → 重新转写（校验员额度随新方案重置）

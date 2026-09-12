@@ -353,6 +353,9 @@ fn is_bare_package_line(l: &str) -> bool {
 /// 歌词行判定的排除前缀表（单源）：抖音逐行字数门与 C2 保真校验共用同一分类。
 /// '（' 与「注：」「结构归类」开头的方案元信息行同样不算歌词（两侧对称排除，保真比对不受干扰）；
 /// TRANSCRIPTION_ISSUE 标记行不算歌词（P4 实网防御：标记若残留在任何输出中，不得按歌词计字数）。
+/// Suno 终稿行型解析（非"猜"）：终稿格式由转写契约明确定义——结构标签 `[X]`（无逗号）、
+/// 说明行 `[乐器, ...]`（含逗号）、歌词行（其余）。本函数只在这类格式已定义的场合使用
+/// （终稿侧行提取 / 信封 LYRICS 节内部分行型）；主持人自由文本上禁止使用（D-Envelope 已除）。
 const LYRIC_LINE_EXCLUDED_PREFIXES: &[&str] = &[
     "[", "#", "-", "*", "（", "注：", "结构归类", "Style", "风格", "参数", "Weirdness",
     "TRANSCRIPTION_ISSUE",
@@ -427,23 +430,32 @@ fn lyric_multiset_issues(plan_lines: &[(usize, String)], final_lines: &[(usize, 
 ///
 /// D-Envelope（2026-09-09）：方案合规信封时只比对 LYRICS 节——围栏/表格/参数行/元话语
 /// 物理上在节外，启发式分类器在方案侧退役（40 例实测 81% 误报根除）。
-/// 方案不合信封（旧检查点续跑/信封降级回退/开关关）→ 回退启发式全文本路径。
+/// 方案不合信封（信封降级回退/开关关）→ **跳过保真**（返回空）：
+/// 对自由文本跑启发式保真 = 81% 噪音回归，宁可此 run 无保真（硬校验全量保留 + envelope_fallback
+/// 已诚实声明），也不再制造冤案挤占打回额度。开关关（显式回退 v0.5.1 语义）仍走启发式。
 pub fn check_transcription_fidelity(converged_plan: &str, final_text: &str, mode: &str) -> Vec<String> {
+    check_transcription_fidelity_impl(converged_plan, final_text, mode, crate::rules::plan_envelope_enabled())
+}
+
+fn check_transcription_fidelity_impl(converged_plan: &str, final_text: &str, mode: &str, envelope: bool) -> Vec<String> {
     if mode == "mode_c" {
         return Vec::new();
     }
-    if crate::rules::plan_envelope_enabled() {
-        if let Some(sections) = crate::rules::parse_plan_sections(converged_plan) {
-            let plan_lines: Vec<(usize, String)> = sections
-                .lyrics_lines()
-                .into_iter()
-                .filter(|l| is_lyric_line(l))
-                .enumerate()
-                .map(|(i, l)| (i + 1, l.chars().filter(|c| !c.is_whitespace()).collect()))
-                .collect();
-            let final_lines = normalized_lyric_lines(final_text);
-            return lyric_multiset_issues(&plan_lines, &final_lines);
-        }
+    if envelope {
+        return match crate::rules::parse_plan_sections(converged_plan) {
+            Some(sections) => {
+                let plan_lines: Vec<(usize, String)> = sections
+                    .lyrics_lines()
+                    .into_iter()
+                    .filter(|l| is_lyric_line(l))
+                    .enumerate()
+                    .map(|(i, l)| (i + 1, l.chars().filter(|c| !c.is_whitespace()).collect()))
+                    .collect();
+                let final_lines = normalized_lyric_lines(final_text);
+                lyric_multiset_issues(&plan_lines, &final_lines)
+            }
+            None => Vec::new(), // 信封降级回退：跳过保真，不制造启发式噪音
+        };
     }
     lyric_multiset_issues(&normalized_lyric_lines(converged_plan), &normalized_lyric_lines(final_text))
 }
@@ -829,7 +841,7 @@ mod tests {
 雨声 先落下来\n\
 心火 不肯灭\n\
 参数: Weirdness=25 | Style Influence=80 | Audio Influence=0";
-        let issues = check_transcription_fidelity(&fidelity_plan(), final_text, "mode_a");
+        let issues = check_transcription_fidelity_impl(&fidelity_plan(), final_text, "mode_a", false);
         assert!(issues.is_empty(), "纯格式化不应报保真问题: {:?}", issues);
     }
 
@@ -837,7 +849,7 @@ mod tests {
     #[test]
     fn fidelity_rewritten_line_fails_with_line_no_and_both_sides() {
         let final_text = fidelity_plan().replace("深夜 灯亮 键盘响", "深夜 灯亮 琴声远");
-        let issues = check_transcription_fidelity(&fidelity_plan(), &final_text, "mode_a");
+        let issues = check_transcription_fidelity_impl(&fidelity_plan(), &final_text, "mode_a", false);
         assert!(!issues.is_empty(), "改写歌词行应报保真问题");
         assert!(issues.iter().any(|i| i.contains("第7行")), "缺终稿行号: {:?}", issues);
         assert!(issues.iter().any(|i| i.contains("琴声远")), "缺终稿原文: {:?}", issues);
@@ -850,7 +862,7 @@ mod tests {
         let final_text = fidelity_plan()
             .replace("窗外 雨落 心火燃\n", "") // 删行
             .replace("雨声 先落下来", "雨声 先落下来\n临时 凑数 一行词"); // 加行
-        let issues = check_transcription_fidelity(&fidelity_plan(), &final_text, "mode_a");
+        let issues = check_transcription_fidelity_impl(&fidelity_plan(), &final_text, "mode_a", false);
         assert!(issues.iter().any(|i| i.contains("未见于收敛方案")), "加行未报: {:?}", issues);
         assert!(issues.iter().any(|i| i.contains("在终稿中缺失")), "删行未报: {:?}", issues);
     }
@@ -862,7 +874,7 @@ mod tests {
             "参数: Weirdness=25",
             "结构归类：叙事型弧线，参数沿用弧线区间\n参数: Weirdness=25",
         );
-        let issues = check_transcription_fidelity(&plan, &fidelity_plan(), "mode_a");
+        let issues = check_transcription_fidelity_impl(&plan, &fidelity_plan(), "mode_a", false);
         assert!(issues.is_empty(), "元信息行不应参与保真比对: {:?}", issues);
     }
 
