@@ -663,12 +663,6 @@ async fn execute_audit_review<R: Runtime>(
     system.push('\n');
     system.push_str("\n输出 JSON（严格符合格式，不输出其他内容）：\n");
     system.push_str(roles::REVIEW_SCHEMA_AUDITOR);
-    // M4（2026-09-13）：mode_c 校验员讨论轮补原词结构规则——此前该规则只在改词人提示词
-    // 与格式阶段存在，讨论阶段校验员不知情，提出"加 [Verse 2]"类修订（40 例实测 C 运行实证），
-    // 争端拖到格式阶段才爆。与改词人提示词同口径。
-    if req.mode == Mode::ModeC {
-        system.push_str("\n【Mode C 结构铁律（审查时必须执行）】新歌词的段落结构必须与原歌词一致：原歌词几段，新歌词就几段；原歌词没有 Hook/Chorus/Verse 段，禁止提议新增任何歌词段落；每行字数必须与原歌词对应行完全一致。任何违反此铁律的修订（含你自己的修订建议）都应否决。\n");
-    }
 
     let user = build_audit_review_user_prompt(current_plan, round_changes, revisions_log, next_tasks, req);
 
