@@ -164,12 +164,13 @@ async fn large_scale_matrix() {
     let results_path = format!("{}/results.jsonl", dir);
     let cases = matrix();
     // LSM_ONLY：调试过滤器——只跑 prompt_id 含该子串的用例（如 LSM_ONLY=P1）
+    // seq 取全矩阵稳定编号（过滤前），保证断点续跑与过滤器不冲突
     let only = std::env::var("LSM_ONLY").unwrap_or_default();
-    let mut cases = cases;
+    let mut cases: Vec<(usize, Case)> = cases.into_iter().enumerate().map(|(i, c)| (i + 1, c)).collect();
     if !only.is_empty() {
-        cases.retain(|c| c.prompt_id.contains(&only));
+        cases.retain(|(_, c)| c.prompt_id.contains(&only));
     }
-    // 断点续跑：已有 results.jsonl 里的 seq 视为完成，跳过（矩阵顺序确定性，seq 稳定）
+    // 断点续跑：已有 results.jsonl 里的 seq 视为完成，跳过（全矩阵稳定 seq）
     let mut done: std::collections::HashSet<usize> = std::collections::HashSet::new();
     if let Ok(lines) = std::fs::read_to_string(&results_path) {
         for l in lines.lines() {
@@ -184,8 +185,7 @@ async fn large_scale_matrix() {
     let remaining = total - done.intersection(&(1..=total).collect()).count();
     println!("LARGE-SCALE-MATRIX total={} done={} remaining={} results={}", total, done.len(), remaining, results_path);
 
-    for (i, case) in cases.into_iter().enumerate() {
-        let seq = i + 1;
+    for (seq, case) in cases.into_iter() {
         if done.contains(&seq) {
             println!("=== [{}/{}] {} {} SKIP(已完成) ===", seq, total, match_mode(&case.mode), case.prompt_id);
             continue;
