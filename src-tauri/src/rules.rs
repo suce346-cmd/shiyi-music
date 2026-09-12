@@ -414,18 +414,20 @@ pub const ENV_STYLE: &str = "<<<STYLE>>>";
 pub const ENV_PARAMS: &str = "<<<PARAMS>>>";
 pub const ENV_NOTES: &str = "<<<NOTES>>>";
 
-/// 主持人提示词注入的信封规范（单源：提示词与解析器同读此常量，防止两头漂移）
+/// 主持人提示词注入的信封规范（单源：提示词与解析器同读此常量，防止两头漂移）。
+/// 节序 NOTES-first：顺应模型"先思考后产出"天性（40 例实测分析散文前置的固有习惯），
+/// 方法论四步的产出全部归属 NOTES 节，格式宪法与方法论不再冲突。
 pub const ENVELOPE_SPEC: &str = "\
-【方案信封契约（最高优先级，覆盖一切格式化冲动）】你的方案必须且只能按以下四节输出，节标记独立成行、一字不差、按此顺序：
+【方案信封契约（最高优先级，覆盖一切格式化冲动）】你的方案必须且只能按以下节输出，节标记独立成行、一字不差：
+<<<NOTES>>>
+（方法论要求的逐项分析、情感翻译、质量审查结论、裁决理由、整合说明——全部且只能写进本节）
 <<<LYRICS>>>
 （歌词正文：结构标签行 + 说明行 + 歌词行。Style Prompt 行与参数行不得写进本节）
 <<<STYLE>>>
 （Style Prompt 行，含\"Style Prompt:\"标签）
 <<<PARAMS>>>
 （参数行，如 Weirdness=18|StyleInfluence=92|AudioInfluence=0）
-<<<NOTES>>>
-（方法论要求的逐项分析、裁决理由、整合说明等全部写进本节；任何内容不得写在节标记之外）
-禁止使用 markdown 代码围栏（```）、表格（|---|）、标题（#）等任何额外格式，禁止在节标记之外输出任何文字。";
+节标记之外不得输出任何文字；禁止使用 markdown 代码围栏（```）、表格（|---|）、标题（#）等任何额外格式，NOTES 节内的结构化内容用缩进排版。";
 
 /// 说明行字符上限（D-Envelope：从 mode_d 专属规则提升为全模式说明行契约，单源沿用 80）
 pub const DESC_LINE_MAX_CHARS: usize = 80;
@@ -486,8 +488,10 @@ pub fn parse_plan_sections(plan: &str) -> Option<PlanSections> {
 }
 
 /// 信封缺陷清单（纯函数可测）：None=合规；Some=人类可读违规明细（供纠错重写）。
-/// 覆盖：结构（LYRICS 缺失/重复）、节缺失（STYLE/PARAMS）、说明行长度。
-pub fn envelope_defect(plan: &str) -> Option<String> {
+/// 覆盖：结构（LYRICS 缺失/重复）、节缺失、说明行长度。
+/// 模式感知：LYRICS 全模式必须；STYLE 全模式必须（C 由格式阶段排版但方案仍需提供）；
+/// PARAMS 仅 a/b/d（C 无参数规则，方案不含参数节）。
+pub fn envelope_defect_mode(plan: &str, mode: &str) -> Option<String> {
     let mut defects: Vec<String> = Vec::new();
     let sections = match parse_plan_sections(plan) {
         Some(s) => s,
@@ -496,7 +500,7 @@ pub fn envelope_defect(plan: &str) -> Option<String> {
     if sections.style.trim().is_empty() {
         defects.push("缺少 <<<STYLE>>> 节（Style Prompt 行）".to_string());
     }
-    if sections.params.trim().is_empty() {
+    if mode != "mode_c" && sections.params.trim().is_empty() {
         defects.push("缺少 <<<PARAMS>>> 节（参数行）".to_string());
     }
     let over: Vec<String> = sections
@@ -556,7 +560,7 @@ mod envelope_tests {
         // 缺 STYLE/PARAMS 解析放行（节=空串），由 envelope_defect 出缺陷清单逼主持人补齐
         let s = parse_plan_sections("<<<LYRICS>>>\n歌词\n<<<PARAMS>>>\nW=1").expect("缺 STYLE 容错");
         assert!(s.style.is_empty() && s.params.contains("W=1"));
-        assert!(envelope_defect("<<<LYRICS>>>\n歌词\n<<<PARAMS>>>\nW=1").unwrap().contains("STYLE"));
+        assert!(envelope_defect_mode("<<<LYRICS>>>\n歌词\n<<<PARAMS>>>\nW=1", "mode_a").unwrap().contains("STYLE"));
     }
 
     #[test]
@@ -573,7 +577,7 @@ mod envelope_tests {
     fn envelope_defect_flags_missing_sections() {
         // 模型漏 PARAMS 节的实测形态——缺陷清单必须点名，逼主持人补齐
         let plan = "<<<LYRICS>>>\n[Intro]\n[pad, 能量:2]\n凌晨\n<<<STYLE>>>\nStyle Prompt: x";
-        let defect = envelope_defect(&plan).expect("缺 PARAMS 节应报缺陷");
+        let defect = envelope_defect_mode(&plan, "mode_a").expect("缺 PARAMS 节应报缺陷");
         assert!(defect.contains("PARAMS"), "应点名缺 PARAMS 节: {}", defect);
         assert!(!defect.contains("说明行超过"), "无超长说明行不应报");
     }
@@ -598,13 +602,13 @@ mod envelope_tests {
     fn envelope_defect_detects_overlong_desc_lines() {
         let long_desc = format!("[{}, soft pad, wide hall, 能量:3]", "a".repeat(80));
         let plan = format!("<<<LYRICS>>>\n[Intro]\n{}\n凌晨\n<<<STYLE>>>\nStyle Prompt: x\n<<<PARAMS>>>\nW=1", long_desc);
-        let defect = envelope_defect(&plan).expect("超长说明行应报缺陷");
+        let defect = envelope_defect_mode(&plan, "mode_a").expect("超长说明行应报缺陷");
         assert!(defect.contains("说明行超过"), "缺陷文案应说明行超长: {}", defect);
     }
 
     #[test]
     fn envelope_defect_clean_plan_passes() {
-        assert!(envelope_defect(OK_PLAN).is_none());
+        assert!(envelope_defect_mode(OK_PLAN, "mode_a").is_none());
     }
 
     #[test]

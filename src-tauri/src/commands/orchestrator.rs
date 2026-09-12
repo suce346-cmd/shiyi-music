@@ -841,7 +841,7 @@ async fn enforce_envelope<R: Runtime>(
     if !crate::rules::plan_envelope_enabled() {
         return Ok(plan);
     }
-    let defect = crate::rules::envelope_defect(&plan);
+    let defect = crate::rules::envelope_defect_mode(&plan, &req.mode.to_str_name());
     let Some(defect_msg) = defect else {
         return Ok(plan);
     };
@@ -876,7 +876,7 @@ async fn enforce_envelope<R: Runtime>(
     )
     .await?;
     emit_usage(app, PipelineRole::Host, &resp, run_id);
-    if crate::rules::envelope_defect(&resp.raw).is_none() {
+    if crate::rules::envelope_defect_mode(&resp.raw, &req.mode.to_str_name()).is_none() {
         return Ok(resp.raw);
     }
     emit_pipeline_event(app, run_id, PipelineEvent::Degraded {
@@ -953,7 +953,7 @@ fn build_summarize_user_prompt(
             original
         ));
     }
-    user.push_str("\n请把修订整合进当前方案，输出新版完整方案（只含生产方案：Style Prompt + 歌词（含说明行）+ 参数，不要重复输出分析数据包）。");
+    user.push_str("\n请把修订整合进当前方案，按信封契约输出新版完整方案（NOTES 节只写本轮整合说明与任务依据，不重复上一版的分析过程；LYRICS/STYLE/PARAMS 三节为整合后的完整生产方案）。");
     user.push_str("如需下一轮讨论，在方案末尾单独一行【任务分发】后点名各角色下一轮要解决的具体问题；若已无必要则只输出方案，不输出该段。");
     user
 }
@@ -3105,5 +3105,72 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("host_system_d.txt"), sys).unwrap();
         println!("dumped to target/large-test/host_system_d.txt");
+    }
+
+    /// 提示词全量导出（矛盾/孤立指令审计基线）：逐模式逐调用点，
+    /// 输出 target/prompt-audit/ 下每份 LLM 实际可见文本。
+    #[test]
+    #[ignore]
+    fn dump_all_prompts_for_audit() {
+        use crate::commands::roles;
+        use crate::models::PipelineRequest;
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/prompt-audit");
+        std::fs::create_dir_all(&dir).unwrap();
+        let w = |name: &str, body: &str| {
+            std::fs::write(dir.join(format!("{}.txt", name)), body).unwrap();
+        };
+
+        // 1) 角色系统提示词（跨模式共享）
+        w("role_host", &crate::rules::interpolate(roles::host().system_prompt));
+        w("role_emotion", &crate::rules::interpolate(roles::emotion().system_prompt));
+        w("role_lyricist", &crate::rules::interpolate(roles::lyricist().system_prompt));
+        w("role_reviser", &crate::rules::interpolate(roles::reviser().system_prompt));
+        w("role_producer", &crate::rules::interpolate(roles::producer().system_prompt));
+        w("role_style_analyst", &crate::rules::interpolate(roles::style_analyst().system_prompt));
+        w("role_auditor_review", &crate::rules::interpolate(roles::auditor().system_prompt));
+        w("role_auditor_format_mode_c", &crate::rules::interpolate(roles::auditor_format_prompt_mode_c()));
+        w("transcription_contract", roles::TRANSCRIPTION_CONTRACT);
+        w("schema_wide", roles::REVIEW_SCHEMA_WIDE);
+        w("schema_lyric", roles::REVIEW_SCHEMA_LYRIC);
+
+        // 2) 逐模式装配体（stage0/汇总/校验员格式/清单/primer）
+        for m in [Mode::ModeA, Mode::ModeB, Mode::ModeC, Mode::ModeD] {
+            let name = m.to_str_name();
+            w(&format!("{}_host_initial_system", name), &host_initial_system(&m));
+            w(&format!("{}_checklist", name), crate::rules::checklist(name));
+            if let Some(p) = crate::rules::host_primer(name) {
+                w(&format!("{}_primer", name), &crate::rules::interpolate(p));
+            }
+            // 汇总 system + user（样例修订：触发冲突预检路径的真实输入形态）
+            let host = roles::host();
+            let mut sys = crate::rules::interpolate(host.system_prompt);
+            if crate::rules::plan_envelope_enabled() {
+                sys.push_str("\n\n");
+                sys.push_str(crate::rules::ENVELOPE_SPEC);
+            }
+            w(&format!("{}_summarize_system", name), &sys);
+            let changes = vec![
+                (PipelineRole::Lyricist, vec![ReviewChange {
+                    target: "lyrics".into(),
+                    content: "（样例修订文本：用于审计汇总输入形态）".into(),
+                    reason: "审计样例".into(),
+                }], "审计样例 reason".into()),
+            ];
+            let req = PipelineRequest {
+                mode: m.clone(),
+                user_input: "审计样例输入：深夜加班打工人的心酸".into(),
+                model: "x".into(), api_key: "x".into(), base_url: "https://example.invalid".into(),
+                extra: None, original_lyrics: None, role_overrides: None,
+                thinking: false, refine_targets: None, generation: None, run_id: Some("audit".into()),
+            };
+            w(&format!("{}_summarize_user", name), &build_summarize_user_prompt("（当前方案占位）", &changes, req.original_lyrics_text()));
+
+            // 校验员格式输出 system（带样例信封方案——走信封分支）
+            let sample_plan = "<<<LYRICS>>>\n[Intro]\n[pad, 能量:2]\n凌晨 两点半\n<<<STYLE>>>\nStyle Prompt: dark trap, 140BPM\n<<<PARAMS>>>\nWeirdness=18|StyleInfluence=92|AudioInfluence=0\n<<<NOTES>>>\n分析：略";
+            let fmt_sys = auditor_format_system(&req, Some(sample_plan)).unwrap();
+            w(&format!("{}_auditor_format_system", name), &fmt_sys);
+            w(&format!("{}_mode_c_special", name), &mode_c_special_block());
+        }
+        println!("prompt-audit dumped to target/prompt-audit/");
     }
 }
