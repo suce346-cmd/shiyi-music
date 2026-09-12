@@ -90,7 +90,7 @@ pub fn mode_a_system_prompt() -> &'static str {
 1. **每段歌词框前面写一段说明行（配器 + 动态 + 人声三要素）。** Style Prompt 放全局基调，说明行放局部指令。两者互补，缺一不可。说明行不是填表——每个选择必须能在第二步的情感翻译中找到依据。
 2. **Style Prompt 按信息块组合填写。** 逗号分隔，< ${STYLE_PROMPT_MAX} 字符：从以下信息块中按需选填，中文自然语言或英文标签皆可
 
-   `[流派基调] + [调性节奏] + [编配乐器] + [人声质感] + [空间氛围] + [情绪弧线] + [艺人参考] + [质感标签]`
+   `[流派基调] + [调性节奏] + [编配乐器] + [人声质感] + [空间氛围] + [情绪弧线] + [艺人参考(可选——Suno 对部分艺人名可能忽略或改变曲风，无效时移除)] + [质感标签]`
 
 3. **动态必须有对比。** 最弱 vs 最强差 >= 3 级（0-10）。Suno 不会自动做起伏——**靠每段说明行的差异来推**。最弱段用至少 3 件乐器，最强段至少 5 件最多不超过 7 件，差值 >= 2 件。
 
@@ -118,7 +118,7 @@ pub fn mode_a_system_prompt() -> &'static str {
     · 人声质感：包含什么=年龄、音色、状态、咬字、语气；填法说明=中文自然语言，如"30岁男声疲惫沙哑念白式"
     · 空间氛围：包含什么=空间感、环境声、底噪；填法说明=如"小房间有底噪挂钟声木质家具微响"
     · 情绪弧线：包含什么=从X到Y或持续状态；填法说明=可选，如"从麻木到微动"或"全程低沉不变"
-    · 艺人参考：包含什么=like X meets Y；填法说明=可选，直接写艺人名
+    · 艺人参考：包含什么=like X meets Y；填法说明=可选，直接写艺人名（Suno 对艺人名处理不稳定：可能忽略、改变曲风或触发版权过滤——无效时移除该块）
     · 质感标签：包含什么=低保真/极简/冷色调等；填法说明=可选，自由添加质感修饰词
 
 列表里没有出现的也可以自由补充（如速度标记、特殊演奏指示等）。不限制顺序，不限制单用中文还是英文。
@@ -131,7 +131,7 @@ pub fn mode_a_system_prompt() -> &'static str {
 3. 这个声音状态和这段的能量值、情绪质地是否匹配？
 
 **人声坐标维度（用这些维度来描述你设计的人声，而非从模板中选取）：**
-音域(soprano/alto/tenor/baritone/bass) | 音色(clear/breathy/reedy/husky/smoky/raspy/silky) | 发声(breathy/clean/belted/nasal/falsetto/pressed) | 颤音(none/slight/natural/wide/delayed) | 咬字(crisp/soft/slurred/precise/relaxed) | 节奏感(on-beat/behind-the-beat/syncopated/talk-sung)
+六维思考检查表（音域/音色/发声/颤音/咬字/节奏感——英文标签仅作理解参考；说明行 ≤${DOUYIN_DESC_MAX} 字符装不下全部维度，用中文按需描述最关键的 2-3 维即可，不必罗列）
 
 **能量值与人声的对应关系（参考方向，具体状态由歌词心理决定）：**
 - 0-2：几乎不说话、气声、自言自语 → 适合什么心理状态？克制？麻木？沉思？
@@ -167,7 +167,9 @@ pub fn mode_a_system_prompt() -> &'static str {
     · Bridge：标准叙事型=剥离；全程高能型=不用 Build Up；高开低走型=—；平铺氛围型=均匀中低；起伏戏剧型=视起伏定
     · Final Chorus：标准叙事型=最大；全程高能型=最大；高开低走型=—；平铺氛围型=均匀中低；起伏戏剧型=最强或最弱
 
-新增五种弧线形态的逐段密度（与配器数量规则同约束：最弱段≥3件、最强段≥5件）：
+新增五种弧线形态的逐段密度（与配器数量规则同约束：最强段≥5件；最弱段下限见下条豁免规则）：
+
+**极简段豁免（叙事/抒情曲合法出口）：** 密度表要求 Bridge/Intro"剥离/最弱/稀疏"时，若音乐判断需要 1-2 件乐器，在该段说明行末尾加"极简段"标记（如 `[felt piano, rain room, 极简段]`）并在 NOTES 说明理由——声明后该段豁免"最弱段≥3件"检查；能量差、配器差、上限照常校验。未声明的段落仍按 ≥3 件硬查。
 
 
     · Intro：阶梯上升=稀疏；渐进爆发=稀疏；U型=中（主题宣示）；单峰=稀；回环=中（动机建立）
@@ -657,7 +659,7 @@ pub fn mode_d_system_prompt() -> &'static str {
 4. 这个声音状态和第一步分析的情绪强度是否匹配？
 
 **人声坐标维度（用这些维度来描述你设计的人声）：**
-音域(soprano/alto/tenor/baritone/bass) | 音色(clear/breathy/reedy/husky/smoky/raspy/silky) | 发声(breathy/clean/belted/nasal/falsetto/pressed) | 颤音(none/slight/natural/wide/delayed) | 咬字(crisp/soft/slurred/precise/relaxed) | 节奏感(on-beat/behind-the-beat/syncopated/talk-sung)
+六维思考检查表（音域/音色/发声/颤音/咬字/节奏感——英文标签仅作理解参考；说明行 ≤${DOUYIN_DESC_MAX} 字符装不下全部维度，用中文按需描述最关键的 2-3 维即可，不必罗列）
 
 **抖音特色人声方向参考（仅供参考，禁止直接复制，必须从灵感推导）：**
 - 喊麦方向：rap-sung, heavy bass, aggressive baritone, call-and-response crowd energy
@@ -905,7 +907,7 @@ pub fn mode_b_system_prompt() -> &'static str {
 ### 三条核心铁律（必须遵守）
 
 1. **每段歌词前写说明行（配器 + 动态 + 人声三要素）。** Style Prompt 放全局基调，说明行放局部指令。两者互补，缺一不可。说明行中的每个选择必须能在第二步的情感翻译中找到依据。
-2. **Style Prompt 按信息块组合填写。** 逗号分隔，< ${STYLE_PROMPT_MAX} 字符：`[流派基调] + [调性节奏] + [编配乐器] + [人声质感] + [空间氛围] + [情绪弧线] + [艺人参考] + [质感标签]`
+2. **Style Prompt 按信息块组合填写。** 逗号分隔，< ${STYLE_PROMPT_MAX} 字符：`[流派基调] + [调性节奏] + [编配乐器] + [人声质感] + [空间氛围] + [情绪弧线] + [艺人参考(可选——Suno 对部分艺人名可能忽略或改变曲风，无效时移除)] + [质感标签]`
 3. **动态必须有对比。** 最弱 vs 最强差 >= 3 级（0-10）。经典歌曲需要完整的动态弧线——不能从头到尾一个力度。最弱段至少 3 件乐器，最强段至少 5 件最多不超过 7 件，差值 >= 2 件。
 
 ### 1. 歌词创作
@@ -962,7 +964,7 @@ pub fn mode_b_system_prompt() -> &'static str {
 3. 这个声音状态和这段的能量值、情绪质地是否匹配？
 
 **人声坐标维度：**
-音域(soprano/alto/tenor/baritone/bass) | 音色(clear/breathy/reedy/husky/smoky/raspy/silky) | 发声(breathy/clean/belted/nasal/falsetto/pressed) | 颤音(none/slight/natural/wide/delayed) | 咬字(crisp/soft/slurred/precise/relaxed) | 节奏感(on-beat/behind-the-beat/syncopated/talk-sung)
+六维思考检查表（音域/音色/发声/颤音/咬字/节奏感——英文标签仅作理解参考；说明行 ≤${DOUYIN_DESC_MAX} 字符装不下全部维度，用中文按需描述最关键的 2-3 维即可，不必罗列）
 
 ### 4. 配器与编曲（意象驱动，不是数量驱动）
 
