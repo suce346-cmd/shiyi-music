@@ -340,10 +340,14 @@ pub const INJECT_MAX_INSTRUMENTS_ROWS: usize = 15;
 pub const INJECT_MAX_FULL_ROWS: usize = 50;
 /// 单角色一次注入总字数封顶（超过告警；最坏情况 = 制作人四表全命中含 22 条规则子集+8 条思维资产 ≈ 4800 字）
 pub const INJECT_MAX_TOTAL_CHARS: usize = 5200;
-/// 方案注入长度上限（超则截断 + 附注；对齐知识库"少而准"纪律，上下文同样需要预算）
-pub const INJECT_MAX_PLAN_CHARS: usize = 8000;
-/// revisions_log 保留条数（更早折叠为单行摘要，reason 关键词保留供去重参考）
-pub const INJECT_MAX_LOG_ENTRIES: usize = 6;
+/// 完整档案传递原则（2026-09-13，用户设计确认）：方案/修订史全量传给每个角色——
+/// 每个角色拿到的是完整档案（情绪/歌词/编曲/指令/分析），不做信息孤岛。
+/// 旧值 8000 字在 NOTES 分析并入方案后（M1）已达 80%，一旦越线从尾部切掉的
+/// 恰是 LYRICS/STYLE/PARAMS 本体（NOTES-first 排序）——角色只看到分析看不到方案。
+/// 预算护栏职责在 budget 模块（token 计费与超时），不在此处；此值仅作病态输出保险丝。
+pub const INJECT_MAX_PLAN_CHARS: usize = 100_000;
+/// revisions_log 保留条数（完整档案原则：3 轮 × 全角色 + 主持人条目全额保留，不再折叠）
+pub const INJECT_MAX_LOG_ENTRIES: usize = 24;
 /// 格式输出截断时注入打回循环的 issue 文案（走 AuditResult 事件，用户可见）
 const TRUNCATION_ISSUE: &str = "输出被截断（finish_reason=length），请精简内容后重新输出完整提示词包";
 
@@ -2845,17 +2849,17 @@ mod tests {
     #[test]
     fn fold_log_keeps_recent_and_summarizes_rest() {
         let mk = |i: usize| (format!("角色{}", i), format!("修订内容很长很长很长很长很长很长{}", i));
+        // 完整档案原则：上限 24 条——3 轮 × 全角色 + 主持人条目全额保留
         let log: Vec<(String, String)> = (0..6).map(mk).collect();
         assert_eq!(fold_log(&log).len(), 6);
         let long: Vec<(String, String)> = (0..8).map(mk).collect();
-        let folded = fold_log(&long);
-        assert_eq!(folded.len(), 7, "1 摘要 + 最近 6 条");
+        assert_eq!(fold_log(&long).len(), 8, "8 条 ≤ 24 上限应全额保留");
+        // 折叠行为仅在上限时仍可用（病态保险）——构造 30 条验证折叠路径不死
+        let huge: Vec<(String, String)> = (0..30).map(mk).collect();
+        let folded = fold_log(&huge);
         assert_eq!(folded[0].0, "早期修订");
-        assert!(folded[0].1.contains("等 2 条早期修订已折叠"), "got: {}", folded[0].1);
-        assert!(folded[0].1.contains("角色0"), "摘要应保留早期角色名: {}", folded[0].1);
-        // 最近 6 条完整保留
-        assert_eq!(folded[1].0, "角色2");
-        assert_eq!(folded[6].0, "角色7");
+        assert!(folded[0].1.contains("等 6 条早期修订已折叠"), "got: {}", folded[0].1);
+        assert_eq!(folded.len(), 25, "1 摘要 + 最近 24 条");
     }
 
     /// 注入量规范：每个角色用"最坏情况方案"（命中所有关键词表 + 全能量区间）注入，
