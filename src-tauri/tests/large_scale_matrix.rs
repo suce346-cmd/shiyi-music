@@ -164,11 +164,31 @@ async fn large_scale_matrix() {
     let results_path = format!("{}/results.jsonl", dir);
     let cases = matrix();
     // LSM_ONLY：调试过滤器——只跑 prompt_id 含该子串的用例（如 LSM_ONLY=P1）
+    // LSM_CASES：精确用例选择——逗号分隔 "mode:prompt_id"（如 "d:P1,a:P5,c:C6"）
     // seq 取全矩阵稳定编号（过滤前），保证断点续跑与过滤器不冲突
     let only = std::env::var("LSM_ONLY").unwrap_or_default();
+    let lsm_cases = std::env::var("LSM_CASES").unwrap_or_default();
+    let wanted: Vec<(String, String)> = lsm_cases
+        .split(',')
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| {
+            let mut it = s.trim().splitn(2, ':');
+            (
+                it.next().unwrap_or("").trim().to_string(),
+                it.next().unwrap_or("").trim().to_string(),
+            )
+        })
+        .collect();
     let mut cases: Vec<(usize, Case)> = cases.into_iter().enumerate().map(|(i, c)| (i + 1, c)).collect();
     if !only.is_empty() {
         cases.retain(|(_, c)| c.prompt_id.contains(&only));
+    }
+    if !wanted.is_empty() {
+        cases.retain(|(_, c)| {
+            wanted
+                .iter()
+                .any(|(m, pid)| *m == match_mode(&c.mode) && *pid == c.prompt_id)
+        });
     }
     // 断点续跑：已有 results.jsonl 里的 seq 视为完成，跳过（全矩阵稳定 seq）
     let mut done: std::collections::HashSet<usize> = std::collections::HashSet::new();
