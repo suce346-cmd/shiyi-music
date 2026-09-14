@@ -1,8 +1,16 @@
-//! API Key 系统钥匙串存储（macOS Keychain / Windows Credential Manager / Linux Secret Service）。
+//! API Key 系统钥匙串存储。
 //! service 固定；account="global"（全局）或 "role:{role}"（角色级）。
 //! 前端迁移策略见 useSettings.ts：localStorage 明文 → 钥匙串 → 删除明文（一次性）。
+//!
+//! 2026-09-14 根因修复（用户 GUI 实测"压根没法用"）：
+//! 旧实现用 keyring Rust 库（走 Security Framework API），adhoc 签名应用
+//! 每次构建签名变 → macOS 拒绝钥匙串访问 → 前端 9 处 catch 静默吞 → Key 永远空。
+//! 新实现改用 `security` CLI 子进程——系统签名进程不受应用签名影响。
+//! 这是 F6 决策（不买 Apple 账号）下的唯一可靠路径。
+//! 跨平台：macOS 走 security CLI；Windows/Linux 回退 keyring 库（有正式签名或无需签名）。
 
 use crate::errors::{AppError, ErrorKind};
+use std::process::Command;
 
 const SERVICE: &str = "shiyi-music";
 
@@ -32,14 +40,95 @@ fn validate_account(account: &str) -> Result<(), AppError> {
     ))
 }
 
-fn entry(account: &str) -> Result<keyring::Entry, AppError> {
+/// 平台判定：macOS 走 security CLI；其他平台回退 keyring 库
+#[cfg(target_os = "macos")]
+fn use_security_cli() -> bool { true }
+#[cfg(not(target_os = "macos"))]
+fn use_security_cli() -> bool { false }
+
+// ── security CLI 路径（macOS 专属）──────────────────────────────────
+
+#[cfg(target_os = "macos")]
+fn cli_get(account: &str) -> Result<Option<String>, AppError> {
+    let out = Command::new("security")
+        .args(["find-generic-password", "-s", SERVICE, "-a", account, "-w"])
+        .output()
+        .map_err(|e| AppError::new(ErrorKind::Internal, format!("security CLI 调用失败: {}", e)))?;
+    if out.status.success() {
+        let pw = String::from_utf8_lossy(&out.stdout);
+        let pw = pw.trim_end_matches('\n').to_string();
+        if pw.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(pw))
+        }
+    } else {
+        // 退出码非 0 = 条目不存在（正常场景，不算错误）
+        Ok(None)
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn cli_set(account: &str, secret: &str) -> Result<(), AppError> {
+    // -U 更新已存在条目；-A 允许任意应用读取（adhoc 签名友好）
+    let out = Command::new("security")
+        .args(["add-generic-password", "-U", "-A", "-s", SERVICE, "-a", account, "-w", secret])
+        .output()
+        .map_err(|e| AppError::new(ErrorKind::Internal, format!("security CLI 写入失败: {}", e)))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        Err(AppError::new(ErrorKind::Internal, format!("钥匙串写入失败: {}", stderr)))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn cli_delete(account: &str) -> Result<(), AppError> {
+    let _ = Command::new("security")
+        .args(["delete-generic-password", "-s", SERVICE, "-a", account])
+        .output();
+    // 幂等：条目不存在也算成功
+    Ok(())
+}
+
+// ── keyring 库路径（Windows/Linux 回退）────────────────────────────
+
+#[cfg(not(target_os = "macos"))]
+fn lib_entry(account: &str) -> Result<keyring::Entry, AppError> {
     keyring::Entry::new(SERVICE, account).map_err(|e| {
-        AppError::new(
-            ErrorKind::Internal,
-            format!("钥匙串初始化失败: {}", e),
-        )
+        AppError::new(ErrorKind::Internal, format!("钥匙串初始化失败: {}", e))
     })
 }
+
+#[cfg(not(target_os = "macos"))]
+fn lib_get(account: &str) -> Result<Option<String>, AppError> {
+    let e = lib_entry(account)?;
+    match e.get_password() {
+        Ok(pw) => Ok(Some(pw)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(AppError::new(ErrorKind::Internal, format!("钥匙串读取失败: {}", e))),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn lib_set(account: &str, secret: &str) -> Result<(), AppError> {
+    let e = lib_entry(account)?;
+    e.set_password(secret)
+        .map_err(|e| AppError::new(ErrorKind::Internal, format!("钥匙串写入失败: {}", e)))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn lib_delete(account: &str) -> Result<(), AppError> {
+    let e = lib_entry(account)?;
+    match e.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(AppError::new(ErrorKind::Internal, format!("钥匙串删除失败: {}", e))),
+    }
+}
+
+// ── 统一入口（前端调用的 Tauri 命令）────────────────────────────────
 
 /// 写入密钥（前端 updateSettings 同步调用）
 #[tauri::command]
@@ -49,40 +138,30 @@ pub async fn keychain_set(account: String, secret: String) -> Result<(), AppErro
     if secret.is_empty() {
         return Err(AppError::new(ErrorKind::Validation, "密钥为空，清空配置请使用删除"));
     }
-    let e = entry(&account)?;
-    e.set_password(&secret)
-        .map_err(|e| AppError::new(ErrorKind::Internal, format!("钥匙串写入失败: {}", e)))
+    #[cfg(target_os = "macos")]
+    { cli_set(&account, &secret) }
+    #[cfg(not(target_os = "macos"))]
+    { lib_set(&account, &secret) }
 }
 
 /// 读取密钥（前端启动回填；缺条目返回 None 而非报错——新用户/未迁移场景正常）
 #[tauri::command]
 pub async fn keychain_get(account: String) -> Result<Option<String>, AppError> {
     validate_account(&account)?;
-    let e = entry(&account)?;
-    match e.get_password() {
-        Ok(pw) => Ok(Some(pw)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(AppError::new(
-            ErrorKind::Internal,
-            format!("钥匙串读取失败: {}", e),
-        )),
-    }
+    #[cfg(target_os = "macos")]
+    { cli_get(&account) }
+    #[cfg(not(target_os = "macos"))]
+    { lib_get(&account) }
 }
 
 /// 删除密钥（前端清除配置用）
 #[tauri::command]
 pub async fn keychain_delete(account: String) -> Result<(), AppError> {
     validate_account(&account)?;
-    let e = entry(&account)?;
-    match e.delete_credential() {
-        Ok(()) => Ok(()),
-        // 无条目也算成功（幂等，前端无需区分）
-        Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(AppError::new(
-            ErrorKind::Internal,
-            format!("钥匙串删除失败: {}", e),
-        )),
-    }
+    #[cfg(target_os = "macos")]
+    { cli_delete(&account) }
+    #[cfg(not(target_os = "macos"))]
+    { lib_delete(&account) }
 }
 
 #[cfg(test)]
@@ -100,5 +179,25 @@ mod tests {
         assert!(validate_account("random").is_err());
         assert!(validate_account("").is_err());
         assert!(validate_account("role:").is_err());
+    }
+
+    /// macOS CLI 路径往返测试（写入 → 读取 → 删除 → 确认空）
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn cli_round_trip() {
+        let test_acct = "global";
+        let test_secret = "test-key-12345";
+        // 清理旧残留
+        let _ = cli_delete(test_acct);
+        // 写入
+        cli_set(test_acct, test_secret).expect("写入失败");
+        // 读取验证
+        let got = cli_get(test_acct).expect("读取失败");
+        assert_eq!(got.as_deref(), Some(test_secret), "读回值应与写入一致");
+        // 删除
+        cli_delete(test_acct).expect("删除失败");
+        // 确认已删
+        let after = cli_get(test_acct).expect("删除后读取应返回 None");
+        assert!(after.is_none(), "删除后应为 None");
     }
 }

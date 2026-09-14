@@ -146,38 +146,45 @@ export function useSettings() {
             try { localStorage.setItem(MIGRATED_KEY, "1"); } catch { /* 忽略 */ }
           }
         }
-        // 2. 回填：钥匙串 → 内存（全局 + 各角色）
-        const next: AppSettings = { ...settingsRef.current };
-        let changed = false;
-        if (next.apiKey === KEYCHAIN_SENTINEL || next.apiKey === "") {
-          try {
-            const pw = await invoke<string | null>("keychain_get", { account: "global" });
-            if (pw) { next.apiKey = pw; changed = true; }
-            else if (next.apiKey === KEYCHAIN_SENTINEL) { next.apiKey = ""; changed = true; }
-          } catch { /* 钥匙串不可用则保持现状 */ }
-        }
-        if (next.roleOverrides) {
-          for (const role of Object.keys(next.roleOverrides)) {
-            const entry = (next.roleOverrides as Record<string, RoleApiOverride>)[role];
-            if (entry?.api_key === KEYCHAIN_SENTINEL) {
-              try {
-                const pw = await invoke<string | null>("keychain_get", { account: `role:${role}` });
-                if (pw) { entry.api_key = pw; changed = true; }
-                else { entry.api_key = undefined; changed = true; }
-              } catch { /* 保持现状 */ }
+          // 2. 回填：钥匙串 → 内存（全局 + 各角色）
+          const next: AppSettings = { ...settingsRef.current };
+          let changed = false;
+          if (next.apiKey === KEYCHAIN_SENTINEL || next.apiKey === "") {
+            try {
+              const pw = await invoke<string | null>("keychain_get", { account: "global" });
+              if (pw) { next.apiKey = pw; changed = true; }
+              else if (next.apiKey === KEYCHAIN_SENTINEL) { next.apiKey = ""; changed = true; }
+            } catch (e) {
+              console.error("[keychain] global 读取失败:", e);
             }
           }
-        }
-        if (!cancelled) {
-          if (changed) {
-            setSettings(next);
-            persistNonSecrets(next);
+          if (next.roleOverrides) {
+            for (const role of Object.keys(next.roleOverrides)) {
+              const entry = (next.roleOverrides as Record<string, RoleApiOverride>)[role];
+              if (entry?.api_key === KEYCHAIN_SENTINEL) {
+                try {
+                  const pw = await invoke<string | null>("keychain_get", { account: `role:${role}` });
+                  if (pw) { entry.api_key = pw; changed = true; }
+                  else { entry.api_key = undefined; changed = true; }
+                } catch (e) {
+                  console.error(`[keychain] role:${role} 读取失败:`, e);
+                }
+              }
+            }
           }
-          setSecretsReady(true);
+          if (!cancelled) {
+            if (changed) {
+              setSettings(next);
+              persistNonSecrets(next);
+            }
+            setSecretsReady(true);
+          }
+        } catch (e) {
+          if (!cancelled) {
+            console.error("[keychain] 启动回填整体失败:", e);
+            setSecretsReady(true);
+          }
         }
-      } catch {
-        if (!cancelled) setSecretsReady(true);
-      }
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
