@@ -213,31 +213,50 @@ export function persistNonSecrets(s: AppSettings) {
   } catch { /* 配额等失败静默（与旧行为一致） */ }
 }
 
+/** 全局 Key 留空 = 沿用（AINA 参考 SettingsPage.tsx:383：留空 → undefined → 后端沿用旧值）。
+ * 旧规则空值直接 keychain_delete——输入框受控值在清空/重输间隙即毁掉真 key（数据丢失回路根因）。
+ * 全局 Key 无"清除"入口，留空永远不动钥匙串；读回旧值恢复内存，输入框立即恢复显示。 */
+async function withRestoredGlobalKey(partial: Partial<AppSettings>): Promise<Partial<AppSettings>> {
+  if (partial.apiKey === undefined || partial.apiKey) return partial;
+  try {
+    const pw = await invoke<string | null>("keychain_get", { account: "global" });
+    if (pw) return { ...partial, apiKey: pw };
+  } catch (e) {
+    console.error("[keychain] global 回读失败:", e);
+  }
+  return partial;
+}
+
 /** 带密钥同步的设置更新（供 App 层调用处替换 updateSettings 用——本文件默认导出保持兼容） */
 export function useSettingsWithSecrets() {
   const base = useSettings();
+  /** 防抖定时器表（按 account 分键）：输入框每按键都触发同步，不防抖会把按键中间态
+   * （如 "ak"、"ak-1"）写进钥匙串，中途退出即留下残缺 key */
+  const syncTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  /** 防抖同步：停顿 800ms 后才落钥匙串；secret 为 null = 删除（仅角色级留空语义使用） */
+  const scheduleSync = useCallback((account: string, secret: string | null) => {
+    clearTimeout(syncTimers.current[account]);
+    syncTimers.current[account] = setTimeout(() => {
+      const op = secret
+        ? invoke("keychain_set", { account, secret })
+        : invoke("keychain_delete", { account });
+      op.catch((e) => console.error(`[keychain] ${account} 同步失败:`, e));
+    }, 800);
+  }, []);
   const updateSettings = useCallback(async (partial: Partial<AppSettings>) => {
-    // 先同步钥匙串，再更新内存 + 本地非敏感字段
-    try {
-      if (partial.apiKey !== undefined) {
-        if (partial.apiKey) {
-          await invoke("keychain_set", { account: "global", secret: partial.apiKey });
-        } else {
-          await invoke("keychain_delete", { account: "global" });
+    partial = await withRestoredGlobalKey(partial);
+    if (partial.apiKey !== undefined && partial.apiKey) {
+      scheduleSync("global", partial.apiKey);
+    }
+    const ro = partial.roleOverrides;
+    if (ro) {
+      for (const [role, entry] of Object.entries(ro)) {
+        if (entry && typeof entry === "object" && "api_key" in entry) {
+          // 角色级留空 = 清除覆盖、继承全局（UI 明示"API Key（留空继承全局）"），删除语义保留
+          const ak = (entry as RoleApiOverride).api_key;
+          scheduleSync(`role:${role}`, ak || null);
         }
       }
-      const ro = partial.roleOverrides;
-      if (ro) {
-        for (const [role, entry] of Object.entries(ro)) {
-          if (entry && typeof entry === "object" && "api_key" in entry) {
-            const ak = (entry as RoleApiOverride).api_key;
-            if (ak) await invoke("keychain_set", { account: `role:${role}`, secret: ak });
-            else await invoke("keychain_delete", { account: `role:${role}` });
-          }
-        }
-      }
-    } catch {
-      // 钥匙串失败不阻断（内存值仍更新，下次启动回填时以钥匙串为准）
     }
     base.updateSettings(partial);
     try {
@@ -247,6 +266,6 @@ export function useSettingsWithSecrets() {
         persistNonSecrets({ ...cur, ...partial });
       }
     } catch { /* 忽略 */ }
-  }, [base]);
+  }, [base, scheduleSync]);
   return { ...base, updateSettings };
 }

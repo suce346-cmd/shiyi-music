@@ -40,56 +40,81 @@ fn validate_account(account: &str) -> Result<(), AppError> {
     ))
 }
 
-/// 平台判定：macOS 走 security CLI；其他平台回退 keyring 库
-#[cfg(target_os = "macos")]
-fn use_security_cli() -> bool { true }
-#[cfg(not(target_os = "macos"))]
-fn use_security_cli() -> bool { false }
-
 // ── security CLI 路径（macOS 专属）──────────────────────────────────
+
+/// security CLI 退出码分类（仅 find-generic-password 读取路径）：
+/// 0=成功；44=item not found（实证：缺失条目时 `echo $?` = 44）；
+/// 其他=真实访问错误（ACL 拒绝、交互被禁等），上抛而非伪装成"无条目"
+/// （旧规则任意非零都返回 None，真实错误不可见——上一会话误诊"回填失败"的根源之一）。
+/// CLI 路径用字面量绝对路径 /usr/bin/security：不依赖进程 PATH（GUI launchd 环境防御）。
+#[cfg(target_os = "macos")]
+fn classify_get_exit(code: i32, stdout: &str, stderr: &str) -> Result<Option<String>, AppError> {
+    match code {
+        0 => {
+            let pw = stdout.trim_end_matches('\n').to_string();
+            if pw.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(pw))
+            }
+        }
+        44 => Ok(None),
+        _ => Err(AppError::new(
+            ErrorKind::Internal,
+            format!("security CLI 读取失败(exit {}): {}", code, stderr.trim()),
+        )),
+    }
+}
 
 #[cfg(target_os = "macos")]
 fn cli_get(account: &str) -> Result<Option<String>, AppError> {
-    let out = Command::new("security")
+    let out = Command::new("/usr/bin/security")
         .args(["find-generic-password", "-s", SERVICE, "-a", account, "-w"])
         .output()
         .map_err(|e| AppError::new(ErrorKind::Internal, format!("security CLI 调用失败: {}", e)))?;
-    if out.status.success() {
-        let pw = String::from_utf8_lossy(&out.stdout);
-        let pw = pw.trim_end_matches('\n').to_string();
-        if pw.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(pw))
-        }
-    } else {
-        // 退出码非 0 = 条目不存在（正常场景，不算错误）
-        Ok(None)
-    }
+    classify_get_exit(
+        out.status.code().unwrap_or(-1),
+        &String::from_utf8_lossy(&out.stdout),
+        &String::from_utf8_lossy(&out.stderr),
+    )
 }
 
 #[cfg(target_os = "macos")]
 fn cli_set(account: &str, secret: &str) -> Result<(), AppError> {
     // -U 更新已存在条目；-A 允许任意应用读取（adhoc 签名友好）
-    let out = Command::new("security")
+    let out = Command::new("/usr/bin/security")
         .args(["add-generic-password", "-U", "-A", "-s", SERVICE, "-a", account, "-w", secret])
         .output()
         .map_err(|e| AppError::new(ErrorKind::Internal, format!("security CLI 写入失败: {}", e)))?;
     if out.status.success() {
+        tracing::info!(account = %account, "钥匙串写入成功");
         Ok(())
     } else {
         let stderr = String::from_utf8_lossy(&out.stderr);
+        tracing::warn!(account = %account, code = out.status.code(), "钥匙串写入失败");
         Err(AppError::new(ErrorKind::Internal, format!("钥匙串写入失败: {}", stderr)))
     }
 }
 
 #[cfg(target_os = "macos")]
 fn cli_delete(account: &str) -> Result<(), AppError> {
-    let _ = Command::new("security")
+    let out = Command::new("/usr/bin/security")
         .args(["delete-generic-password", "-s", SERVICE, "-a", account])
         .output();
-    // 幂等：条目不存在也算成功
-    Ok(())
+    match out {
+        Ok(o) if o.status.success() => {
+            tracing::info!(account = %account, "钥匙串删除成功");
+            Ok(())
+        }
+        // 幂等：条目不存在（exit 44）也算成功
+        Ok(o) if o.status.code() == Some(44) => Ok(()),
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            tracing::warn!(account = %account, code = o.status.code(), "钥匙串删除失败");
+            Err(AppError::new(ErrorKind::Internal, format!("钥匙串删除失败: {}", stderr)))
+        }
+        Err(e) => Err(AppError::new(ErrorKind::Internal, format!("security CLI 调用失败: {}", e))),
+    }
 }
 
 // ── keyring 库路径（Windows/Linux 回退）────────────────────────────
@@ -167,6 +192,34 @@ pub async fn keychain_delete(account: String) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// R3 修复：security CLI 退出码分类——0=成功；44=item not found（正常缺条目，返回 None）；
+    /// 其他退出码=真实访问错误（ACL 拒绝、交互被禁等），必须上抛而非伪装成"无条目"。
+    /// 退出码 44 已实证（`security find-generic-password` 未命中时 echo $? = 44）。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn classify_get_exit_44_means_absent() {
+        let r = classify_get_exit(44, "", "security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.");
+        assert!(r.is_ok());
+        assert!(r.unwrap().is_none(), "exit 44 应返回 None（条目不存在），不得报错");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn classify_get_exit_zero_parses_password() {
+        let r = classify_get_exit(0, "ak-test\n", "");
+        assert_eq!(r.unwrap(), Some("ak-test".to_string()));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn classify_get_exit_other_codes_are_errors() {
+        // ACL 拒绝/交互被禁等真实错误不得伪装成 None（上一会话误诊根因之一）
+        for code in [1, 45, 51] {
+            let r = classify_get_exit(code, "", "errSecInteractionNotAllowed");
+            assert!(r.is_err(), "exit {} 应上抛错误而非返回 None", code);
+        }
+    }
 
     /// O-5：account 白名单——global/已知角色放行，未知角色与任意串拒绝
     #[test]
