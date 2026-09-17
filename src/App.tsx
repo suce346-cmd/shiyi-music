@@ -30,6 +30,19 @@ function newId() {
   return `id-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/** 修复包 C（#9）：历史条目优化装载上下文（模块级纯函数，handleRefineFromHistory 与单测共用）。
+ * 旧记录可能无 conversation 字段（类型注释声明）——以 input/output 构造两轮对话兜底。 */
+export function buildHistoryRefineContext(entry: HistoryEntry) {
+  const conversation: ChatTurn[] = entry.conversation?.length
+    ? entry.conversation
+    : [
+        { role: "user", content: entry.input, timestamp: entry.timestamp },
+        { role: "assistant", content: entry.output, timestamp: entry.timestamp },
+      ];
+  const lastOutput = [...conversation].reverse().find((m) => m.role === "assistant")?.content || entry.output;
+  return { mode: entry.mode, conversation, lastUserInput: entry.input, lastOutput };
+}
+
 export default function App() {
   const [mode, setMode] = useState<Mode>("mode_d");
   const [status, setStatus] = useState<LLMStatus>("idle");
@@ -595,6 +608,22 @@ export default function App() {
   const clearHistory = () => { setHistoryEntries([]); scheduleSave([]); };
   const selectHistory = (entry: HistoryEntry) => { setHistoryView(entry); setShowHistory(false); };
 
+  /** 修复包 C（#9/#10/#11）：历史条目反馈——装载该条目为当前会话后复用 handleRefine 全链，
+   * 不复制 refine 实现（杜绝双源）。currentHistoryId 置空：新结果落新历史条目，不改写原条目。 */
+  const handleRefineFromHistory = useCallback(async (entry: HistoryEntry, feedback: string, refineMode: "fast" | "full" = "fast") => {
+    if (!feedback.trim()) return;
+    const ctx = buildHistoryRefineContext(entry);
+    // 装载历史条目为当前会话（handleRefine 从 chatHistoryRef/lastUserInput/mode 取上下文）
+    chatHistoryRef.current = ctx.conversation.map(({ role, content }) => ({ role, content }));
+    setConversation(ctx.conversation);
+    setMode(ctx.mode);
+    setLastUserInput(ctx.lastUserInput);
+    setCurrentHistoryId(null);
+    setHistoryView(null); // 装载完成，关闭历史视图——后续走实时会话流
+    await handleRefine(feedback, refineMode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handleRefine]);
+
   /** 队列查看——完成/失败项点击查看对应历史（按 input 匹配最新一条） */
   const selectQueueItem = useCallback((id: string) => {
     const item = queue.peek().find((q) => q.id === id);
@@ -955,12 +984,14 @@ export default function App() {
             )}
 
             <div className="flex-1 overflow-y-auto p-4">
-              {historyView ? (
-                <ResultPanel conversation={historyView.conversation || [
-                  { role: "user", content: historyView.input, timestamp: historyView.timestamp },
-                  { role: "assistant", content: historyView.output, timestamp: historyView.timestamp }
-                ]} streamText="" status="done" onRefine={() => {}} readOnly />
-              ) : (conversation.length > 0 || streamText) ? (
+              {historyView ? (() => {
+                const ctx = buildHistoryRefineContext(historyView);
+                return (
+                  <ResultPanel conversation={ctx.conversation} streamText="" status="done"
+                    onRefine={(feedback, refineMode) => { handleRefineFromHistory(historyView, feedback, refineMode); }}
+                    mode={historyView.mode} locale={settings.language} />
+                );
+              })() : (conversation.length > 0 || streamText) ? (
                 <ResultPanel conversation={conversation} streamText={streamText} status={status} onRefine={handleRefine} mode={mode} locale={settings.language} />
               ) : (
                 <div className="h-full flex flex-col items-center justify-center text-text-muted px-8">

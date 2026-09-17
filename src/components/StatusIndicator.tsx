@@ -74,6 +74,10 @@ export default function StatusIndicator({ status, errorMessage, onRetry, onResum
       <div className="flex items-center gap-2">
         <Icon size={14} className={running ? "animate-spin" : ""} />
         <span className="font-medium">{STATUS_TEXT_KEY[status] ? t(locale, STATUS_TEXT_KEY[status]) : ""}</span>
+        {/* 修复包 C（#12 可发现性）：运行中显式提示可插话——功能早已存在，缺的是用户看得见 */}
+        {running && (
+          <span className="text-[11px] opacity-60">· {t(locale, "interject.hint")}</span>
+        )}
         {status === "error" && errorMessage && (
           <span className="text-[11px] opacity-70 truncate flex-1">{errorMessage}</span>
         )}
