@@ -662,7 +662,7 @@ export default function App() {
               className="w-full bg-surface-0 border border-border/60 rounded-lg px-3 py-2 text-[13px]
                          text-text-1 placeholder:text-text-muted/30 focus:outline-none
                          focus:border-brand-500/40 focus:ring-1 focus:ring-brand-500/20
-                         transition-all duration-150 disabled:opacity-50" placeholder={secretsReady ? "sk-..." : "密钥加载中…"} />
+                         transition-all duration-150 disabled:opacity-50" placeholder={secretsReady ? "sk-...（清空后留空 = 沿用已保存的 Key）" : "密钥加载中…"} />
           </div>
           <div className="flex gap-2">
             <div className="flex-1">

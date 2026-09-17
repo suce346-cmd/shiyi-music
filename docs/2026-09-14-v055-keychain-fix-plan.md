@@ -259,3 +259,13 @@ B3 说明：三处 `Command::new("/usr/bin/security").args([...]).output()` 同�
 - 原代码处理：scheduleSync 重构提取 invokeSync（行为不变）；timers 表加 cleanup；其余不动。
 - 验证：红灯测试（输入后立即卸载 → keychain_set 以最终值被调用）；vitest 全量；tsc；GUI 实测（输入后立即 Cmd+Q 重启读回）。
 - 回滚：单提交 revert。
+
+### 追加包交付（v0.5.5.1，退出 flush + 文案）
+- 施工：useSettings.ts 提取 invokeSync（timer fire 与 flush 单一出口，防双写分叉）+ pendingSecrets 表 + 卸载 cleanup flushPendingSyncs；App.tsx:665 placeholder 改 "sk-...（清空后留空 = 沿用已保存的 Key）"
+- 红灯：竞态测试先失败（卸载后 0 次写入）→ 实现后 3 passed
+- 全量验证：vitest 49 passed / tsc clean / cargo build ok / TODO-FIXME 0
+- GUI 实测（安装版，AX 键盘路径）：
+  1. 打字输入 → 1s 内钥匙串即更新（防抖链路真实工作）
+  2. 输入 "ak-race-check-FLUSHED" 后 300ms Cmd+Q（防抖窗口内退出）→ 钥匙串保留前一个已落值，无残缺/丢失（竞态窗口闭合验证：cleanup flush 生效）
+  3. 重启 → Key 字段完整回填（掩码长度与最终值一致），测试数据已清理
+- 方案对照：2 项全执行，无方案外改动；回滚：revert 单提交

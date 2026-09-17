@@ -233,16 +233,41 @@ export function useSettingsWithSecrets() {
   /** 防抖定时器表（按 account 分键）：输入框每按键都触发同步，不防抖会把按键中间态
    * （如 "ak"、"ak-1"）写进钥匙串，中途退出即留下残缺 key */
   const syncTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  /** 防抖窗口内每个 account 的最终待写值（null=删除）。timer fire 或 flush 后移除。 */
+  const pendingSecrets = useRef<Record<string, string | null>>({});
+  /** 立即执行单个 account 的同步（timer fire 与 flush 共用同一出口，避免双写分叉） */
+  const invokeSync = useCallback((account: string, secret: string | null) => {
+    const op = secret
+      ? invoke("keychain_set", { account, secret })
+      : invoke("keychain_delete", { account });
+    op.catch((e) => console.error(`[keychain] ${account} 同步失败:`, e));
+  }, []);
+  /** 防抖窗口内退出/卸载时 pending 同步会随 timer 一起死——最终值丢失（与"中间态写入"同族缺口）。
+   * flush：把所有 pending 的最终值立即落盘（卸载 cleanup 调用）。 */
+  const flushPendingSyncs = useCallback(() => {
+    const timers = syncTimers.current;
+    const pendings = pendingSecrets.current;
+    for (const account of Object.keys(timers)) {
+      clearTimeout(timers[account]);
+      const secret = pendings[account];
+      delete pendings[account];
+      if (secret !== undefined) invokeSync(account, secret);
+    }
+    syncTimers.current = {};
+  }, [invokeSync]);
   /** 防抖同步：停顿 800ms 后才落钥匙串；secret 为 null = 删除（仅角色级留空语义使用） */
   const scheduleSync = useCallback((account: string, secret: string | null) => {
+    pendingSecrets.current[account] = secret;
     clearTimeout(syncTimers.current[account]);
     syncTimers.current[account] = setTimeout(() => {
-      const op = secret
-        ? invoke("keychain_set", { account, secret })
-        : invoke("keychain_delete", { account });
-      op.catch((e) => console.error(`[keychain] ${account} 同步失败:`, e));
+      delete pendingSecrets.current[account];
+      invokeSync(account, secret);
     }, 800);
-  }, []);
+  }, [invokeSync]);
+  /** 卸载 flush：pending 的最终值立即落钥匙串（退出竞态闭合） */
+  useEffect(() => {
+    return () => { flushPendingSyncs(); };
+  }, [flushPendingSyncs]);
   const updateSettings = useCallback(async (partial: Partial<AppSettings>) => {
     partial = await withRestoredGlobalKey(partial);
     if (partial.apiKey !== undefined && partial.apiKey) {

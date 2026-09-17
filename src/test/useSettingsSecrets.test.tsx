@@ -75,16 +75,21 @@ describe("useSettingsWithSecrets 密钥同步语义", () => {
     expect(sets[0][1]).toMatchObject({ account: "global", secret: "ak-abc" });
   });
 
-  it("角色级 api_key 留空 = 清除覆盖（keychain_delete role:账号），回归钉住", async () => {
+  it("退出竞态：输入后 800ms 内卸载组件 → flush 以最终值写入（最终态不丢）", async () => {
     const h = await renderReady();
     await act(async () => {
-      h.result.current.updateSettings({
-        roleOverrides: { host: { api_key: "" } },
-      });
-      await vi.runAllTimersAsync();
+      h.result.current.updateSettings({ apiKey: "ak-abc" });
+      // 仅推进 100ms：处于防抖窗口内，尚未落钥匙串
+      await vi.advanceTimersByTimeAsync(100);
     });
-    const dels = calls("keychain_delete");
-    expect(dels).toHaveLength(1);
-    expect(dels[0][1]).toMatchObject({ account: "role:host" });
+    expect(calls("keychain_set")).toHaveLength(0);
+
+    // 卸载（等价用户 Cmd+Q 前组件树销毁）→ cleanup 应 flush pending 同步
+    act(() => {
+      h.unmount();
+    });
+    const sets = calls("keychain_set");
+    expect(sets).toHaveLength(1);
+    expect(sets[0][1]).toMatchObject({ account: "global", secret: "ak-abc" });
   });
 });
