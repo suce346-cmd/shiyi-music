@@ -243,3 +243,19 @@ B3 说明：三处 `Command::new("/usr/bin/security").args([...]).output()` 同�
 - 本地 dmg 打包失败（bundle_dmg.sh）：基线既有，CI 负责 dmg 产物
 - 用户真实 API key 已在历史数据丢失事件中损失，需重新输入一次（输入后 keychain_set -U 写入，配合本次修复不再丢失）
 - Mimosa 完整安全扫描未出最终结论（本次工具误报 Command.args 为注入已记录，实为参数向量 exec 无 shell）
+
+---
+
+## 六、追加包：退出 flush + 文案（v0.5.5.1）
+
+### 诊断（问题 1.3/1.4）
+- 1.3 退出竞态：防抖 800ms 内退出应用/卸载组件 → pending 定时器不 fire → 最终值丢失（钥匙串留旧值）。同族缺口（#1 是中间态被写入，此为最终态没被写入）。证据：全库无退出 flush 钩子（grep beforeunload/CloseRequested 为空）；syncTimers 无清理。
+- 1.4 文案：全局 Key placeholder 仅 "sk-..."，"留空=沿用"语义用户不可见（AINA 参考模式：已保存时提示"留空则沿用"）。
+
+### 方案
+- flushPendingSyncs(): 立即执行 pending 同步（清 timer → invoke 直接发）。useEffect cleanup 调用（组件卸载 flush）。
+- 更新 syncTimers 表引用供 flush 读取；secret 捕获进闭包（现状已捕获，flush 复用同 invoke 逻辑提取 invokeSync(account, secret)）。
+- App.tsx:669 placeholder 改为状态感知：secretsReady 且钥匙串有值时 "留空则沿用已保存的 Key"；需钥匙串是否有值 → 用 settings.apiKey 非空判断（回填后即真值）。
+- 原代码处理：scheduleSync 重构提取 invokeSync（行为不变）；timers 表加 cleanup；其余不动。
+- 验证：红灯测试（输入后立即卸载 → keychain_set 以最终值被调用）；vitest 全量；tsc；GUI 实测（输入后立即 Cmd+Q 重启读回）。
+- 回滚：单提交 revert。
