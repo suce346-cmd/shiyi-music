@@ -8,7 +8,8 @@ import StatusIndicator from "./components/StatusIndicator";
 import HistoryPanel from "./components/HistoryPanel";
 import RoundtablePanel from "./components/RoundtablePanel";
 import { useSettingsWithSecrets } from "./hooks/useSettings";
-import { usePipeline, ROLE_NAMES, ROLE_EMOJIS } from "./hooks/usePipeline";
+import { usePipeline, ROLE_NAMES, ROLE_EMOJIS, MODE_EXPERTS } from "./hooks/usePipeline";
+import { orderSpeechTurns } from "./utils/speechOrder";
 import { useQueue, queueLabel, dequeueNext } from "./hooks/useQueue";
 import QueuePanel from "./components/QueuePanel";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
@@ -45,6 +46,9 @@ export function buildHistoryRefineContext(entry: HistoryEntry) {
 
 export default function App() {
   const [mode, setMode] = useState<Mode>("mode_d");
+  /** D-1（#13）：当前模式阵容序（speech 稳定排序用）。ref 而非 state——onSpeech 回调
+   * 不应因阵容重渲染重建；mode/meta 变化时同步。 */
+  const rosterRef = useRef<string[]>(MODE_EXPERTS["mode_d"].map((e) => e.id));
   const [status, setStatus] = useState<LLMStatus>("idle");
   const [streamText, setStreamText] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
@@ -381,7 +385,8 @@ export default function App() {
           // 阶段0流式结束后清空中间态流式文本（首个专家发言时），避免统领全文重复显示
           if (speechLogRef.current.length === 0) setStreamText("");
           speechLogRef.current.push(speech);
-          setConversation((prev) => [...prev, speech]);
+          // D-1（#13）：并发到达的专家发言按模式阵容序稳定归位（锚点法），消除乱序观感
+          setConversation((prev) => orderSpeechTurns([...prev, speech], rosterRef.current));
         },
       });
       if (token !== runTokenRef.current) return; // 过期 run 的结果丢弃
@@ -496,7 +501,8 @@ export default function App() {
           // 阶段0流式结束后清空中间态流式文本（首个专家发言时）
           if (speechLogRef.current.length === 0) setStreamText("");
           speechLogRef.current.push(speech);
-          setConversation((prev) => [...prev, speech]);
+          // D-1（#13）：阵容序稳定归位（同 handleGenerate）
+          setConversation((prev) => orderSpeechTurns([...prev, speech], rosterRef.current));
         },
       });
     } catch (e) {
@@ -573,7 +579,8 @@ export default function App() {
         onSpeech: (speech) => {
           if (speechLogRef.current.length === 0) setStreamText("");
           speechLogRef.current.push(speech);
-          setConversation((prev) => [...prev, speech]);
+          // D-1（#13）：阵容序稳定归位（同 handleGenerate）
+          setConversation((prev) => orderSpeechTurns([...prev, speech], rosterRef.current));
         },
       });
       if (token !== runTokenRef.current) return; // 过期 run 的结果丢弃
@@ -617,6 +624,7 @@ export default function App() {
     chatHistoryRef.current = ctx.conversation.map(({ role, content }) => ({ role, content }));
     setConversation(ctx.conversation);
     setMode(ctx.mode);
+    rosterRef.current = MODE_EXPERTS[ctx.mode].map((e) => e.id); // D-1：历史装载同步阵容序
     setLastUserInput(ctx.lastUserInput);
     setCurrentHistoryId(null);
     setHistoryView(null); // 装载完成，关闭历史视图——后续走实时会话流
@@ -917,7 +925,9 @@ export default function App() {
               <ModeSelector mode={mode} locale={settings.language} onChange={(m) => {
                 runTokenRef.current++; // 作废在途 run
                 if (llmUnlistenRef.current) { llmUnlistenRef.current(); llmUnlistenRef.current = null; }
-                setMode(m); setStatus("idle"); setStreamText(""); setErrorMessage("");
+                setMode(m);
+                rosterRef.current = MODE_EXPERTS[m].map((e) => e.id); // D-1：阵容序同步
+                setStatus("idle"); setStreamText(""); setErrorMessage("");
                 setConversation([]); chatHistoryRef.current = [];
                 setLastUserInput(""); setLastFeedback("");
                 setHistoryView(null); setCurrentHistoryId(null);
