@@ -51,6 +51,92 @@ pub const DESC_LINE_MAX_CHARS: usize = 200;
 /// Mode C 尾部收尾允许行数
 pub const LYRIC_FILL_TAIL_ALLOW: usize = 2;
 
+// ---------------------------------------------------------------------------
+// 第二十三批·角色格式规则口径单源（跨载体统一）
+//
+// 起因（复核实测）：三类"改一处漏一处即静默降级"的缺口——
+// ① 跨域零绑定：抖音叙事型例外的下游硬门写死 `>= 2`（`validator::douyin_param_issue`），
+//    上游五处手写「≥2 个叙事段」——把硬门改 3 而人设照旧，全部测试仍绿；
+// ② 守护网覆盖窄：单元表只认 件/级/次/行/字/字符，`8 块`/`60-90 秒`/`至少 3 项`/`6 维`
+//    /`3-4 遍`/`2-4 次` 等写法全部漏网（改手写副本不报红）；
+// ③ 措辞/表格双份：弧线密度表、抖音逐段动态表、能量标尺在 prompts.rs 与 roles.rs 各手抄一份。
+// 本区块 = 上述规则数字的唯一 Rust 真源；所有 prose 载体经 `${占位符}` 引用。
+// 插值为迭代不动点（`interpolate`），容器（表格）内嵌标量占位符可自由展开，与定义顺序无关。
+// ---------------------------------------------------------------------------
+
+/// 抖音「叙事型例外」的结构门槛（个）：结构含 ≥N 个叙事段（Verse/Pre-Chorus/Bridge）。
+///
+/// 单源：上游告知（`CHECKLIST_D` + 校验员讨论轮/校验员终稿/情感分析师/制作人/风格分析师人设
+/// 经 `${NARRATIVE_SECTIONS_MIN}`）与下游判定（`validator::douyin_param_issue` 的结构计数硬门
+/// 及其打回文案）同读此值——旧实现下游写死 `>= 2`、上游五处手写，改硬门不联动人设即静默降级。
+pub const NARRATIVE_SECTIONS_MIN: usize = 2;
+
+/// Style Prompt 信息块数（A/B 模式 8 块）。与 `${STYLE_BLOCKS_AB}` 同源。
+pub const STYLE_BLOCK_COUNT_AB: usize = 8;
+/// Style Prompt 信息块数（抖音模式 7 块：无艺人参考块）。与 `${STYLE_BLOCKS_DOUYIN}` 同源。
+pub const STYLE_BLOCK_COUNT_DOUYIN: usize = 7;
+
+/// 抖音情绪弧线的**禁用句式**（"from A to B"）——人设与模式 prompt 三处引用同一短语，
+/// 禁的是哪种写法只有这一个真源（改判据时三处同时改，不会漏）。
+pub const DOUYIN_ARC_FORBID_PHRASE: &str = "from A to B";
+
+/// 抖音模式成曲时长区间（秒）——`${DOUYIN_DURATION_RANGE}`。
+pub const DOUYIN_DURATION_SEC_MIN: u32 = 60;
+pub const DOUYIN_DURATION_SEC_MAX: u32 = 90;
+/// 抖音「前 N 秒建钩子」留人窗口（秒）——`${DOUYIN_HOOK_WINDOW}`。
+pub const DOUYIN_HOOK_WINDOW_SEC: u32 = 3;
+/// 抖音 Intro 段落跨度（"Intro/前 7 秒"，秒）——`${DOUYIN_INTRO_SPAN}`。
+pub const DOUYIN_INTRO_SPAN_SEC: u32 = 7;
+
+/// 审改员/校验员无异议时的 checked 清单最小条数——`${CHECKED_MIN}`。
+/// 与 `REVIEW_SCHEMA_*` 示例条数由 `checked_schema_example_matches_min_items` 双向锁定。
+pub const CHECKED_MIN_ITEMS: usize = 3;
+
+/// 人声坐标维度数（音域/音色/发声/颤音/咬字/节奏感）与说明行建议描述的关键维数。
+pub const VOCAL_DIM_COUNT: usize = 6;
+pub const VOCAL_DIM_KEEP_MIN: usize = 2;
+pub const VOCAL_DIM_KEEP_MAX: usize = 3;
+
+/// 抖音 Hook 重复次数：强化区间 [`HOOK_REPEAT_MIN`, `HOOK_REPEAT_MAX`]，
+/// 超过 `HOOK_REPEAT_DILUTE` 次即稀释冲击力。
+pub const HOOK_REPEAT_MIN: u32 = 2;
+pub const HOOK_REPEAT_MAX: u32 = 4;
+pub const HOOK_REPEAT_DILUTE: u32 = 5;
+/// 抖音 Hook「重复 N-M 遍即成立」（一句话循环型 / 无歌词金句循环）。
+pub const DOUYIN_HOOK_LOOP_MIN: u32 = 3;
+pub const DOUYIN_HOOK_LOOP_MAX: u32 = 4;
+
+/// 能量标尺：全量程 [`ENERGY_SCALE_MIN`, `ENERGY_SCALE_MAX`]（10 级制）。
+pub const ENERGY_SCALE_MIN: u32 = 0;
+pub const ENERGY_SCALE_MAX: u32 = 10;
+/// 能量五档区间（极弱/弱/中/强/极强）——所有载体经 `${ENERGY_BAND_1}`…`${ENERGY_BAND_5}` 引用。
+pub const ENERGY_BAND_RANGES: [&str; 5] = ["0-2", "3-4", "5-6", "7-8", "9-10"];
+/// 抖音动态走向的能量窗口：全程高位 [`MIN`, `MAX`] 分；高开骤停 [`MIN`, `MAX`] 分一刀切。
+pub const DOUYIN_ENERGY_HIGH_MIN: u32 = 7;
+pub const DOUYIN_ENERGY_HIGH_MAX: u32 = 9;
+pub const DOUYIN_ENERGY_ABRUPT_MIN: u32 = 8;
+pub const DOUYIN_ENERGY_ABRUPT_MAX: u32 = 10;
+
+/// 弧线逐段密度表（五行弧线形态，六行表体）——**单源**。
+///
+/// 此前 `prompts.rs`（mode_a 编曲密度渐进节）与 `roles.rs` 制作人 prompt 各手抄一份同文本
+/// （改一处漏一处，措辞会静默分叉）。现两处均经占位符引用：
+/// - `${ARC_DENSITY_TABLE}`：原样（行首 `· `，无缩进）；
+/// - `${ARC_DENSITY_TABLE_INDENTED}`：每行前置 4 空格（供 prompts.rs 的缩进代码块）。
+/// 行内 `3-4件`/`6-7件` 是**规划示例**而非阈值常量（`handwritten_rule_number_hits` 的
+/// 区间右端豁免据此放行），与 `MIN_INSTRUMENT_WEAK` 下限的关系由"极简段豁免"条款约束。
+const ARC_DENSITY_TABLE: &str = "· Intro：标准叙事型=稀疏；全程高能型=即满；高开低走型=满配；平铺氛围型=均匀中低；起伏戏剧型=视起点定\n· Verse：标准叙事型=低密度；全程高能型=持续高压；高开低走型=开始减；平铺氛围型=均匀中低；起伏戏剧型=视起伏定\n· Pre-Chorus：标准叙事型=推；全程高能型=用 Drop 区分；高开低走型=继续减；平铺氛围型=均匀中低；起伏戏剧型=视起伏定\n· Chorus：标准叙事型=打开；全程高能型=持续高压；高开低走型=最弱；平铺氛围型=均匀中低；起伏戏剧型=视起伏定\n· Bridge：标准叙事型=剥离；全程高能型=不用 Build Up；高开低走型=—；平铺氛围型=均匀中低；起伏戏剧型=视起伏定\n· Final Chorus：标准叙事型=最大；全程高能型=最大；高开低走型=—；平铺氛围型=均匀中低；起伏戏剧型=最强或最弱";
+
+/// 新增五弧线形态的逐段密度表——**单源**（同 `ARC_DENSITY_TABLE` 的双载体与占位符规则）。
+const ARC_DENSITY_NEW_TABLE: &str = "· Intro：阶梯上升=稀疏；渐进爆发=稀疏；U型=中（主题宣示）；单峰=稀；回环=中（动机建立）\n· Verse：阶梯上升=低；渐进爆发=渐加；U型=中低；单峰=累积；回环=中低\n· Pre-Chorus：阶梯上升=推；渐进爆发=长 Build（蓄而不放）；U型=渐降；单峰=推；回环=推\n· Chorus：阶梯上升=中 3-4件（每轮递增）；渐进爆发=蓄而不放；U型=弱（全曲沉底）；单峰=峰（最大）；回环=中\n· Bridge：阶梯上升=微收；渐进爆发=继续加层；U型=最弱（挣扎）；单峰=—；回环=中低（转折）\n· Final Chorus：阶梯上升=最大 6-7件（加层加和声）；渐进爆发=全开一击爆发；U型=最强（超过开头）；单峰=收束；回环=回到 Intro 配置（呼应）";
+
+/// 抖音逐段动态参考表——**单源**（此前 prompts.rs mode_d 与 roles.rs 制作人各手抄一份）。
+///
+/// 表内能量值/件数是**设计方向示例**（抖音模式无逐段件数硬门、无能量硬门，见 `validate_douyin`），
+/// 不是阈值常量；表内 `前${DOUYIN_INTRO_SPAN}秒` 为嵌套占位符（标量对排在容器对之前，插值顺序由
+/// `placeholder_pairs` 保证）。
+const DOUYIN_DYNAMIC_TABLE: &str = "· Intro/前${DOUYIN_INTRO_SPAN}秒：全程高位=8，3-4件，直接拉满；高开骤停=8，3-4件，直接拉满；先压后炸=3-4，1-2件，制造反差\n· Hook：全程高位=9，3-4件，持续高压；高开骤停=9，3-4件，持续高压；先压后炸=9-10，5件，突然爆发\n· Verse：全程高位=8，3件，不冷却；高开骤停=8，3件，不冷却；先压后炸=7，3件，保持热度\n· Hook重复：全程高位=9，4件，加层；高开骤停=9，4件，加层；先压后炸=10，5-6件，最炸\n· Bridge/反差：全程高位=7，2件，稍剥离；高开骤停=—；先压后炸=8，3件，再次推\n· 最后Hook：全程高位=10，4件，最炸；高开骤停=10，4件，骤停前一拍最炸；先压后炸=10，5-6件，炸完即停";
+
 /// 请求准入·用户输入上限字符数（user_input 与原歌词共用）。
 ///
 /// 单源理由：这两个数原先作为**函数局部常量**写在 `models::validate_request` 体内，
@@ -551,10 +637,10 @@ pub fn checklist(mode: &str) -> String {
 /// 由 `no_handwritten_rule_numbers_in_prose_carriers` 扫描 `PROSE_CARRIERS` 锁定）——
 /// 旧实现手写全文数字，与常量/`ARC_PARAMS` 脱钩（#21 家族残留：`CHECKLIST_A` 的
 /// 10 条弧线区间整段复刻 `ARC_PARAMS`、`CHECKLIST_D` 的抖音区间无常量锁）。
-const CHECKLIST_A: &str = "【校验清单 A·单源】Style Prompt≤${STYLE_PROMPT_MAX}字符且≥${STYLE_PROMPT_MIN}字符；结构标签≥2段；能量差≥${MIN_ENERGY_GAP}级（0-10）；配器差≥${MIN_INSTRUMENT_GAP}件、单段${INSTRUMENT_RANGE}件（最弱段即下限${MIN_INSTRUMENT_WEAK}件，声明'极简段'的段落豁免下限）、最强段≥${MIN_INSTRUMENT_STRONG}件；说明行≤${DESC_LINE_MAX}字符（含方括号整行计，上限内须保乐器+行为动词）；弧线参数：${ARC_INLINE}；Audio Influence=0；断句单空格、禁/与、标点全半角。";
-const CHECKLIST_B: &str = "【校验清单 B·单源】Style Prompt≤${STYLE_PROMPT_MAX}字符且≥${STYLE_PROMPT_MIN}字符；结构标签≥2段；能量差≥${MIN_ENERGY_GAP}级（0-10）；配器差≥${MIN_INSTRUMENT_GAP}件、单段${INSTRUMENT_RANGE}件（最弱段即下限${MIN_INSTRUMENT_WEAK}件，声明'极简段'的段落豁免下限）、最强段≥${MIN_INSTRUMENT_STRONG}件；说明行≤${DESC_LINE_MAX}字符（含方括号整行计，上限内须保乐器+行为动词）；参数固定区间：Weirdness ${MODE_B_WEIRD_RANGE}、Style Influence ${MODE_B_STYLE_RANGE}（B 专属区间为准，弧线区间不适用 B）；Audio Influence=0；断句单空格、禁/与、标点全半角。";
+const CHECKLIST_A: &str = "【校验清单 A·单源】Style Prompt≤${STYLE_PROMPT_MAX}字符且≥${STYLE_PROMPT_MIN}字符；结构标签≥${MIN_SECTION_TAGS}段；能量差≥${MIN_ENERGY_GAP}级（${ENERGY_SCALE}）；配器差≥${MIN_INSTRUMENT_GAP}件、单段${INSTRUMENT_RANGE}件（最弱段即下限${MIN_INSTRUMENT_WEAK}件，声明'极简段'的段落豁免下限）、最强段≥${MIN_INSTRUMENT_STRONG}件；说明行≤${DESC_LINE_MAX}字符（含方括号整行计，上限内须保乐器+行为动词）；弧线参数：${ARC_INLINE}；Audio Influence=0；断句单空格、禁/与、标点全半角。";
+const CHECKLIST_B: &str = "【校验清单 B·单源】Style Prompt≤${STYLE_PROMPT_MAX}字符且≥${STYLE_PROMPT_MIN}字符；结构标签≥${MIN_SECTION_TAGS}段；能量差≥${MIN_ENERGY_GAP}级（${ENERGY_SCALE}）；配器差≥${MIN_INSTRUMENT_GAP}件、单段${INSTRUMENT_RANGE}件（最弱段即下限${MIN_INSTRUMENT_WEAK}件，声明'极简段'的段落豁免下限）、最强段≥${MIN_INSTRUMENT_STRONG}件；说明行≤${DESC_LINE_MAX}字符（含方括号整行计，上限内须保乐器+行为动词）；参数固定区间：Weirdness ${MODE_B_WEIRD_RANGE}、Style Influence ${MODE_B_STYLE_RANGE}（B 专属区间为准，弧线区间不适用 B）；Audio Influence=0；断句单空格、禁/与、标点全半角。";
 const CHECKLIST_C: &str = "【校验清单 C·单源】逐行等字数（差一字即失败，尾部≤${LYRIC_FILL_TAIL}行收尾）；行数与原歌词一致；段落结构与原歌词一致（禁新增Hook/Chorus段）；韵脚位置与模式保留；说明行带方括号且≤${DESC_LINE_MAX}字符（整行计）；Style Prompt≤${STYLE_PROMPT_MAX}字符；断句单空格、禁/与、标点全半角。";
-const CHECKLIST_D: &str = "【校验清单 D·单源】Hook≥${HOOK_MIN}次；单段Verse≤${VERSE_MAX_LINES}行；每行≤${DOUYIN_LINE_MAX}字；结尾骤停（一刀切，含abruptly/cut标识）；BPM≥${DOUYIN_BPM_MIN}；Style Prompt≤${STYLE_PROMPT_MAX}字符且≥${STYLE_PROMPT_MIN}字符；说明行≤${DESC_LINE_MAX}字符（含方括号整行计，上限内须保乐器+行为动词）；参数抖音${DOUYIN_WEIRD_RANGE}/${DOUYIN_STYLE_RANGE}（仅当含≥2叙事段Verse/Pre-Chorus/Bridge且方案写明'叙事型'归类，方可回落A/B弧线区间，二者缺一打回）；Audio Influence=0；断句单空格、禁/与、标点全半角。";
+const CHECKLIST_D: &str = "【校验清单 D·单源】Hook≥${HOOK_MIN}次；单段Verse≤${VERSE_MAX_LINES}行；每行≤${DOUYIN_LINE_MAX}字；结尾骤停（一刀切，含abruptly/cut标识）；BPM≥${DOUYIN_BPM_MIN}；Style Prompt≤${STYLE_PROMPT_MAX}字符且≥${STYLE_PROMPT_MIN}字符；说明行≤${DESC_LINE_MAX}字符（含方括号整行计，上限内须保乐器+行为动词）；参数抖音${DOUYIN_WEIRD_RANGE}/${DOUYIN_STYLE_RANGE}（仅当含≥${NARRATIVE_SECTIONS_MIN}叙事段Verse/Pre-Chorus/Bridge且方案写明'叙事型'归类，方可回落A/B弧线区间，二者缺一打回）；Audio Influence=0；断句单空格、禁/与、标点全半角。";
 
 /// 阶段 0 地基 primer（模式专属，每模式≤800字；M9 顺序：受众→物件→约束→旋律）。
 /// 定位 = **工序顺序锚点**（primer 独有内容：意象家族/声学映射/Verse2 新增信息/借体覆盖/弧线能量标尺），
@@ -575,11 +661,11 @@ pub fn host_primer(mode: &str) -> Option<&'static str> {
 // 数值规则：常量派生项写 `${占位符}`；**物件清单下限（≥5件具体物）数值权威在知识库 CSV**
 // （`lyric_craft::LC-01`），无常量可派，故保留字面量并在 `PROSE_CARRIERS` 登记
 // 「CSV 同源锁」`primer_ab_stage0_threshold_matches_lyric_craft_row`（登记即受控，不是漏网）。
-const PRIMER_AB: &str = "【阶段0地基·A/B】受众：先一句话定对象阅历与时机（写给谁听、何时听），不到不写。物件：先建时空物件清单（≥5件具体物，禁抽象词开局），再定意象家族（一首歌一个系统）与声学映射（每个意象写出乐器/音色对应）。约束：声调服从旋律走向（硬门），韵脚密度为软优化；Verse2须新增信息；借体覆盖：每个抽象词配具体物象，禁裸奔。旋律骨架：先定弧线10选1与能量标尺（0-2静止/3-4铺垫/5-6推进/7-8爆发/9-10用尽全力），弱强差≥${MIN_ENERGY_GAP}级，配器差≥${MIN_INSTRUMENT_GAP}件，全曲≤${INSTRUMENT_MAX}件。";
+const PRIMER_AB: &str = "【阶段0地基·A/B】受众：先一句话定对象阅历与时机（写给谁听、何时听），不到不写。物件：先建时空物件清单（≥5件具体物，禁抽象词开局），再定意象家族（一首歌一个系统）与声学映射（每个意象写出乐器/音色对应）。约束：声调服从旋律走向（硬门），韵脚密度为软优化；Verse2须新增信息；借体覆盖：每个抽象词配具体物象，禁裸奔。旋律骨架：先定弧线10选1与能量标尺（${ENERGY_BAND_1}静止/${ENERGY_BAND_2}铺垫/${ENERGY_BAND_3}推进/${ENERGY_BAND_4}爆发/${ENERGY_BAND_5}用尽全力），弱强差≥${MIN_ENERGY_GAP}级，配器差≥${MIN_INSTRUMENT_GAP}件，全曲≤${INSTRUMENT_MAX}件。";
 // C：对齐铁律 + 节奏保留 + 借体。
 const PRIMER_C: &str = "【阶段0地基·C】对齐铁律：逐行等字数（差一字即失败）、行数与原歌词一致、段落结构与原歌词一致（禁新增段）。节奏保留：词组切分与原歌词一致（3+4、2+2+3等），呼吸点位置一致，韵脚位置与模式保留。借体：新意象转译原意象叙事功能（非替换），意象家族统一，抽象词每个有借体，套话具体化。";
 // D：前3秒画面 + 道具刻度 + 骤停提醒 + 字数提醒。
-const PRIMER_D: &str = "【阶段0地基·D】前3秒：开场3秒内建钩子或强画面，直接进内容不慢铺垫。道具刻度：核心情感绑有世俗重量的具体物（物作刻度），金句短、魔性、可独立传播，Hook≥${HOOK_MIN}次。约束：Verse≤${VERSE_MAX_LINES}行，每行≤${DOUYIN_LINE_MAX}字，说明行≤${DESC_LINE_MAX}字符（含方括号整行计），BPM≥${DOUYIN_BPM_MIN}。收尾：结尾骤停一刀切（不渐弱），动态标签用对，骤停后无乐器残留。";
+const PRIMER_D: &str = "【阶段0地基·D】前${DOUYIN_HOOK_WINDOW}秒：开场${DOUYIN_HOOK_WINDOW}秒内建钩子或强画面，直接进内容不慢铺垫。道具刻度：核心情感绑有世俗重量的具体物（物作刻度），金句短、魔性、可独立传播，Hook≥${HOOK_MIN}次。约束：Verse≤${VERSE_MAX_LINES}行，每行≤${DOUYIN_LINE_MAX}字，说明行≤${DESC_LINE_MAX}字符（含方括号整行计），BPM≥${DOUYIN_BPM_MIN}。收尾：结尾骤停一刀切（不渐弱），动态标签用对，骤停后无乐器残留。";
 
 /// 进 LLM 上下文的告知载体（`&'static str`，上游 prompt 与下游打回指令都算）注册表——
 /// **守护网扫描面单源**。
@@ -626,9 +712,18 @@ pub const PROSE_CARRIERS: &[ProseCarrier] = &[
     },
     ProseCarrier { name: "PRIMER_C", text: PRIMER_C, csv_locked: &[] },
     ProseCarrier { name: "PRIMER_D", text: PRIMER_D, csv_locked: &[] },
+    // 第二十三批：三张表从"prompts.rs 与 roles.rs 各手抄一份"收敛为本文件单源，
+    // 登记即受 `no_handwritten_rule_numbers_in_prose_carriers` 扫描（表内规划示例值
+    // `3-4件` 等由扫描网的区间右端豁免放行；阈值项一律 ${占位符}）。
+    ProseCarrier { name: "ARC_DENSITY_TABLE", text: ARC_DENSITY_TABLE, csv_locked: &[] },
+    ProseCarrier { name: "ARC_DENSITY_NEW_TABLE", text: ARC_DENSITY_NEW_TABLE, csv_locked: &[] },
+    ProseCarrier { name: "DOUYIN_DYNAMIC_TABLE", text: DOUYIN_DYNAMIC_TABLE, csv_locked: &[] },
     // 信封契约正文（第二十批补登记）：随 `envelope_spec()` 进主持人上下文——此前它
     // 既不在两个源文件里、也不在本表里，属于"漏网载体"（发现网 `prose_definitions_are_covered_by_scan_or_registry` 报红暴露）
     ProseCarrier { name: "ENVELOPE_SPEC_BASE", text: ENVELOPE_SPEC_BASE, csv_locked: &[] },
+    // 说明行契约正文（第二十三批）：旧实现是 `desc_line_contract()` 的 format! 局部手写，
+    // 既不进扫描面也不被入网自证发现——改常量不联动它。现为注册载体。
+    ProseCarrier { name: "DESC_LINE_CONTRACT", text: DESC_LINE_CONTRACT, csv_locked: &[] },
     // 打回 issue 文案（第二十批补登记）：随【格式问题】清单进 LLM 上下文（orchestrator 打回循环），
     // 此前既不在两个源文件里也没登记——同样是发现网暴露的漏网载体。为此把常量放开为 `pub(crate)`。
     ProseCarrier {
@@ -641,12 +736,34 @@ pub const PROSE_CARRIERS: &[ProseCarrier] = &[
 /// C3/D3：prompt 数值单源插值——`${NAME}` 占位符替换为常量派生值。
 /// prompts.rs/roles.rs 的静态文本不得手写注册表辖域数字（守护测试锁定）；
 /// 无占位符文本原样返回（幂等——用户 override 文件可不写占位符）。
+///
+/// 第二十三批：改为**迭代至不动点**（有界 5 轮）。此前是单遍顺序替换，容器占位符的值
+/// 若含标量占位符（如 `${DOUYIN_DYNAMIC_TABLE}` 表体内的 `${DOUYIN_INTRO_SPAN}`），
+/// 展开是否彻底取决于对的定义顺序——25-批实测 mode_d 快照因此在表体行残留
+/// `${DOUYIN_INTRO_SPAN}`。不动点实现与定义顺序无关，容器可自由嵌套标量
+/// （`interpolate_expands_nested_placeholders` + `..._no_leftover_placeholders` 双向锁定）。
 pub fn interpolate(text: &str) -> String {
+    let pairs = placeholder_pairs();
     let mut out = text.to_string();
-    for (key, value) in placeholder_pairs() {
-        out = out.replace(key, &value);
+    for _ in 0..5 {
+        let before = out.clone();
+        for (key, value) in &pairs {
+            if out.contains(key) {
+                out = out.replace(key, value);
+            }
+        }
+        if out == before {
+            break;
+        }
     }
     out
+}
+
+/// 中文数词（0-10）：供需以中文数词表述的载体引用（如"六维思考检查表"），
+/// 与阿拉伯数字值**同源**——维度数改常量时中文写法同步变，不再各写各的。
+fn cn_numeral(n: usize) -> String {
+    const CN: [&str; 11] = ["零", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十"];
+    CN.get(n).map(|s| (*s).to_string()).unwrap_or_else(|| n.to_string())
 }
 
 /// 占位符→值映射表（单源：全部由 rules 常量派生，无手写数字）。
@@ -673,10 +790,43 @@ fn placeholder_pairs() -> Vec<(&'static str, String)> {
         ("${MIN_INSTRUMENT_STRONG}", MIN_INSTRUMENT_STRONG.to_string()),
         ("${INSTRUMENT_MAX}", INSTRUMENT_MAX.to_string()),
         ("${INSTRUMENT_RANGE}", format!("{}-{}", MIN_INSTRUMENT_WEAK, INSTRUMENT_MAX)),
+        // 第二十三批：角色格式规则口径单源。插值为迭代不动点（见 `interpolate`），
+        // 容器与标量的定义顺序不影响嵌套展开；容器对仍集中在下方尾部便于审阅。
+        ("${NARRATIVE_SECTIONS_MIN}", NARRATIVE_SECTIONS_MIN.to_string()),
+        ("${STYLE_BLOCKS_AB}", STYLE_BLOCK_COUNT_AB.to_string()),
+        ("${STYLE_BLOCKS_DOUYIN}", STYLE_BLOCK_COUNT_DOUYIN.to_string()),
+        ("${DOUYIN_ARC_FORBID_PHRASE}", DOUYIN_ARC_FORBID_PHRASE.to_string()),
+        ("${DOUYIN_DURATION_RANGE}", format!("{}-{}", DOUYIN_DURATION_SEC_MIN, DOUYIN_DURATION_SEC_MAX)),
+        ("${DOUYIN_HOOK_WINDOW}", DOUYIN_HOOK_WINDOW_SEC.to_string()),
+        ("${DOUYIN_INTRO_SPAN}", DOUYIN_INTRO_SPAN_SEC.to_string()),
+        ("${CHECKED_MIN}", CHECKED_MIN_ITEMS.to_string()),
+        ("${VOCAL_DIM_COUNT}", VOCAL_DIM_COUNT.to_string()),
+        ("${VOCAL_DIM_COUNT_CN}", cn_numeral(VOCAL_DIM_COUNT)),
+        ("${VOCAL_DIM_KEEP_RANGE}", format!("{}-{}", VOCAL_DIM_KEEP_MIN, VOCAL_DIM_KEEP_MAX)),
+        ("${HOOK_REPEAT_RANGE}", format!("{}-{}", HOOK_REPEAT_MIN, HOOK_REPEAT_MAX)),
+        ("${HOOK_REPEAT_DILUTE}", HOOK_REPEAT_DILUTE.to_string()),
+        ("${DOUYIN_HOOK_LOOP_RANGE}", format!("{}-{}", DOUYIN_HOOK_LOOP_MIN, DOUYIN_HOOK_LOOP_MAX)),
+        ("${ENERGY_SCALE}", format!("{}-{}", ENERGY_SCALE_MIN, ENERGY_SCALE_MAX)),
+        ("${ENERGY_BAND_1}", ENERGY_BAND_RANGES[0].to_string()),
+        ("${ENERGY_BAND_2}", ENERGY_BAND_RANGES[1].to_string()),
+        ("${ENERGY_BAND_3}", ENERGY_BAND_RANGES[2].to_string()),
+        ("${ENERGY_BAND_4}", ENERGY_BAND_RANGES[3].to_string()),
+        ("${ENERGY_BAND_5}", ENERGY_BAND_RANGES[4].to_string()),
+        ("${DOUYIN_ENERGY_HIGH_RANGE}", format!("{}-{}", DOUYIN_ENERGY_HIGH_MIN, DOUYIN_ENERGY_HIGH_MAX)),
+        ("${DOUYIN_ENERGY_ABRUPT_RANGE}", format!("{}-{}", DOUYIN_ENERGY_ABRUPT_MIN, DOUYIN_ENERGY_ABRUPT_MAX)),
+        ("${MIN_SECTION_TAGS}", MIN_SECTION_TAGS.to_string()),
         ("${MINIMAL_SECTION_EXEMPT}", minimal_section_exemption()),
         ("${ARC_TABLE}", arc_table_lines()),
         ("${ARC_INLINE}", arc_inline_list()),
         ("${TERRITORY_RULES}", territory_rules_text()),
+        // 容器对（值可含上面的标量占位符，由不动点迭代展开——顺序无关）。
+        // `_INDENTED` 变体 = 同源表体每行前置 4 空格（供 prompts.rs 缩进代码块；表格仍是单份）。
+        ("${ARC_DENSITY_TABLE}", ARC_DENSITY_TABLE.to_string()),
+        ("${ARC_DENSITY_TABLE_INDENTED}", ARC_DENSITY_TABLE.replace('\n', "\n    ")),
+        ("${ARC_DENSITY_NEW_TABLE}", ARC_DENSITY_NEW_TABLE.to_string()),
+        ("${ARC_DENSITY_NEW_TABLE_INDENTED}", ARC_DENSITY_NEW_TABLE.replace('\n', "\n    ")),
+        ("${DOUYIN_DYNAMIC_TABLE}", DOUYIN_DYNAMIC_TABLE.to_string()),
+        ("${DOUYIN_DYNAMIC_TABLE_INDENTED}", DOUYIN_DYNAMIC_TABLE.replace('\n', "\n    ")),
     ];
     // C4/D4：领地声明短语（单源 = TERRITORY_DECLARATIONS）——人设占位符展开为逐字相同文本，
     // 短语只在 rules.rs 定义一次（旧实现三份手抄副本，改表不改人设不报红）。
@@ -853,6 +1003,175 @@ mod tests {
         assert_eq!(interpolate("无占位符文本，Weirdness 12-20 保持原样"), "无占位符文本，Weirdness 12-20 保持原样");
     }
 
+    /// 第二十三批·嵌套占位符锁：容器（表格）值内含标量占位符时，插值必须展开到不动点。
+    /// 旧实现是单遍顺序替换——mode_d 快照实测在动态表体行残留 `${DOUYIN_INTRO_SPAN}`。
+    #[test]
+    fn interpolate_expands_nested_placeholders() {
+        let table = interpolate("${DOUYIN_DYNAMIC_TABLE}");
+        assert!(table.contains("前7秒"), "容器内的标量占位符必须展开：{}", table);
+        assert!(!table.contains("${"), "容器展开后不得残留占位符：{}", table);
+        // 幂等：已渲染文本再插值不变（用户 override / 二次注入路径）
+        assert_eq!(interpolate(&table), table, "插值必须幂等");
+    }
+
+    /// 第二十三批·插值完整性锁：所有进 LLM 上下文的载体渲染后不得残留 `${…}`。
+    /// 覆盖面 = 注册载体（PROSE_CARRIERS）+ 两个源文件的全部 prompt 载体；
+    /// 占位符拼写错误 / 新占位符漏登记进 `placeholder_pairs` / 容器嵌套未展开，全部在此报红。
+    #[test]
+    fn interpolated_carriers_have_no_leftover_placeholders() {
+        let mut carriers: Vec<(String, String)> = Vec::new();
+        for c in PROSE_CARRIERS {
+            carriers.push((format!("carrier:{}", c.name), interpolate(c.text)));
+        }
+        carriers.push(("minimal_section_exemption".to_string(), minimal_section_exemption()));
+        carriers.push(("envelope_spec".to_string(), envelope_spec()));
+        carriers.push(("desc_line_contract".to_string(), desc_line_contract()));
+        carriers.push(("territory_rules_text".to_string(), territory_rules_text()));
+        carriers.push(("arc_table".to_string(), interpolate("${ARC_TABLE}")));
+        carriers.push(("arc_inline".to_string(), interpolate("${ARC_INLINE}")));
+        for m in all_mode_names() {
+            carriers.push((format!("checklist:{}", m), checklist(m)));
+            if let Some(p) = host_primer(m) {
+                carriers.push((format!("primer:{}", m), interpolate(p)));
+            }
+        }
+        use crate::commands::roles;
+        carriers.push(("role:host".to_string(), interpolate(roles::host().system_prompt)));
+        carriers.push(("role:auditor".to_string(), interpolate(roles::auditor().system_prompt)));
+        carriers.push(("role:auditor_schema".to_string(), interpolate(roles::auditor().output_schema)));
+        carriers.push((
+            "role:auditor_review".to_string(),
+            interpolate(roles::auditor_review_prompt()),
+        ));
+        carriers.push((
+            "role:auditor_mode_c".to_string(),
+            interpolate(roles::auditor_format_prompt_mode_c()),
+        ));
+        for (name, r) in [
+            ("emotion", roles::emotion()),
+            ("lyricist", roles::lyricist()),
+            ("reviser", roles::reviser()),
+            ("producer", roles::producer()),
+            ("style_analyst", roles::style_analyst()),
+        ] {
+            carriers.push((format!("role:{}", name), interpolate(r.system_prompt)));
+            carriers.push((format!("role_schema:{}", name), interpolate(r.output_schema)));
+        }
+        carriers.push(("transcription_contract".to_string(), roles::TRANSCRIPTION_CONTRACT.to_string()));
+        for (name, p) in [
+            ("mode_a", crate::commands::prompts::mode_a_system_prompt()),
+            ("mode_b", crate::commands::prompts::mode_b_system_prompt()),
+            ("mode_c", crate::commands::prompts::mode_c_system_prompt()),
+            ("mode_d", crate::commands::prompts::mode_d_system_prompt()),
+        ] {
+            carriers.push((format!("prompt:{}", name), interpolate(p)));
+        }
+        let mut leftovers: Vec<String> = Vec::new();
+        for (name, text) in &carriers {
+            if let Some(at) = text.find("${") {
+                let frag: String = text[at..].chars().take(40).collect();
+                leftovers.push(format!("{} → {}", name, frag));
+            }
+        }
+        assert!(
+            leftovers.is_empty(),
+            "插值后残留占位符 {} 处（占位符拼写错误 / 漏登记 placeholder_pairs / 嵌套未展开）：\n{}",
+            leftovers.len(),
+            leftovers.join("\n")
+        );
+        assert!(carriers.len() >= 30, "载体扫描面异常（{}）——本锁会空转", carriers.len());
+    }
+
+    /// 第二十三批·跨载体引用锁（与扫描网互补）：扫描网判"有没有手写数字"，
+    /// 本锁判"该引用的载体有没有真引用"——载体把 `${占位符}` 改回手写字面量即在此报红。
+    /// 同时验证每个占位符都能被 `placeholder_pairs` 解析（拼写错误即红）。
+    #[test]
+    fn batch23_rule_numbers_referenced_in_expected_carriers() {
+        use crate::commands::roles;
+        let carriers: Vec<(&str, String)> = vec![
+            ("auditor_review", roles::auditor_review_prompt().to_string()),
+            ("host", roles::host().system_prompt.to_string()),
+            ("auditor", roles::auditor().system_prompt.to_string()),
+            ("emotion", roles::emotion().system_prompt.to_string()),
+            ("lyricist", roles::lyricist().system_prompt.to_string()),
+            ("reviser", roles::reviser().system_prompt.to_string()),
+            ("producer", roles::producer().system_prompt.to_string()),
+            ("style_analyst", roles::style_analyst().system_prompt.to_string()),
+            ("mode_a", crate::commands::prompts::mode_a_system_prompt().to_string()),
+            ("mode_b", crate::commands::prompts::mode_b_system_prompt().to_string()),
+            ("mode_c", crate::commands::prompts::mode_c_system_prompt().to_string()),
+            ("mode_d", crate::commands::prompts::mode_d_system_prompt().to_string()),
+        ];
+        let cases: &[(&str, &[&str])] = &[
+            ("${NARRATIVE_SECTIONS_MIN}", &["auditor_review", "auditor", "emotion", "producer"]),
+            ("${STYLE_BLOCKS_AB}", &["auditor_review", "auditor"]),
+            ("${STYLE_BLOCKS_DOUYIN}", &["auditor_review", "auditor", "style_analyst"]),
+            ("${DOUYIN_ARC_FORBID_PHRASE}", &["auditor", "style_analyst", "mode_d"]),
+            ("${DOUYIN_DURATION_RANGE}", &["style_analyst", "mode_d"]),
+            ("${DOUYIN_HOOK_WINDOW}", &["emotion", "style_analyst"]),
+            ("${DOUYIN_INTRO_SPAN}", &["mode_d"]),
+            (
+                "${CHECKED_MIN}",
+                &["auditor_review", "emotion", "lyricist", "reviser", "producer", "style_analyst"],
+            ),
+            ("${VOCAL_DIM_COUNT}", &["producer"]),
+            ("${VOCAL_DIM_COUNT_CN}", &["mode_a", "mode_b", "mode_d"]),
+            ("${VOCAL_DIM_KEEP_RANGE}", &["mode_a", "mode_b", "mode_d"]),
+            ("${HOOK_REPEAT_RANGE}", &["style_analyst"]),
+            ("${HOOK_REPEAT_DILUTE}", &["style_analyst"]),
+            ("${DOUYIN_HOOK_LOOP_RANGE}", &["lyricist", "mode_d"]),
+            ("${ENERGY_SCALE}", &["auditor", "emotion", "mode_a", "mode_b", "mode_d"]),
+            ("${ENERGY_BAND_1}", &["emotion", "producer", "mode_a"]),
+            ("${ENERGY_BAND_2}", &["emotion", "producer", "mode_a"]),
+            ("${ENERGY_BAND_3}", &["emotion", "producer", "mode_a"]),
+            ("${ENERGY_BAND_4}", &["emotion", "producer", "mode_a"]),
+            ("${ENERGY_BAND_5}", &["emotion", "producer", "mode_a"]),
+            ("${DOUYIN_ENERGY_HIGH_RANGE}", &["mode_d"]),
+            ("${DOUYIN_ENERGY_ABRUPT_RANGE}", &["mode_d"]),
+            ("${ARC_DENSITY_TABLE}", &["producer"]),
+            ("${ARC_DENSITY_TABLE_INDENTED}", &["mode_a"]),
+            ("${ARC_DENSITY_NEW_TABLE}", &["producer"]),
+            ("${ARC_DENSITY_NEW_TABLE_INDENTED}", &["mode_a"]),
+            ("${DOUYIN_DYNAMIC_TABLE}", &["producer"]),
+            ("${DOUYIN_DYNAMIC_TABLE_INDENTED}", &["mode_d"]),
+        ];
+        for (ph, expected) in cases {
+            let rendered = interpolate(ph);
+            assert_ne!(rendered, *ph, "占位符 {} 未被 placeholder_pairs 解析（拼写错误？）", ph);
+            for name in *expected {
+                let (_, text) = carriers
+                    .iter()
+                    .find(|(n, _)| n == name)
+                    .unwrap_or_else(|| panic!("载体名拼写错误: {}", name));
+                assert!(
+                    text.contains(ph),
+                    "载体 {} 未引用 {}（改回手写 = 单源断链；渲染值应为 \"{}\"）",
+                    name,
+                    ph,
+                    rendered
+                );
+            }
+        }
+    }
+
+    /// 第二十三批·checked 示例同源锁：三个审改 schema 的 `checked` 示例条数必须等于
+    /// `CHECKED_MIN_ITEMS`（示例是人设"至少 N 项"的示范，示例少了等于诱导少填）。
+    #[test]
+    fn checked_schema_example_matches_min_items() {
+        for (name, schema) in [
+            ("REVIEW_SCHEMA_WIDE", crate::commands::roles::REVIEW_SCHEMA_WIDE),
+            ("REVIEW_SCHEMA_LYRIC", crate::commands::roles::REVIEW_SCHEMA_LYRIC),
+            ("REVIEW_SCHEMA_AUDITOR", crate::commands::roles::REVIEW_SCHEMA_AUDITOR),
+        ] {
+            let n = schema.matches("已核查项").count();
+            assert_eq!(
+                n, CHECKED_MIN_ITEMS,
+                "{} 的 checked 示例条数 {} ≠ CHECKED_MIN_ITEMS {}",
+                name, n, CHECKED_MIN_ITEMS
+            );
+        }
+    }
+
     /// C3 守护：prompts.rs/roles.rs 非注释非测试代码不得手写注册表辖域数字——
     /// 数字只从 rules.rs 常量经 interpolate 流入提示词（防"常量改了文案没改"复发）。
     ///
@@ -867,6 +1186,20 @@ mod tests {
     /// 现改为「显式字面量 + 从常量派生的『数值+单位』扫描」双网：
     /// 派生网按常量值 + 单位自动生成（新增常量即自动纳入），并跳过 `5-6件`/`3-4件` 这类
     /// 区间的右端（前一字符为 `-` 或数字视为区间写法，不属裸阈值）。
+    ///
+    /// 2026-09-18 第二十三批扩面（审计复核：`≥2 个叙事段`/`8 块`/`60-90 秒`/`至少 3 项`/`6 维`
+    /// /`3-4 遍`/`2-4 次` 全部漏网，改手写副本零报红）：
+    /// - 网一补：抖音时长/重复/维度区间字面量（`60-90 秒` 等）；
+    /// - 网二补：单位表扩到 块/段/个叙事段/秒/维/项/遍/信息块，并支持量词间隔（`2 个叙事段`）；
+    ///   每条带"是否要求阈值语境"位——`块/项/维/秒` 这类单位下的数值只可能指该规则（语境无关），
+    ///   件数/级数仍要阈值语境（否则密度表的规划值 `3-4件` 会误报）；
+    /// - 网三补：能量标尺字面量（`0-10`/五档区间/抖音窗口）带**语境判定**——
+    ///   紧邻后随 `分`/`级`/`：`，或前后窗口内含能量语境词才算；
+    ///   `3-4件`（密度表规划件数）因此放行，而 `3-4 分`/`能量 3-4` 必报。
+    ///
+    /// **声明式边界（诚实口径）**：本网只覆盖"常量派生值+已知单位"与"已登记字面量"两类；
+    /// 未登记常量的一次性叙事数字（如"比30秒更完整"的比较说明）不在网内——新增规则常量时
+    /// 必须同步补进 `derived`（新增即自动纳入的前提是该常量出现在本表）。
     fn handwritten_rule_number_hits(line: &str) -> Vec<String> {
         /// 阈值语境窗口（字符数）：数值前后各看多少字符内是否出现阈值词
         const THRESHOLD_WINDOW: usize = 12;
@@ -878,6 +1211,11 @@ mod tests {
             "20-30", "78-83", "85-90", "70-82", "78-85", "12-20", "85-95", "20-35", "75-85",
             // 件数/行数/字数区间
             "3-7", "6-13", "4-9",
+            // 第二十三批补：抖音时长/重复/维度区间（原漏网写法）
+            "60-90 秒", "60-90秒",
+            "2-4 次", "2-4次",
+            "3-4 遍", "3-4遍",
+            "2-3 维", "2-3维",
             // 上限符号写法（console/半角混写都要拦）
             "≤350", "≤200", "≤80", "≤30", "≤10", "≤4",
             "<=350", "<=200", "<=80", "<=10", "<= 10", "<= 4",
@@ -888,24 +1226,48 @@ mod tests {
                 hits.push((*lit).to_string());
             }
         }
-        // 网二：从常量派生的「数值 + 单位」——新增规则常量自动纳入，不再靠人记得加进表
-        let derived: &[(usize, &str)] = &[
-            (MIN_INSTRUMENT_WEAK, "件"),
-            (MIN_INSTRUMENT_STRONG, "件"),
-            (MIN_INSTRUMENT_GAP, "件"),
-            (INSTRUMENT_MAX, "件"),
-            (MIN_ENERGY_GAP as usize, "级"),
-            (HOOK_MIN_COUNT, "次"),
-            (VERSE_MAX_LINES, "行"),
-            (DOUYIN_LINE_MAX_CHARS, "字"),
-            (LYRIC_LINE_VERSE_MAX, "字"),
-            (STYLE_PROMPT_MIN_CHARS, "字符"),
-            (STYLE_PROMPT_MAX_CHARS, "字符"),
-            (DESC_LINE_MAX_CHARS, "字符"),
-            (LYRIC_FILL_TAIL_ALLOW, "行"),
+        // 网二：从常量派生的「数值 + 单位」——新增规则常量自动纳入，不再靠人记得加进表。
+        // 第三列 = 是否要求阈值语境（true：与 `至少/≤/上限` 等同窗才算，防密度表规划值误报）。
+        let derived: &[(usize, &str, bool)] = &[
+            (MIN_INSTRUMENT_WEAK, "件", true),
+            (MIN_INSTRUMENT_STRONG, "件", true),
+            (MIN_INSTRUMENT_GAP, "件", true),
+            (INSTRUMENT_MAX, "件", true),
+            (MIN_ENERGY_GAP as usize, "级", true),
+            (HOOK_MIN_COUNT, "次", true),
+            (VERSE_MAX_LINES, "行", true),
+            (DOUYIN_LINE_MAX_CHARS, "字", true),
+            (LYRIC_LINE_VERSE_MAX, "字", true),
+            (STYLE_PROMPT_MIN_CHARS, "字符", true),
+            (STYLE_PROMPT_MAX_CHARS, "字符", true),
+            (DESC_LINE_MAX_CHARS, "字符", true),
+            (LYRIC_FILL_TAIL_ALLOW, "行", true),
+            // 第二十三批：新增单一来源常量（单位即规则名词，语境无关）
+            (MIN_SECTION_TAGS, "段", true),
+            (NARRATIVE_SECTIONS_MIN, "个叙事段", false),
+            (NARRATIVE_SECTIONS_MIN, "叙事段", false),
+            (STYLE_BLOCK_COUNT_AB, "块", false),
+            (STYLE_BLOCK_COUNT_DOUYIN, "块", false),
+            (STYLE_BLOCK_COUNT_DOUYIN, "信息块", false),
+            (DOUYIN_DURATION_SEC_MIN as usize, "秒", false),
+            (DOUYIN_DURATION_SEC_MAX as usize, "秒", false),
+            (DOUYIN_HOOK_WINDOW_SEC as usize, "秒", false),
+            (DOUYIN_INTRO_SPAN_SEC as usize, "秒", false),
+            (CHECKED_MIN_ITEMS, "项", false),
+            (VOCAL_DIM_COUNT, "维", false),
+            (HOOK_REPEAT_DILUTE as usize, "次", true),
+            (DOUYIN_HOOK_LOOP_MIN as usize, "遍", false),
+            (DOUYIN_HOOK_LOOP_MAX as usize, "遍", false),
         ];
-        for (num, unit) in derived {
-            for needle in [format!("{}{}", num, unit), format!("{} {}", num, unit)] {
+        for (num, unit, need_ctx) in derived {
+            // 量词间隔写法（`2 个叙事段`/`2个叙事段`）一并纳入——旧实现只认紧邻与单空格
+            for needle in [
+                format!("{}{}", num, unit),
+                format!("{} {}", num, unit),
+                format!("{}个{}", num, unit),
+                format!("{} 个{}", num, unit),
+                format!("{} 个 {}", num, unit),
+            ] {
                 let mut from = 0usize;
                 while let Some(rel) = line[from..].find(&needle) {
                     let at = from + rel;
@@ -916,19 +1278,15 @@ mod tests {
                         Some(c) => c.is_ascii_digit(),
                         None => false,
                     };
-                    // 阈值语境才算违规：`至少/最多/不超/≥/≤/>=/<=/以内/下限/上限` 等，且必须
-                    // **紧邻**该数值（前后各 THRESHOLD_WINDOW 字符窗口内）才算。旧实现判"整行是否
-                    // 含阈值词"——同一段密度表文案在 prompts.rs（拆成多行）不报、在 roles.rs（挤成
-                    // 一行）全报，误报由行宽决定，网不可信。改窗口后与行宽无关。
+                    // 阈值语境才算违规（need_ctx=false 的条目防御性放行）：`至少/最多/不超/≥/≤/
+                    // >=/<=/以内/下限/上限` 等，且必须**紧邻**该数值（前后各 THRESHOLD_WINDOW 字符窗口内）。
                     // 逐段密度表的裸件数（"Bridge=7，2件"）是规划示例而非阈值常量，不计违规；
                     // 其与 ≥3 下限的关系由"极简段豁免"条款约束（见 prompts.rs 密度表注记）。
-                    // 取"整行 - 该数值之前"的末尾 12 字（**保持原序**——反转会打断"至少/不超过"这类多字词）
                     let head: Vec<char> = line[..at].chars().collect();
                     let before: String = head[head.len().saturating_sub(THRESHOLD_WINDOW)..].iter().collect();
                     let after: String = line[at + needle.len()..].chars().take(THRESHOLD_WINDOW).collect();
-                    let is_threshold = THRESHOLD_WORDS
-                        .iter()
-                        .any(|w| before.contains(w) || after.contains(w));
+                    let is_threshold = !*need_ctx
+                        || THRESHOLD_WORDS.iter().any(|w| before.contains(w) || after.contains(w));
                     if !is_range && is_threshold {
                         hits.push(needle.clone());
                     }
@@ -936,12 +1294,49 @@ mod tests {
                 }
             }
         }
+        // 网三（第二十三批）：能量标尺字面量——带**语境判定**（区间右端豁免照用）。
+        // 判据：紧邻后随 `分`/`级`/`：`，或前后窗口内出现能量语境词。
+        // 语境限制是刻意的：`3-4件`（密度表规划件数）、`9-10，5件`（抖音动态表）必须放行，
+        // 而 `3-4 分`/`能量 3-4`/`0-2：极弱` 必报（这些是规则档位，只能经 ${ENERGY_BAND_*} 引用）。
+        for lit in ENERGY_RANGE_LITERALS {
+            let mut from = 0usize;
+            while let Some(rel) = line[from..].find(lit) {
+                let at = from + rel;
+                let prev = line[..at].chars().next_back();
+                let is_range = match prev {
+                    Some('-') | Some('–') | Some('~') | Some('.') => true,
+                    Some(c) => c.is_ascii_digit(),
+                    None => false,
+                };
+                let head: Vec<char> = line[..at].chars().collect();
+                let before: String = head[head.len().saturating_sub(THRESHOLD_WINDOW)..].iter().collect();
+                let tail: String = line[at + lit.len()..].chars().take(THRESHOLD_WINDOW).collect();
+                let next_char = tail.chars().find(|c| !c.is_whitespace());
+                let adjacent = matches!(next_char, Some('分') | Some('级') | Some('：'));
+                let in_energy_ctx =
+                    ENERGY_CONTEXT_WORDS.iter().any(|w| before.contains(w) || tail.contains(w));
+                if !is_range && (adjacent || in_energy_ctx) {
+                    hits.push((*lit).to_string());
+                }
+                from = at + lit.len();
+            }
+        }
         hits
     }
 
+    /// 能量标尺字面量（档位区间 + 全量程 + 抖音动态窗口）——手写能量数字的完整清单。
+    const ENERGY_RANGE_LITERALS: &[&str] = &["0-10", "0-2", "3-4", "5-6", "7-8", "9-10", "7-9", "8-10"];
+    /// 能量语境词：命中能量区间且前后窗口内含其一（或紧邻后随 分/级/：）才判为"手写能量档位"。
+    /// 刻意**不含** 爆发/高潮/铺垫/推进/高压 等弧线名与段落描述用词——否则密度表/动态表的
+    /// 规划件数（`高潮段 5-6 件`）会误报，网就不可信了。
+    const ENERGY_CONTEXT_WORDS: &[&str] = &[
+        "能量", "标尺", "级", "力度", "极弱", "极强", "气声", "克制", "破音", "放开", "用力",
+        "静止", "气息", "自言自语",
+    ];
+
     /// 阈值语境词表（判定"数值+单位"是否在讲规则阈值，而非讲规划示例）
     const THRESHOLD_WORDS: &[&str] = &[
-        "至少", "最少", "最多", "不超过", "不超", "以上", "以下", "以内",
+        "至少", "最少", "最多", "不超过", "不超", "超过", "以上", "以下", "以内",
         "≥", "≤", ">=", "<=", ">", "<", "下限", "上限", "起",
     ];
 
@@ -1021,6 +1416,46 @@ mod tests {
                 ok,
                 handwritten_rule_number_hits(ok)
             );
+        }
+    }
+
+    /// 第二十三批扩网自检（红灯先行·2026-09-18 实测）：审计复核列出的逃逸写法必须被新网抓住。
+    ///
+    /// 实测口径（当批探针注入 `prompts.rs` 后跑 `no_handwritten_rule_numbers_in_prompt_sources`）：
+    /// - 旧网（HEAD）：同一探针**零命中**（测试全绿）——逃逸成立；
+    /// - 新网：同一探针 12 处命中（`2 个叙事段`×2 / `8 块` / `7 块` / `60-90 秒` / `2-4 次` /
+    ///   `5 次` / `3 项` / `6 维` / `3-4 遍` / `3-4` / `0-10`）。
+    ///
+    /// 本测试把该探针固化进仓库：后续任何人收窄网（删字面量/删单位/关语境判定）都会在此报红。
+    #[test]
+    fn handwritten_guard_catches_batch23_leaks() {
+        for leak in [
+            "含 ≥2 个叙事段（Verse/Pre-Chorus/Bridge 标签）",
+            "各模式专项满足（A/B 模式 8 块、抖音 7 块且 BPM≥${DOUYIN_BPM_MIN}）",
+            "你需要产出 60-90 秒的抖音爆款歌曲",
+            "列出已核查的关键检查项，至少 3 项",
+            "人声坐标 6 维（音域/音色/发声/颤音/咬字/节奏感）描述完整",
+            "抖音向=短、魔性、重复 3-4 遍即成立",
+            "重复次数是否恰到好处（2-4 次强化，超过 5 次稀释冲击力）",
+            "先压后炸 3-4 分开头推到 9-10 分",
+            "最弱 vs 最强必须有能听出的落差（0-10 标尺）",
+            "每段能量（0-10）是否符合情绪走向？能量语义标尺：0-2 几乎静止自言自语",
+        ] {
+            let hits = handwritten_rule_number_hits(leak);
+            assert!(!hits.is_empty(), "扩网后必须抓到该写法：{} → 命中 {:?}", leak, hits);
+        }
+        // 规划示例/弧线名/正则样式不得误报（扩网引入了语境判定，这里锁住"不误伤"的一半）
+        for ok in [
+            "· Chorus：阶梯上升=中 3-4件（每轮递增）；渐进爆发=蓄而不放",
+            "· Hook重复：全程高位=9，4件，加层；高开骤停=9，4件，加层；先压后炸=10，5-6件，最炸",
+            "剥离/反差段 1-2 件、持续高压段 3-4 件、高潮与最后 Hook 5-6 件",
+            "先压后炸=3-4，1-2件，制造反差",
+            "词组切分与原歌词一致（3+4、2+2+3等）",
+            "禁区间写法（如 8-9）",
+            "各模式说明行整行含方括号 ≤${DESC_LINE_MAX} 字符",
+        ] {
+            let hits = handwritten_rule_number_hits(ok);
+            assert!(hits.is_empty(), "误报：{} → {:?}", ok, hits);
         }
     }
 
@@ -2140,15 +2575,19 @@ const ENVELOPE_SPEC_BASE: &str = "\
 ///
 /// 注入策略（见 `host_system_with`）：信封开关开 → 随 `envelope_spec()` 注入；
 /// 开关关 → 由 `host_system_with` 单独注入本段，保证"上游告知"不随开关消失。
+///
+/// 第二十三批：旧实现是 `format!` 局部手写（`≥5 件`/`单段 3-7 件`/`0-10` 直接写死在函数体里），
+/// 既不在守护网扫描面、又不被入网自证发现（`fn -> String` 不是"散文定义"的发现形态）——
+/// 改 `MIN_INSTRUMENT_STRONG`/`INSTRUMENT_RANGE` 时本段落静默漂移。现改为注册载体 + 占位符。
 pub fn desc_line_contract() -> String {
-    format!(
-        "【说明行契约（全模式统一）】每段说明行形如 [乐器1+行为, 乐器2+行为, …, 空间/力度, 人声状态]（A/B 模式另在行尾标 能量:X），整行含方括号 ≤{} 字符。上限宽松：不得为缩短而删乐器或行为动词（最强段 ≥5 件、单段 3-7 件照常执行），也不得靠堆修饰词占满；超过上限的说明行会被信封门与终稿硬校验拦下。\n\
+    interpolate(DESC_LINE_CONTRACT)
+}
+
+/// 说明行契约正文（单源：本文件唯一一份；数值一律 `${占位符}`）。
+const DESC_LINE_CONTRACT: &str = "【说明行契约（全模式统一）】每段说明行形如 [乐器1+行为, 乐器2+行为, …, 空间/力度, 人声状态]（A/B 模式另在行尾标 能量:X），整行含方括号 ≤${DESC_LINE_MAX} 字符。上限宽松：不得为缩短而删乐器或行为动词（最强段 ≥${MIN_INSTRUMENT_STRONG} 件、单段 ${INSTRUMENT_RANGE} 件照常执行），也不得靠堆修饰词占满；超过上限的说明行会被信封门与终稿硬校验拦下。\n\
 1. 乐器主次：乐器逐个列名 + 行为动词，按主次排列（主奏在前、支撑次之、色彩点缀最后）；禁 full band 等笼统写法。\n\
 2. 人声映射：每段说明行的人声状态必须能映射到 Style Prompt 的人声描述序列（高能段用开放真声形态、低能段用气声/假声形态），不得自造与 Style Prompt 无关的人声描述。\n\
-3. 能量标注：A/B 模式每段说明行末尾必须标 能量:X（0-10）——必须用中文'能量:X'格式、X 为 0-10 单值，禁英文 energy、禁区间写法（如 8-9）。",
-        DESC_LINE_MAX_CHARS
-    )
-}
+3. 能量标注：A/B 模式每段说明行末尾必须标 能量:X（${ENERGY_SCALE}）——必须用中文'能量:X'格式、X 为 ${ENERGY_SCALE} 单值，禁英文 energy、禁区间写法（如 8-9）。";
 
 /// 极简段豁免条款（单源；**仅 A/B 适用**）：下游执行者 = `validator::declared_minimal_sections`
 /// 过滤 + `validate_production` 的 mode_a/mode_b 最弱段下限检查。

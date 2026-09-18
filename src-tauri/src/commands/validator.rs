@@ -203,7 +203,11 @@ pub fn validate_production(mode: &str, text: &str) -> ValidationResult {
     // 3. 能量差 ≥ 单源下限（真解析数值，而非仅看关键词）
     let energy = extract_energy_values(text);
     if energy.is_empty() {
-        issues.push("未发现能量标注（应包含 0-10 能量值）".to_string());
+        issues.push(format!(
+            "未发现能量标注（应包含 {}-{} 能量值）",
+            rules::ENERGY_SCALE_MIN,
+            rules::ENERGY_SCALE_MAX
+        ));
     } else {
         let min = energy.iter().min().copied().unwrap_or(0);
         let max = energy.iter().max().copied().unwrap_or(0);
@@ -359,7 +363,9 @@ fn mode_a_param_issues(w: u32, s: u32) -> Vec<String> {
 
 /// C1/ADR-2：抖音参数区间硬门（3c）。越界且不满足叙事型例外→报。
 /// 叙事型例外（ADR-2 假设的结构化近似）：LLM 判语义（方案中声明"叙事型"归类），
-/// 代码判结构事实（≥2 个非 Hook 叙事段）——两项齐备才放行，缺一即打回。
+/// 代码判结构事实（≥N 个非 Hook 叙事段，N = `rules::NARRATIVE_SECTIONS_MIN`）——两项齐备才放行，缺一即打回。
+/// **跨域绑定（第二十三批）**：N 不在本文件写死——上游告知（CHECKLIST_D + 四个角色人设）与
+/// 本判定同读 `rules::NARRATIVE_SECTIONS_MIN`，由 `narrative_exception_threshold_is_single_sourced` 双向锁定。
 fn douyin_param_issue(text: &str, tags: &[String]) -> Option<String> {
     let (w, s) = parse_weird_style(text)?;
     let in_douyin = (rules::DOUYIN_WEIRD_MIN..=rules::DOUYIN_WEIRD_MAX).contains(&w)
@@ -374,12 +380,13 @@ fn douyin_param_issue(text: &str, tags: &[String]) -> Option<String> {
             l.contains("verse") || l.contains("pre-chorus") || l.contains("bridge")
         })
         .count();
-    if narrative_sections >= 2 && text.contains("叙事型") {
+    if narrative_sections >= rules::NARRATIVE_SECTIONS_MIN && text.contains("叙事型") {
         return None;
     }
     Some(format!(
-        "参数越界: Weirdness={}/Style Influence={}（抖音区间 {}-{}/{}-{}；仅当结构含≥2个叙事段（Verse/Pre-Chorus/Bridge）且方案写明'叙事型'归类方可回落 A/B 弧线区间）",
-        w, s, rules::DOUYIN_WEIRD_MIN, rules::DOUYIN_WEIRD_MAX, rules::DOUYIN_STYLE_MIN, rules::DOUYIN_STYLE_MAX
+        "参数越界: Weirdness={}/Style Influence={}（抖音区间 {}-{}/{}-{}；仅当结构含≥{}个叙事段（Verse/Pre-Chorus/Bridge）且方案写明'叙事型'归类方可回落 A/B 弧线区间）",
+        w, s, rules::DOUYIN_WEIRD_MIN, rules::DOUYIN_WEIRD_MAX, rules::DOUYIN_STYLE_MIN, rules::DOUYIN_STYLE_MAX,
+        rules::NARRATIVE_SECTIONS_MIN
     ))
 }
 
@@ -705,7 +712,8 @@ pub fn validate_douyin(text: &str) -> ValidationResult {
     // 同一上限/同一行型谓词，A/B/C/D 判法一致，不再各写一套）
     issues.extend(desc_line_length_issues(text));
 
-    // 3c. C1/ADR-2：参数抖音区间硬门——CHECKLIST_D 承诺"抖音12-20/85-95（仅当含≥2叙事段且写明'叙事型'归类方可回落A/B弧线区间）"。
+    // 3c. C1/ADR-2：参数抖音区间硬门——CHECKLIST_D 承诺"抖音区间（仅当含≥N叙事段且写明'叙事型'归类方可回落A/B弧线区间）"，
+    // N 与上游同源（`rules::NARRATIVE_SECTIONS_MIN`，第二十三批跨域绑定）。
     // 此前仅提示词表述（roles.rs 四处）+ 死常量（rules::DOUYIN_WEIRD/STYLE），代码零执行。
     if let Some(msg) = douyin_param_issue(text, &tags) {
         issues.push(msg);
@@ -873,7 +881,8 @@ mod tests {
         assert!(r.issues.iter().any(|i| i.contains("12-20")), "issues: {:?}", r.issues);
     }
 
-    /// 叙事型例外（ADR-2）：越界参数 + ≥2 个非 Hook 叙事段（Verse×2）+ 方案含"叙事型"归类说明 → 放行
+    /// 叙事型例外（ADR-2）：越界参数 + ≥N 个非 Hook 叙事段（Verse×2）+ 方案含"叙事型"归类说明 → 放行
+    /// （N = `rules::NARRATIVE_SECTIONS_MIN`；边界由 `narrative_exception_threshold_is_single_sourced` 按常量派生）
     #[test]
     fn param_gate_mode_d_narrative_exception_passes() {
         let text = "Style Prompt: dark narrative rock, 128BPM, 808 sub, dense hi-hats, raspy male voice, office room tone, 叙事型结构铺垫后爆发\n\
@@ -910,6 +919,72 @@ mod tests {
 参数: Weirdness=50 | Style Influence=50 | Audio Influence=0";
         let r = validate_douyin(text);
         assert!(!r.passed, "仅有字样无叙事结构应被拒（issues: {:?}）", r.issues);
+    }
+
+    /// 第二十三批·跨域绑定**双向锁**（P1）：叙事型例外的结构门槛 N 必须单源。
+    ///
+    /// ① 上游承诺：CHECKLIST_D 与四个角色人设（渲染后文本）必须含**由常量派生**的门槛串
+    ///    ——硬写数字（如写死 "≥2"）在常量变更后即红；
+    /// ② 下游判定：`douyin_param_issue` 的边界行为同样由常量派生——恰好 N 段放行、
+    ///    N-1 段打回，且打回文案含派生串。
+    ///
+    /// 旧状态（复核实测）：硬门写死 `>= 2`、上游五处手写副本，把硬门改成 3 而人设照旧，
+    /// 全部测试仍绿（跨域两侧零绑定 = 静默降级）。
+    #[test]
+    fn narrative_exception_threshold_is_single_sourced() {
+        let n = rules::NARRATIVE_SECTIONS_MIN;
+        // ① 上游承诺（渲染后 = 常量派生值；两种行文口径都锁：人设带"个"、D 清单不带）
+        let expect_role = format!("≥{} 个叙事段", n);
+        let expect_checklist = format!("≥{}叙事段", n);
+        let carriers: [(&str, String); 5] = [
+            ("CHECKLIST_D", rules::checklist("mode_d")),
+            (
+                "auditor_review_prompt",
+                rules::interpolate(crate::commands::roles::auditor_review_prompt()),
+            ),
+            ("auditor", rules::interpolate(crate::commands::roles::auditor().system_prompt)),
+            ("emotion", rules::interpolate(crate::commands::roles::emotion().system_prompt)),
+            ("producer", rules::interpolate(crate::commands::roles::producer().system_prompt)),
+        ];
+        for (name, text) in &carriers {
+            let expect = if *name == "CHECKLIST_D" { &expect_checklist } else { &expect_role };
+            assert!(
+                text.contains(expect.as_str()),
+                "上游告知 {} 未含常量派生的门槛串 \"{}\"（跨域绑定断链）",
+                name,
+                expect
+            );
+        }
+        // ② 下游判定边界（按常量派生，不硬写 2）：恰好 N 段放行、N-1 段打回
+        let plan = |verses: usize| -> String {
+            let mut t = String::from(
+                "Style Prompt: dark narrative rock, 128BPM, 808 sub, dense hi-hats, raspy male voice, office room tone, 叙事型结构铺垫后爆发\n",
+            );
+            for _ in 0..verses {
+                t.push_str(
+                    "[Verse]\n[808 bass, hi-hats, muted guitar, 能量:6]\n白天 挨骂 晚上 加班\n",
+                );
+            }
+            t.push_str(
+                "[Hook]\n[808 sub, hi-hats, guitar, 能量:9]\n干就 完了 干就 完了\n\
+[Hook]\n[808 sub, hi-hats, guitar, 能量:9]\n干就 完了 干就 完了\n\
+[all instruments cut]\n参数: Weirdness=50 | Style Influence=50 | Audio Influence=0",
+            );
+            t
+        };
+        assert!(
+            validate_douyin(&plan(n)).passed,
+            "恰好 {} 个叙事段 + 叙事型归类应放行（N 由常量派生）",
+            n
+        );
+        assert!(n >= 1, "门槛常量异常：{}", n);
+        let short = validate_douyin(&plan(n - 1));
+        assert!(!short.passed, "{} 个叙事段（N-1）应被打回", n - 1);
+        assert!(
+            short.issues.iter().any(|i| i.contains(&format!("≥{}个叙事段", n))),
+            "打回文案须由常量派生（禁止硬写 2）：{:?}",
+            short.issues
+        );
     }
 
     // ---- C2/ADR-1：转写保真校验（红灯先行——桩返回空时篡改/增删用例必须失败） ----
