@@ -397,6 +397,38 @@ mod tests {
         }
     }
 
+    /// #30 修复锁（引用编号归属唯一性）：每个 `CRAFT_REFS_*` 编号必须**恰好**属于一张思维资产表——
+    /// 全部表皆无 = 悬空引用（prompt 点名核查的行查无此条，注入层无法按表结算）；
+    /// 两张表都有 = 编号歧义（按表结算与悬空审计同时失效）。
+    /// 表名集合单源 = `rules::CRAFT_TABLES`（本测试不复写表名清单）。
+    #[test]
+    fn craft_ref_ids_belong_to_exactly_one_craft_table() {
+        let kb = crate::knowledge::KnowledgeBase::load_embedded().unwrap();
+        let holders: Vec<(&str, std::collections::BTreeSet<String>)> = crate::rules::CRAFT_TABLES
+            .iter()
+            .map(|t| {
+                let table = kb.table(t).unwrap_or_else(|e| panic!("思维资产表 {} 缺失: {}", t, e));
+                (*t, table.id_set().iter().map(|s| s.to_string()).collect())
+            })
+            .collect();
+        for role in PipelineRole::all() {
+            let r = role_for(role);
+            for id in r.craft_refs {
+                let owners: Vec<&str> =
+                    holders.iter().filter(|(_, set)| set.contains(*id)).map(|(t, _)| *t).collect();
+                assert_eq!(
+                    owners.len(),
+                    1,
+                    "{}：引用编号 {} 的承运表数 = {}（{:?}）——悬空或编号歧义",
+                    r.name,
+                    id,
+                    owners.len(),
+                    owners
+                );
+            }
+        }
+    }
+
     /// 护栏：无异议最低审查门槛——全部审改员 + 校验员讨论轮 prompt 必须要求 checked 清单
     /// （防"偷懒 agree"：无异议也必须列出已核查项，让无异议可审计）
     #[test]

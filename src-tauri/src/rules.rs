@@ -315,6 +315,16 @@ pub const CRAFT_REFS_PRODUCER: &[&str] = &["CC-01", "CC-12", "CC-17", "CC-22", "
 /// 🔥 流行风格分析师：前3秒画面/道具刻度/对话体
 pub const CRAFT_REFS_STYLE_ANALYST: &[&str] = &["LC-01", "LC-10", "LC-23"];
 
+/// 思维资产表单源登记（注入门走 `knowledge::craft_inject_gate` 的表）——新增/改名只改本行。
+/// 消费点：① knowledge 渲染层的思维资产判定；② 悬空引用审计（编号在**全部本表**皆无 = 悬空）；
+/// ③ orchestrator 注入路由与预算核对（禁止任何调用点再写 `matches!(name, "lyric_craft" | …)`）。
+pub const CRAFT_TABLES: &[&str] = &["lyric_craft", "compose_craft"];
+
+/// 是否思维资产表（单源判定，供渲染/路由/审计共用）
+pub fn is_craft_table(table: &str) -> bool {
+    CRAFT_TABLES.contains(&table)
+}
+
 // ---------------------------------------------------------------------------
 // 思维资产 trigger 标签双域单源（#17/#18/#23/#29 修复）
 //
@@ -432,21 +442,23 @@ pub const CRAFT_RESERVED_ROWS: &[(&str, &str)] = &[
 //    注释文档四处，新增/改表无守护（此处为单源后，路由与上限只在本表定义）。
 //
 // 单源口径：
-// - 检索键列 + 条数上限：本处 `KeywordTableReachability`（orchestrator 只查表，不写字面量）
-// - 键长下限：`KEYWORD_MIN_CHARS`（orchestrator::matching_keywords 与守护测试共读）
+// - 检索键列集合（多列析取）+ 条数上限：本处 `KeywordTableReachability`（orchestrator 只查表，不写字面量）
+// - 键长下限：`KEYWORD_MIN_CHARS`；分词规则：`KEYWORD_TOKEN_SEPARATORS` + `keyword_tokens`
+//   （orchestrator 候选提取与 knowledge 可达性审计**共用**，审计口径 == 运行口径）
 // - 可达性守护：knowledge::tests::keyword_tables_have_no_structurally_unreachable_rows
-//   （任一行的检索键为空或短于下限即红——死行不再静默）
+//   （任一行的全部检索列 token 皆短于下限即红——死行不再静默）
 //   第二十批更正注记：此处此前写作 `keyword_table_keys_meet_reachability_policy`
 //   ——该测试**不存在**（挂在 knowledge 测试模块下的幽灵名，与第十九批"声明的锁并不存在"同族）。
 //   真名如上，由 `comment_referenced_tests_exist` 兜底：注释里的 `::tests::<名>` 引用必须能解析到真实函数。
 // - 运行期告警：knowledge::warn_reachability_violations（覆盖用户覆盖目录这一编译期测试覆盖不到的场景）
 // ---------------------------------------------------------------------------
-/// 关键词表的可达性规格：表名 → （检索键列, 单表条数上限）。
-/// `key_col` 既是候选词来源也是过滤条件——该列取值字面出现在方案中即注入。
+/// 关键词表的可达性规格：表名 → （检索键列集合, 单表条数上限）。
+/// `key_cols` 为**多列析取**检索面（#31 扩检索面）：任一列的任一 token 字面出现在方案中即注入。
+/// 首列为**主检索列**（整表未命中时的兜底条件与告警文案引用它）。
 pub struct KeywordTableReachability {
     pub table: &'static str,
-    /// 关键词门：该列取值字面出现在方案中即注入；能量门：能量列见 ENERGY_GATE_COLUMNS
-    pub key_col: &'static str,
+    /// 关键词门：这些列的任一 token 字面出现在方案中即注入；能量门：能量列见 ENERGY_GATE_COLUMNS
+    pub key_cols: &'static [&'static str],
     /// 单表注入条数上限（0 = 不限，走全量表路径）
     pub max_rows: usize,
 }
@@ -454,20 +466,39 @@ pub struct KeywordTableReachability {
 /// 检索键最小字数（单源）——短于此值的候选会被丢弃（避免单字误命中：方案含"深夜"不该命中
 /// 关键词"夜"）。因此**数据侧必须满足本下限**，否则该行永久不可达。
 pub const KEYWORD_MIN_CHARS: usize = 2;
+/// 关键词候选的单元格内多值分隔符（单源分词规则）：候选提取（orchestrator）与可达性审计
+/// （knowledge）**共用** `keyword_tokens`，保证"审计口径 == 运行口径"。
+/// 数据侧多值单元格（如 style_genre.aliases "新浪潮摇滚 电子摇滚"）以空格分隔；
+/// 含分隔符的单值名（如 base "indie folk"）按 token 拆分后各自独立参与命中。
+pub const KEYWORD_TOKEN_SEPARATORS: &[char] = &[' ', ',', '，', ';', '；', '、', '/', '|'];
 /// 关键词表单表命中条数上限（主词 1-3 个 + 近邻，"少而准"）
 pub const KEYWORD_MAX_ROWS: usize = 6;
 /// 流派表命中条数上限（方案通常命中 1-2 个流派）
 pub const STYLE_GENRE_MAX_ROWS: usize = 3;
 /// 关键词表可达性规格（新增关键词表 = 在本表加一行并在角色 knowledge_tables 绑定，无第二处改动）
+/// style_genre 检索面（#31）：genre（中文自造流派名/英文名）+ base（英文家族名）+ aliases
+/// （中英别名与家族伞词）——旧实现只认 genre 单列，中文自造流派名（如"电子摇滚"）整表零命中。
 pub const KEYWORD_TABLES: &[KeywordTableReachability] = &[
-    KeywordTableReachability { table: "emotions", key_col: "emotion", max_rows: KEYWORD_MAX_ROWS },
-    KeywordTableReachability { table: "cliches", key_col: "cliche", max_rows: KEYWORD_MAX_ROWS },
-    KeywordTableReachability { table: "hooks", key_col: "hook_type", max_rows: KEYWORD_MAX_ROWS },
-    KeywordTableReachability { table: "style_genre", key_col: "genre", max_rows: STYLE_GENRE_MAX_ROWS },
+    KeywordTableReachability { table: "emotions", key_cols: &["emotion"], max_rows: KEYWORD_MAX_ROWS },
+    KeywordTableReachability { table: "cliches", key_cols: &["cliche"], max_rows: KEYWORD_MAX_ROWS },
+    KeywordTableReachability { table: "hooks", key_cols: &["hook_type"], max_rows: KEYWORD_MAX_ROWS },
+    KeywordTableReachability {
+        table: "style_genre",
+        key_cols: &["genre", "base", "aliases"],
+        max_rows: STYLE_GENRE_MAX_ROWS,
+    },
 ];
 /// 乐器表可达性：行必须携带可解析的 (energy_min, energy_max) 数值对且 min ≤ max，
 /// 否则 `render_instruments_by_energy` 永不命中（同族静默失效，故纳入可达性守护）。
 pub const ENERGY_GATE_COLUMNS: (&str, &str) = ("energy_min", "energy_max");
+
+/// 关键词候选单元格 → token 迭代器（**单源分词**：运行期候选提取与可达性审计共用本函数）。
+/// 空 token（连续/首尾分隔符产生）直接丢弃——空 token 不是候选，也不会被长度门放行。
+pub fn keyword_tokens(cell: &str) -> impl Iterator<Item = &str> {
+    cell.split(|c: char| KEYWORD_TOKEN_SEPARATORS.contains(&c))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
 
 /// 按表名取可达性规格（orchestrator 注入路由的唯一查表口）
 pub fn keyword_table(table: &str) -> Option<&'static KeywordTableReachability> {

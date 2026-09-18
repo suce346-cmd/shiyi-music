@@ -60,6 +60,19 @@ fn match_mode(mode: &Mode) -> &'static str {
     }
 }
 
+/// 运行期告警可见化：集成测试默认无 tracing 订阅器 → `tracing::warn!`（知识库注入的
+/// 引用必达/整表休眠/可达性告警）在无头实跑中**完全不可观测**，实跑复测无法验证告警口径。
+/// 进程级初始化一次（多用例共用；已初始化则忽略），只放行 WARN 以上，避免 INFO 刷屏。
+fn init_warn_logging_once() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(std::io::stderr)
+            .try_init();
+    });
+}
+
 /// 无头执行：mock_app 拿句柄 → run_pipeline_with_timeout 直调（不走窗口）。
 /// 事件发射在 mock 下为空操作；终稿文本即断言对象。
 async fn run_headless(
@@ -68,6 +81,7 @@ async fn run_headless(
     original_lyrics: Option<&str>,
     timeout: Duration,
 ) -> Option<String> {
+    init_warn_logging_once();
     let cfg = test_config()?;
     let app = tauri::test::mock_app();
     let handle = app.handle().clone();

@@ -309,6 +309,24 @@ fn column_values(kb: &KnowledgeBase, table: &str, col: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// 关键词表候选 token 集（**多列析取**检索面的候选来源，#31）：
+/// 逐列取单元格 → 单源分词（`rules::keyword_tokens`，与可达性审计同一函数）→ 去重。
+/// 去重避免同一 token（如多行共用的家族伞词）在打分里被重复计数。
+fn keyword_candidates(kb: &KnowledgeBase, table: &str, key_cols: &[&str]) -> Vec<String> {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out: Vec<String> = Vec::new();
+    for col in key_cols {
+        for cell in column_values(kb, table, col) {
+            for tok in crate::rules::keyword_tokens(&cell) {
+                if seen.insert(tok.to_string()) {
+                    out.push(tok.to_string());
+                }
+            }
+        }
+    }
+    out
+}
+
 /// 从方案文本提取候选词命中（候选词出现在方案中即命中）。
 /// 单字（短于 `rules::KEYWORD_MIN_CHARS`）候选直接丢弃——避免"深夜"误命中关键词"夜"；
 /// 因此数据侧必须满足同一字长下限，否则该行**永久不可达**（旧行为静默丢弃，无日志无守护；
@@ -337,13 +355,14 @@ fn warn_keyword_table_all_dormant_once(table: &str, kb: &KnowledgeBase) {
         tracing::warn!(
             table = %table,
             rows,
-            "关键词表本轮整表零命中：全部行均未注入（检索键列见 rules::KEYWORD_TABLES；补充行若其检索键不出现在方案文本中将永久休眠）"
+            "关键词表本轮整表零命中：全部行均未注入（检索列集合见 rules::KEYWORD_TABLES；补充行若其任一检索列的 token 都不出现在方案文本中将永久休眠，可加 aliases 列补同义名）"
         );
     }
 }
 
-/// 关键词表注入（#22）：检索键列与条数上限取自 `rules::KEYWORD_TABLES` 单源；
-/// 命中即注入（上限随规格），全部未命中 → 零行 + 无示例标注（M18）并告警一次。
+/// 关键词表注入（#22/#31）：检索键列集合与条数上限取自 `rules::KEYWORD_TABLES` 单源；
+/// 检索面 = **多列析取**（任一列的任一 token 字面出现在方案中即命中，如 style_genre 的
+/// genre/base/aliases）；命中即注入（上限随规格），全部未命中 → 零行 + 无示例标注（M18）并告警一次。
 fn keyword_table_render(
     kb: &KnowledgeBase,
     table: &str,
@@ -352,13 +371,17 @@ fn keyword_table_render(
 ) -> Result<String, String> {
     let spec = crate::rules::keyword_table(table)
         .ok_or_else(|| format!("{} 未登记为关键词表（rules::KEYWORD_TABLES）", table))?;
-    let cands = matching_keywords(plan, &column_values(kb, table, spec.key_col));
+    let cands = matching_keywords(plan, &keyword_candidates(kb, table, spec.key_cols));
     if cands.is_empty() {
         warn_keyword_table_all_dormant_once(table, kb);
-        return kb.render_filtered_any(table, &[(spec.key_col, &[])], proj, plan, None, &[]);
+        // 整表休眠：条件恒不命中（主检索列 + 空候选集）——输出走"未命中关键词"标准文案
+        return kb.render_filtered_any(table, &[(spec.key_cols[0], &[])], proj, plan, None, &[]);
     }
     let refs: Vec<&str> = cands.iter().map(|s| s.as_str()).collect();
-    kb.render_filtered_any(table, &[(spec.key_col, &refs)], proj, plan, Some(spec.max_rows), &[])
+    // 多列析取：每列一个 (列, 命中 token 集) 条件——render_filtered_any 的 any() 语义即 OR
+    let conds: Vec<(&str, &[&str])> =
+        spec.key_cols.iter().map(|c| (*c, refs.as_slice())).collect();
+    kb.render_filtered_any(table, &conds, proj, plan, Some(spec.max_rows), &[])
 }
 
 
@@ -373,10 +396,10 @@ fn keyword_table_render(
 // - suno_rules：校验员全量（40 条 < 50 截断上限）；其他角色按规则子集过滤
 // - 思维资产（lyric_craft/compose_craft）：引用必达（prompt 点名核查的编号强制投递）+ 按
 //   与当前方案的内容相关性补足，8 条封顶（必达项数受守护测试约束 ≤ 本上限）
-// - 单角色一次注入总字数封顶：预算按最坏情况**实测**标定（第六批 #19 扩绑 suno_rules 子集后重标）：
-//   制作人 = style_genre 3 + instruments 15 + suno_rules 23 + compose_craft 8 → 4969 字（最大）；
-//   情感分析师 3313 / 校验员 3149 / 作词人 2504 / 改词人 1830 / 流行风格分析师 1679；
-//   取 5400 = 实测最大 + ~8.7% 余量（旧值 5200 在扩绑后仅剩 231 字余量，任何一次加表都会假告警）
+// - 单角色一次注入总字数封顶：预算按最坏情况**实测**标定（#31 加 aliases 列后重标）：
+//   制作人 = style_genre 3 + instruments 15 + suno_rules 23 + compose_craft 8 → 5017 字（最大）；
+//   情感分析师 3321 / 校验员 3149 / 作词人 2504 / 改词人 1830 / 流行风格分析师 1679；
+//   取 5400 = 实测最大 + 383 字余量（~7.1%；旧值 5200 在扩绑后仅剩 231 字余量，任何一次加表都会假告警）
 // ---------------------------------------------------------------------------
 /// 关键词表（emotions/cliches/hooks）命中条数上限（单源：rules::KEYWORD_MAX_ROWS）
 pub const INJECT_MAX_KEYWORD_ROWS: usize = crate::rules::KEYWORD_MAX_ROWS;
@@ -391,7 +414,7 @@ pub const INJECT_MAX_CRAFT_ROWS: usize = 8;
 /// 全量表（suno_rules）渲染截断上限（当前 40 条规则，留 10 条余量防静默截断）
 pub const INJECT_MAX_FULL_ROWS: usize = 50;
 /// 单角色一次注入总字数封顶（超过告警；最坏情况 = 制作人四表全命中含 23 条规则子集 + 8 条思维资产，
-/// 第六批 #19 扩绑后实测 4969 字，取 5400 留 ~8.7% 余量；次大为情感分析师 3313 字）
+/// #31 加 aliases 列后实测 5017 字，取 5400 留 383 字余量；次大为情感分析师 3321 字）
 pub const INJECT_MAX_TOTAL_CHARS: usize = 5400;
 /// 完整档案传递原则（2026-09-13，用户设计确认）：方案/修订史全量传给每个角色——
 /// 每个角色拿到的是完整档案（情绪/歌词/编曲/指令/分析），不做信息孤岛。
@@ -438,15 +461,17 @@ fn fold_log(log: &[(String, String)]) -> Vec<(String, String)> {
 }
 
 /// 微观②：按需检索注入——按角色绑定表 + 列投影 + 当前方案关键词过滤，只注入命中条目。
-/// - emotions/cliches/hooks/style_genre（关键词表）：候选词与过滤条件同取单源检索键列
-///   （`rules::KEYWORD_TABLES`，条数上限随规格）；整表零命中时告警一次（#22）
+/// - emotions/cliches/hooks/style_genre（关键词表）：候选与过滤条件同取单源检索列集合
+///   （`rules::KEYWORD_TABLES` 的多列析取面 + 单源分词 `rules::keyword_tokens`，条数上限随规格）；
+///   整表零命中时告警一次（#22）
 /// - instruments：按方案能量区间数值过滤（覆盖弧线两端），上限 15 件
 /// - suno_rules：校验员全量（格式端口必须全见）；其他角色按行子集过滤（rule 列 contains 匹配）
 ///   行子集单源 = `rules::SUNO_RULES_FOR_*`（#19：规则对职责角色可达）
 /// - cols 投影：空切片 = 全列；非空 = 按角色只注入这些列（多角色侧重点）
 /// - subset 行子集：空切片 = 全行；非空 = 按 rule 列值过滤（如制作人只要参数/配器类规则）
 /// - craft_refs：角色 prompt 点名要求核查的思维资产编号（`rules::CRAFT_REFS_*` 单源）——
-///   透传给渲染层做**引用必达**（强制投递，不受条数上限截断），与 prompt 要求同源
+///   透传给渲染层做**引用必达**（强制投递，不受条数上限截断），与 prompt 要求同源；
+///   #30 起渲染层**按表结算**（别表编号不算本表缺陷），悬空编号（全表皆无）在此审计并告警
 /// - mode / role：**审改注入上下文**（#29）——思维资产行的条件标签（抖音→mode_d、
 ///   A/B/C→mode_a/b/c、制作→producer）据此成为**真限定**；阶段标签取自
 ///   `rules::CRAFT_STAGE_CONSUMER_REVIEWER` 单源登记（调用点不得自造标签集合）
@@ -463,6 +488,9 @@ fn inject_knowledge(
     let craft_ctx = crate::rules::stage_consumer(crate::rules::CRAFT_STAGE_CONSUMER_REVIEWER).map(|c| {
         crate::knowledge::CraftInjectCtx { consumer: c.name, stage_tags: c.stage_tags, mode, role }
     });
+    // #30 悬空引用审计：refs 中在任何思维资产表都查无此行的编号 = 真数据缺陷（每编号每进程一次告警）。
+    // 与渲染层的"按表结算"分工：别表编号不算缺陷（不进告警），全部表皆无才算。
+    kb.warn_dangling_craft_refs(craft_refs);
     let mut out = String::new();
     for (t, cols, subset) in tables {
         // 列投影：空切片 = 全列（None），非空 = 角色裁剪
@@ -486,13 +514,13 @@ fn inject_knowledge(
                     kb.render_filtered_any(t, &[("rule", subset)], proj, plan, None, &[])
                 }
             }
-            // 思维资产表（lyric_craft/compose_craft）：注入门 = `knowledge::craft_inject_gate`
-            // （阶段域"审改/全程" + 条件域限定抖音/A/B/C/制作，见 #29）；在上限内
-            // **引用必达优先 + 内容相关性补足**。
+            // 思维资产表（lyric_craft/compose_craft，单源判定 rules::is_craft_table）：注入门 =
+            // `knowledge::craft_inject_gate`（阶段域"审改/全程" + 条件域限定抖音/A/B/C/制作，见 #29）；
+            // 在上限内**引用必达优先 + 内容相关性补足**（#30 起引用必达按表结算，别表编号不再假告警）。
             // 旧行为（#15）：恒 0 打分 + 稳定排序 → 永远只注入 CSV 前 8 行，尾部（含用户追加）永不生效。
             // 旧行为（#17）：子串匹配字面"审改" → trigger="全程" 的行（CC-23/CC-28）任何角色不可达。
             // 旧行为（#29）：条件标签无执行门 → LC-31（审改/A/B/C）在 D 模式也注入、CC-22（审改/制作）进所有角色。
-            "lyric_craft" | "compose_craft" => match craft_ctx.as_ref() {
+            _ if crate::rules::is_craft_table(t) => match craft_ctx.as_ref() {
                 Some(ctx) => kb.render_craft_table(
                     t,
                     ctx,
@@ -3254,10 +3282,13 @@ mod tests {
         assert!(none.is_empty());
     }
 
-    /// 第六批（#22）修复锁：关键词表检索契约单源——
+    /// 第六批（#22）/#31 修复锁：关键词表检索契约单源——
     /// ① 长度门取自 `rules::KEYWORD_MIN_CHARS` 且确实生效（单字候选被丢弃，防"深夜"误命中"夜"）；
-    /// ② 四张设计内关键词表全部登记进 `rules::KEYWORD_TABLES`，检索键列真实存在（列名写错=整表死行）；
-    /// ③ 单表条数上限别名 == rules 单源（禁止两处各写一个常量）。
+    /// ② 四张设计内关键词表全部登记进 `rules::KEYWORD_TABLES`，**每个检索列**都真实存在
+    ///    （任一列名写错 = 该列候选恒空、检索面静默收窄）；
+    /// ③ 单表条数上限别名 == rules 单源（禁止两处各写一个常量）；
+    /// ④ 分词单源：候选来自 `keyword_candidates`（多列 + `rules::keyword_tokens`），
+    ///    多值单元格（aliases）的每个 token 都是独立候选。
     #[test]
     fn keyword_min_chars_gate_is_single_sourced() {
         use crate::rules::{
@@ -3265,17 +3296,20 @@ mod tests {
             STYLE_GENRE_MAX_ROWS,
         };
         let kb = crate::knowledge::KnowledgeBase::load_embedded().unwrap();
-        // ② 登记表自洽：检索键列必须真实存在、上限为正、可反查
+        // ② 登记表自洽：每个检索列必须真实存在、上限为正、可反查
         for spec in KEYWORD_TABLES {
             let t = kb
                 .table(spec.table)
                 .unwrap_or_else(|e| panic!("登记表 {} 加载失败: {}", spec.table, e));
-            assert!(
-                t.header_index(spec.key_col).is_some(),
-                "{} 的检索键列 {} 不存在（列名写错即整表死行）",
-                spec.table,
-                spec.key_col
-            );
+            assert!(!spec.key_cols.is_empty(), "{} 检索列集合为空（整表死行）", spec.table);
+            for col in spec.key_cols {
+                assert!(
+                    t.header_index(col).is_some(),
+                    "{} 的检索列 {} 不存在（列名写错即该列候选恒空）",
+                    spec.table,
+                    col
+                );
+            }
             assert!(spec.max_rows > 0, "{} 条数上限必须为正", spec.table);
             assert!(keyword_table(spec.table).is_some(), "{} 无法在单源反查", spec.table);
         }
@@ -3286,6 +3320,13 @@ mod tests {
         // ③ 别名与单源一致
         assert_eq!(INJECT_MAX_KEYWORD_ROWS, KEYWORD_MAX_ROWS);
         assert_eq!(INJECT_MAX_STYLE_GENRE_ROWS, STYLE_GENRE_MAX_ROWS);
+        // ④ 多列分词候选：style_genre 的候选集必须包含 aliases 列独有 token（旧单列口径拿不到）
+        let spec = keyword_table("style_genre").unwrap();
+        let cands = keyword_candidates(&kb, "style_genre", spec.key_cols);
+        assert!(
+            cands.iter().any(|c| c == "电子摇滚"),
+            "aliases 列 token 未进入候选集（分词/多列取数失效）"
+        );
         // ④ 长度门生效（按单源常量取边界值）
         assert!(KEYWORD_MIN_CHARS >= 2, "长度门 <2 会让单字候选误命中（如'深夜'命中'夜'）");
         let below = "夜".repeat(KEYWORD_MIN_CHARS - 1);
@@ -3299,6 +3340,47 @@ mod tests {
             vec![at_gate.clone()],
             "达到长度门的候选必须命中"
         );
+    }
+
+    /// #31 修复锁（扩检索面回归）：方案里出现**中文自造流派名/别名**时 style_genre 不得整表零命中。
+    /// 红灯先行：旧口径（genre 单列、整串 contains）对这些自造名必然零命中——本测试逐条复演
+    /// 旧口径（断言零命中 = 证明缺口真实）再断言新口径命中（多列析取 + 分词）。
+    /// 现实证据：2026-09-18 GUI 实跑 mode_d 产物 Style Prompt 写"电子摇滚"，旧口径 45 行整表未注入。
+    #[test]
+    fn style_genre_reachable_for_generated_genre_names() {
+        let kb = crate::knowledge::KnowledgeBase::load_embedded().unwrap();
+        let spec = crate::rules::keyword_table("style_genre").unwrap();
+        // 旧口径零命中的自造名（新口径必须命中）——两类不作红灯样本：
+        // ① 恰为 genre 字面的（山歌/国风电子）；② 旧口径"单元格是方案子串"能蒙中的（"后摇"⊂"后摇滚"）
+        let old_miss_phrases =
+            ["电子摇滚", "抒情慢歌", "深夜民谣", "电影配乐", "城市流行", "戏腔"];
+        let hit_phrases = ["电子摇滚", "国风电子", "抒情慢歌", "深夜民谣", "电影配乐", "城市流行", "后摇滚", "戏腔", "山歌"];
+        for phrase in old_miss_phrases {
+            let plan = format!("Style Prompt: {}，抖音神曲", phrase);
+            let old_hit = column_values(&kb, "style_genre", "genre")
+                .iter()
+                .any(|c| plan.contains(c.as_str()));
+            assert!(!old_hit, "旧口径对 {:?} 竟然命中——红灯样本选择有误（本锁证明力下降）", phrase);
+        }
+        for phrase in hit_phrases {
+            let plan = format!("Style Prompt: {}，抖音神曲", phrase);
+            let out = keyword_table_render(&kb, "style_genre", None, &plan).unwrap();
+            assert!(
+                out.contains("按需命中"),
+                "自造流派名 {:?} 在 style_genre 整表零命中（扩检索面失效）：{}",
+                phrase,
+                &out[..out.len().min(200)]
+            );
+            // 命中条数必须在规格上限内（多列 OR 不得把上限撑破）
+            assert!(out.lines().filter(|l| l.starts_with("| ") && !l.contains("---")).count() <= spec.max_rows + 1);
+        }
+        // 定点：mode_d 实跑的"电子摇滚"必须命中合成器浪潮与新浪潮（最贴近的两行）
+        let out = keyword_table_render(&kb, "style_genre", None, "Style Prompt: 电子摇滚 抖音神曲").unwrap();
+        assert!(out.contains("| synthwave |"), "电子摇滚未命中 synthwave 行：{}", out);
+        assert!(out.contains("| 新浪潮 |"), "电子摇滚未命中 新浪潮 行：{}", out);
+        // 且不得把整表当兜底塞满（命中行数受规格上限约束）
+        let hit_rows = out.lines().filter(|l| l.starts_with("| ") && !l.contains("---")).count() - 1;
+        assert!(hit_rows >= 1 && hit_rows <= spec.max_rows, "命中行数 {} 越界", hit_rows);
     }
 
     #[test]
@@ -3599,7 +3681,8 @@ mod tests {
                     "style_genre" => INJECT_MAX_STYLE_GENRE_ROWS + 2,
                     "instruments" => INJECT_MAX_INSTRUMENTS_ROWS + 2,
                     "suno_rules" => INJECT_MAX_FULL_ROWS + 2,
-                    "lyric_craft" | "compose_craft" => INJECT_MAX_CRAFT_ROWS + 2,
+                    // 思维资产表单源判定（rules::CRAFT_TABLES）——禁止在测试里再写第二份表名清单
+                    t if crate::rules::is_craft_table(t) => INJECT_MAX_CRAFT_ROWS + 2,
                     _ => INJECT_MAX_KEYWORD_ROWS + 2,
                 };
                 assert!(

@@ -150,6 +150,74 @@ fn warn_reserved_rows_once(table: &str, reserved_ids: &[String]) {
 static REACHABILITY_WARNED: std::sync::OnceLock<std::sync::Mutex<HashSet<String>>> =
     std::sync::OnceLock::new();
 
+// ---------------------------------------------------------------------------
+// 引用必达的按表结算（#30 修复）
+//
+// 问题本质：角色 `craft_refs`（`rules::CRAFT_REFS_*`）是**跨表并集**（LC-* 与 CC-* 混排，
+// 如情感分析师 = LC-13/LC-15/LC-18/CC-10），而 `inject_knowledge` 把它原样透传给**每张**
+// 思维资产表。旧实现（#30）在渲染末尾拿全量 refs 逐表核对"是否出现在本表注入结果里"——
+// 每张表都会把**别表编号**报成"引用必达行未命中（不存在或未过注入门）"（假告警：
+// 投递链路本身没坏，但日志被噪声淹没，真缺陷被掩盖；2026-09-18 GUI 实跑 12 条 WARN 中 8 条为假）。
+//
+// 单源口径：**结算按表**——只有本表 id 列真实存在的编号（carried，本表承运）才属本表核对范围；
+// 其中未出现在本表注入结果里的才是真缺陷（unmatched，行存在但未过注入门）。
+// 别表编号在本表不进任何集合；任何表都不存在的编号 = 悬空引用（数据缺陷），由
+// `dangling_craft_refs` 跨 `rules::CRAFT_TABLES` 单独审计并告警。
+// 守护测试：knowledge::tests::craft_ref_settlement_scopes_refs_to_carrier_table（含旧口径复演红灯）、
+// roles::tests::craft_ref_ids_belong_to_exactly_one_craft_table（归属唯一性 + 悬空=0）。
+// ---------------------------------------------------------------------------
+
+/// 引用必达的**按表结算**结果（#30）：carried = 本表承运的必达编号；unmatched = 承运但未过注入门。
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct CraftRefSettlement {
+    /// 本表 id 列承载的必达编号（按 `required_rows` 声明序）——本表需要核对的集合
+    pub carried: Vec<String>,
+    /// 本表承运但未出现在注入结果里的编号（真缺陷：prompt 点名核查但注入里没有）
+    pub unmatched: Vec<String>,
+}
+
+/// 引用必达按表结算（**纯函数**：渲染层与守护测试共用，保证"测试口径 == 运行口径"）。
+/// `table_ids` = 本表 id 列全集（`Table::id_set`）；`matched_ids` = 本表注入结果里的编号集。
+pub fn settle_craft_refs(
+    table_ids: &HashSet<&str>,
+    matched_ids: &HashSet<&str>,
+    required_rows: &[&str],
+) -> CraftRefSettlement {
+    let carried: Vec<String> = required_rows
+        .iter()
+        .filter(|id| table_ids.contains(*id))
+        .map(|s| s.to_string())
+        .collect();
+    let unmatched: Vec<String> =
+        carried.iter().filter(|id| !matched_ids.contains(id.as_str())).cloned().collect();
+    CraftRefSettlement { carried, unmatched }
+}
+
+/// 引用必达真未命中告警去重（每 (表, 编号) 每进程一次）——避免每角色每轮重复刷屏。
+static CRAFT_REF_MISS_WARNED: std::sync::OnceLock<std::sync::Mutex<HashSet<String>>> =
+    std::sync::OnceLock::new();
+
+/// 引用必达真未命中（**行存在但未过注入门**）告警（#30 语义精确化）：
+/// 只有本表承运的编号才算本表缺陷；别表编号不会走到这里（按表结算已过滤）。
+fn warn_craft_ref_unmatched_once(table: &str, id: &str) {
+    let set = CRAFT_REF_MISS_WARNED.get_or_init(|| std::sync::Mutex::new(HashSet::new()));
+    let mut guard = match set.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if guard.insert(format!("{}|{}", table, id)) {
+        tracing::warn!(
+            table = %table,
+            id = %id,
+            "引用必达行存在但未过注入门（本表承运、注入结果缺失）——该行 trigger/条件域需修正"
+        );
+    }
+}
+
+/// 悬空引用告警去重（每编号每进程一次）。
+static DANGLING_REF_WARNED: std::sync::OnceLock<std::sync::Mutex<HashSet<String>>> =
+    std::sync::OnceLock::new();
+
 /// 一张 CSV 表：表头 + 行数据
 #[derive(Debug, Clone)]
 pub struct Table {
@@ -211,6 +279,14 @@ impl Table {
     #[allow(dead_code)]
     pub fn header_index(&self, header: &str) -> Option<usize> {
         self.headers.iter().position(|h| h == header)
+    }
+
+    /// id 列全部取值集合（思维资产表的编号全集）——供引用必达按表结算（#30）
+    /// 与悬空引用审计共用；无 id 列返回空集（非思维资产表即无承运编号）。
+    pub fn id_set(&self) -> HashSet<&str> {
+        self.header_index("id")
+            .map(|i| self.rows.iter().filter_map(|r| r.get(i).map(|s| s.as_str())).collect())
+            .unwrap_or_default()
     }
 }
 
@@ -463,9 +539,10 @@ impl KnowledgeBase {
         crate::knowledge::load_embedded_internal()
     }
 
-    /// 结构性不可达行审计（#22）：列出**永远无法注入**的行及其原因。
-    /// - 关键词表（`rules::KEYWORD_TABLES`）：检索键为空或短于 `rules::KEYWORD_MIN_CHARS`
-    ///   → `orchestrator::matching_keywords` 直接丢弃该候选，该行永久休眠（旧行为：无日志无测试）
+    /// 结构性不可达行审计（#22/#31）：列出**永远无法注入**的行及其原因。
+    /// - 关键词表（`rules::KEYWORD_TABLES`）：该行**全部检索列**（多列析取）按单源分词
+    ///   （`rules::keyword_tokens`）拆出的 token 都短于 `rules::KEYWORD_MIN_CHARS`
+    ///   → `orchestrator::matching_keywords` 全部丢弃，该行永久休眠（旧行为：无日志无测试）
     /// - 乐器表：`energy_min/energy_max` 缺失/非数值/min>max → `render_instruments_by_energy` 永不命中
     /// 语义：**可达 = 行具备被注入的必要条件**（是否真被命中取决于当前方案文本，属按需检索设计）。
     pub fn reachability_violations(&self) -> Vec<String> {
@@ -478,25 +555,43 @@ impl KnowledgeBase {
                     continue;
                 }
             };
-            let idx = match table.header_index(spec.key_col) {
-                Some(i) => i,
-                None => {
-                    out.push(format!("{}.{}：可达性规格声明的检索列不存在", spec.table, spec.key_col));
-                    continue;
+            // 检索列存在性：**每一列**都必须存在（列名写错 = 该列候选恒空，检索面静默收窄）
+            let mut idxs: Vec<usize> = Vec::with_capacity(spec.key_cols.len());
+            let mut missing: Option<&str> = None;
+            for col in spec.key_cols {
+                match table.header_index(col) {
+                    Some(i) => idxs.push(i),
+                    None => {
+                        missing = Some(col);
+                        break;
+                    }
                 }
-            };
+            }
+            if let Some(col) = missing {
+                out.push(format!("{}.{}：可达性规格声明的检索列不存在", spec.table, col));
+                continue;
+            }
             for (ri, row) in table.rows.iter().enumerate() {
-                let key = row.get(idx).map(|s| s.trim()).unwrap_or("");
-                let n = key.chars().count();
-                if n < crate::rules::KEYWORD_MIN_CHARS {
+                // 行可达 = 全部检索列里至少有一个 token 达到长度门（分词口径与运行期同源）
+                let cells: Vec<&str> = idxs
+                    .iter()
+                    .map(|&i| row.get(i).map(|s| s.as_str()).unwrap_or(""))
+                    .collect();
+                let max_token_len = cells
+                    .iter()
+                    .flat_map(|c| crate::rules::keyword_tokens(c))
+                    .map(|t| t.chars().count())
+                    .max()
+                    .unwrap_or(0);
+                if max_token_len < crate::rules::KEYWORD_MIN_CHARS {
                     out.push(format!(
-                        "{}.{} 第 {} 行：检索键 {:?} 长度 {} < 下限 {}，该行永久不可注入",
+                        "{}.{:?} 第 {} 行：全部检索列的 token 都短于下限 {}（检索键 {:?} 长度 {}），该行永久不可注入",
                         spec.table,
-                        spec.key_col,
+                        spec.key_cols,
                         ri + 1,
-                        key,
-                        n,
-                        crate::rules::KEYWORD_MIN_CHARS
+                        crate::rules::KEYWORD_MIN_CHARS,
+                        cells,
+                        max_token_len
                     ));
                 }
             }
@@ -559,6 +654,46 @@ impl KnowledgeBase {
         }
     }
 
+    /// 悬空引用审计（#30）：`required_rows` 中在 `rules::CRAFT_TABLES` **全部**思维资产表里
+    /// 都不存在的编号（真数据缺陷：prompt 点名核查一个 CSV 里查无此行的编号）。
+    /// 与按表结算分工：本表承运 → 本表核对；全部表皆无 → 此处审计。
+    pub fn dangling_craft_refs(&self, required_rows: &[&str]) -> Vec<String> {
+        let mut all_ids: HashSet<&str> = HashSet::new();
+        for t in crate::rules::CRAFT_TABLES {
+            if let Ok(table) = self.table(t) {
+                all_ids.extend(table.id_set());
+            }
+        }
+        required_rows
+            .iter()
+            .filter(|id| !all_ids.contains(*id))
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+    /// 悬空引用告警（每编号每进程一次）：真数据缺陷必须呐喊，不得静默（旧实现把它混在
+    /// 每表"未命中"噪声里，无法区分"别表编号"与"查无此行"）。
+    pub fn warn_dangling_craft_refs(&self, required_rows: &[&str]) {
+        let dangling = self.dangling_craft_refs(required_rows);
+        if dangling.is_empty() {
+            return;
+        }
+        let set = DANGLING_REF_WARNED.get_or_init(|| std::sync::Mutex::new(HashSet::new()));
+        let mut guard = match set.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        for id in &dangling {
+            if guard.insert(id.clone()) {
+                tracing::warn!(
+                    id = %id,
+                    tables = ?crate::rules::CRAFT_TABLES,
+                    "引用必达编号悬空：任何思维资产表中都不存在该编号（prompt 点名核查的行查无此条，请修正数据或编号）"
+                );
+            }
+        }
+    }
+
     /// 关键词/规则表的按需检索渲染（不含思维资产表——那些表走 `render_craft_table`，
     /// 因为它们的注入门是"阶段域 + 条件域"，不是候选词 contains）。
     pub fn render_filtered_any(
@@ -616,7 +751,7 @@ impl KnowledgeBase {
         let plan_e = plan_energy_range_str(plan);
         let plan_bpm = plan_bpm_value(plan);
         // 思维资产表（#15）：相关性打分读语义列（rule/check/negative），不读 id/module/trigger 元数据
-        let craft_table = matches!(name, "lyric_craft" | "compose_craft");
+        let craft_table = crate::rules::is_craft_table(name);
         // 思维资产表必须带注入上下文（#23/#29）：无上下文 = 阶段/条件门无法判定，直接失败
         if craft_table && craft_ctx.is_none() {
             return Err(format!(
@@ -752,21 +887,24 @@ impl KnowledgeBase {
             .map(|(ri, _)| rows_all.get(*ri).cloned().unwrap_or_default())
             .collect();
         let hit = !matched.is_empty();
-        // 引用必达行数（声明集合中真实命中门的行）：上限对它让步——承诺必达的规则不得被条数上限截掉
-        let required_hits = matched.iter().filter(|r| required_pos(r).is_some()).count();
-        if !required_rows.is_empty() {
-            for want in required_rows {
-                let present = matched.iter().any(|r| {
-                    id_idx
-                        .and_then(|i| r.get(i))
-                        .map(|id| id == want)
-                        .unwrap_or(false)
-                });
-                if !present {
-                    tracing::warn!(table = %table.name, id = %want, "引用必达行未命中（不存在或未过注入门）");
-                }
-            }
+        // 引用必达按表结算（#30）：carried = 本表 id 列承运的编号；unmatched = 承运但未过注入门。
+        // 旧实现拿**跨表并集** refs 逐表核对 → 每张表都把别表编号报成"未命中"（假告警刷屏）。
+        let table_ids = table.id_set();
+        let matched_ids: HashSet<&str> = matched_idx
+            .iter()
+            .filter_map(|(ri, _)| table.rows.get(*ri))
+            .filter_map(|row| id_idx.and_then(|i| row.get(i)).map(|s| s.as_str()))
+            .collect();
+        let settlement = settle_craft_refs(&table_ids, &matched_ids, required_rows);
+        for id in &settlement.unmatched {
+            warn_craft_ref_unmatched_once(&table.name, id);
         }
+        // 引用必达行数（声明集合中真实命中门的行）：上限对它让步——承诺必达的规则不得被条数上限截掉。
+        // 基于**原表行**计数（不受列投影影响：投影裁掉 id 列时按原表索引读仍是本行编号）。
+        let required_hits = matched_idx
+            .iter()
+            .filter(|(ri, _)| table.rows.get(*ri).map(|r| required_pos(r).is_some()).unwrap_or(false))
+            .count();
         // M18：删随机兜底——未命中时不塞前 3 行，明确标注“无命中”，由调用方走确定性默认。
         // 自矛盾指令“禁止照搬”同步删除，换成“按功能选用并说明理由”（M18，roles.rs 护栏同步）。
         let rows: Vec<&Vec<String>> = if hit {
@@ -1705,11 +1843,87 @@ mod tests {
             .is_ok());
     }
 
+    /// #30 修复锁（引用必达按表结算）：角色的 craft_refs 是**跨表并集**，渲染每张思维资产表时
+    /// 只能核对**本表承运**的编号；别表编号不得进入本表未命中集合。
+    /// 红灯先行：旧口径（拿全量 refs 逐表核对）必然把 CC-10 报成 lyric_craft 未命中——本测试
+    /// 先复演旧口径并断言其非空（证明假告警真实存在），再断言新口径结算结果为空。
+    #[test]
+    fn craft_ref_settlement_scopes_refs_to_carrier_table() {
+        let kb = KnowledgeBase::load_embedded().unwrap();
+        let refs = crate::rules::CRAFT_REFS_EMOTION; // LC-13/LC-15/LC-18 + CC-10（跨表并集）
+        let plan = "（未填写的方案占位）";
+        let ctx = reviewer_ctx("mode_a", Some("emotion"));
+        let out = kb
+            .render_craft_table(
+                "lyric_craft",
+                &ctx,
+                None,
+                plan,
+                Some(crate::commands::orchestrator::INJECT_MAX_CRAFT_ROWS),
+                refs,
+            )
+            .unwrap();
+        // 旧口径复演（红）：全量 refs 逐表核对 → lyric_craft 缺 CC-10，报"未命中"
+        let old_missing: Vec<&&str> = refs
+            .iter()
+            .filter(|id| !out.contains(&format!("| {} |", id)))
+            .collect();
+        assert!(
+            !old_missing.is_empty(),
+            "旧口径必须能复现跨表假告警（否则本锁无法证明修复必要性）"
+        );
+        // 本表承运的编号必须全部在注入结果里（真必达不落空）
+        let table = kb.table("lyric_craft").unwrap();
+        let id_idx = table.header_index("id").unwrap();
+        let matched_ids: HashSet<&str> = table
+            .rows
+            .iter()
+            .filter_map(|r| r.get(id_idx).map(|s| s.as_str()))
+            .filter(|id| out.contains(&format!("| {} |", id)))
+            .collect();
+        // 新口径（绿①）：本表结算 = 只认承运编号，且无一未命中
+        let s = settle_craft_refs(&table.id_set(), &matched_ids, refs);
+        assert_eq!(s.carried, vec!["LC-13", "LC-15", "LC-18"], "本表承运集合错");
+        assert!(s.unmatched.is_empty(), "本表真未命中不得有：{:?}", s.unmatched);
+        // 新口径（绿②）：同一 refs 结算 compose_craft → 承运 = CC-10，跨表编号不进任何集合
+        let cc = kb.table("compose_craft").unwrap();
+        let cc_id_idx = cc.header_index("id").unwrap();
+        let cc_out = kb
+            .render_craft_table(
+                "compose_craft",
+                &ctx,
+                None,
+                plan,
+                Some(crate::commands::orchestrator::INJECT_MAX_CRAFT_ROWS),
+                refs,
+            )
+            .unwrap();
+        let cc_matched: HashSet<&str> = cc
+            .rows
+            .iter()
+            .filter_map(|r| r.get(cc_id_idx).map(|s| s.as_str()))
+            .filter(|id| cc_out.contains(&format!("| {} |", id)))
+            .collect();
+        let cc_settle = settle_craft_refs(&cc.id_set(), &cc_matched, refs);
+        assert_eq!(cc_settle.carried, vec!["CC-10"], "compose_craft 只承运 CC-10");
+        assert!(cc_settle.unmatched.is_empty(), "CC-10 必须过门：{:?}", cc_settle.unmatched);
+        // 悬空审计：真实角色 refs 无悬空（任何表都不存在的编号）
+        for role in crate::models::PipelineRole::all() {
+            let r = crate::commands::roles::role_for(role);
+            assert!(
+                kb.dangling_craft_refs(r.craft_refs).is_empty(),
+                "{} 的引用存在悬空编号：{:?}",
+                r.name,
+                kb.dangling_craft_refs(r.craft_refs)
+            );
+        }
+    }
+
     /// #22 修复锁（① 现状）：真实知识库中不得存在**结构性不可达行**——
-/// 关键词表检索键必须非空且 ≥ rules::KEYWORD_MIN_CHARS（短于此值的候选被
-/// orchestrator::matching_keywords 静默丢弃 → 该行永久休眠），
-/// 乐器表能量区间必须可解析且 min ≤ max。
-/// 旧状态实测：cliches 的 家/雨/夜/光 4 行是死行（单字键被丢弃，无日志无测试）。
+    /// 关键词表全部检索列（多列析取）的 token 必须至少有一个 ≥ rules::KEYWORD_MIN_CHARS
+    /// （短于此值的候选被 orchestrator::matching_keywords 静默丢弃 → 该行永久休眠），
+    /// 乐器表能量区间必须可解析且 min ≤ max。
+    /// 旧状态实测：cliches 的 家/雨/夜/光 4 行是死行（单字键被丢弃，无日志无测试）。
     #[test]
     fn keyword_tables_have_no_structurally_unreachable_rows() {
         let kb = KnowledgeBase::load_embedded().unwrap();
@@ -1717,14 +1931,23 @@ mod tests {
         assert!(v.is_empty(), "存在结构性不可达行（永久休眠且无告警）：{:?}", v);
     }
 
-    /// #22 修复锁（② 红灯先行）：审计本身必须真能抓到死行——单字检索键与倒置能量区间。
-    /// 若本测试不红而真实数据"全绿"，说明守护网是假的。
+    /// #22/#31 修复锁（② 红灯先行）：审计本身必须真能抓到死行——单字检索键、多列全短 token、
+/// 检索列缺失与倒置能量区间。若本测试不红而真实数据"全绿"，说明守护网是假的。
     #[test]
     fn reachability_audit_detects_single_char_key_and_bad_energy() {
         let mut kb = KnowledgeBase::default();
         kb.tables.insert(
             "cliches".to_string(),
             parse_csv("cliches", "cliche,replacement\n夜,写具体场景\n黑夜,写具体场景\n").unwrap(),
+        );
+        // #31：多列检索面的死行——每一列的 token 都短于下限（单列口径只会看 genre，漏判）
+        kb.tables.insert(
+            "style_genre".to_string(),
+            parse_csv(
+                "style_genre",
+                "genre,base,aliases\n电,a,b\n摇滚,rock,摇滚乐\n",
+            )
+            .unwrap(),
         );
         kb.tables.insert(
             "instruments".to_string(),
@@ -1736,7 +1959,28 @@ mod tests {
             "单字检索键未被审计抓出: {:?}",
             v
         );
+        assert!(
+            v.iter().any(|s| s.contains("style_genre") && s.contains("第 1 行")),
+            "多列全短 token 的死行未被审计抓出: {:?}",
+            v
+        );
+        assert!(
+            !v.iter().any(|s| s.contains("第 2 行")),
+            "第 2 行经 base/aliases 可达，不得误报: {:?}",
+            v
+        );
         assert!(v.iter().any(|s| s.contains("倒置")), "能量区间倒置未被审计抓出: {:?}", v);
+        // 检索列缺失（列名写错 = 该列候选恒空）必须单独报出，而不是静默收窄
+        kb.tables.insert(
+            "style_genre".to_string(),
+            parse_csv("style_genre", "genre,base\n摇滚,rock\n").unwrap(),
+        );
+        let v2 = kb.reachability_violations();
+        assert!(
+            v2.iter().any(|s| s.contains("aliases") && s.contains("不存在")),
+            "缺失的检索列未被审计抓出: {:?}",
+            v2
+        );
     }
 
     /// 微观②改写（M18）：全部未命中 → 零行 + 无示例标注，由调用方走确定性默认
