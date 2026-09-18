@@ -4,8 +4,151 @@
 //! 注入对应专家的 system prompt（「CSV 注入 prompt」方案）。
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
+
+/// 汉字判定（CJK 统一表意文字主区 + 扩展 A）——思维资产相关性打分的字元域。
+fn is_cjk(c: char) -> bool {
+    matches!(c as u32, 0x4E00..=0x9FFF | 0x3400..=0x4DBF)
+}
+
+/// 方案文本的 CJK 二字组集合（跳过标点/空白/ASCII，天然滤掉格式噪声）。
+fn plan_cjk_bigrams(plan: &str) -> HashSet<(char, char)> {
+    let chars: Vec<char> = plan.chars().collect();
+    let mut set = HashSet::new();
+    for w in chars.windows(2) {
+        if is_cjk(w[0]) && is_cjk(w[1]) {
+            set.insert((w[0], w[1]));
+        }
+    }
+    set
+}
+
+/// 思维资产行相关性：行语义列（rule/check/negative）的**不同** CJK 二字组在方案中出现的个数。
+///
+/// 旧实现（#15 根因）用过滤候选词本身在方案中的出现次数打分：思维资产的过滤条件是
+/// trigger 标签"审改"，而方案文本永远不含该标签 → 每行恒 0 分 → "分数高的在前"的
+/// 稳定排序退化为 CSV 行序 → take(8) 只取到文件前 8 条，第 9 条以后（含用户追加行）
+/// 永不生效。现口径改为"规则正文 ↔ 当前方案的字面重合度"：方案谈韵脚/声调，声律类
+/// 规则上浮；谈人称/代入，画面类规则上浮。取**不同**二字组以消除行长度偏差。
+fn craft_overlap_score(row: &[String], cols: &[usize], plan_bigrams: &HashSet<(char, char)>) -> i32 {
+    let mut seen: HashSet<(char, char)> = HashSet::new();
+    let mut score = 0i32;
+    for &ci in cols {
+        if let Some(text) = row.get(ci) {
+            let chars: Vec<char> = text.chars().collect();
+            for w in chars.windows(2) {
+                if is_cjk(w[0]) && is_cjk(w[1]) && plan_bigrams.contains(&(w[0], w[1])) && seen.insert((w[0], w[1])) {
+                    score += 1;
+                }
+            }
+        }
+    }
+    score
+}
+
+/// trigger 列标签集合解析（"/" 分隔，去空白，忽略空段）——#17/#18 的标签**精确**匹配基础。
+///
+/// 旧实现用 `rv.contains("审改")` 子串匹配：`trigger="全程"`（全流程语义，含审改轮）因此被漏掉，
+/// 任何角色不可达（#17）；且子串匹配无法与单源词表对齐，未知标签也不会被发现（#18）。
+fn trigger_tags(value: &str) -> HashSet<&str> {
+    value
+        .split(crate::rules::CRAFT_TRIGGER_TAG_SEP)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// 阶段域子判定（标签集合 ∩ 给定标签集合 ≠ ∅）——供预留位登记检查与守护测试使用。
+/// **思维资产注入的完整判定不在此**（条件域限定见 `craft_inject_gate`），
+/// 运行期渲染走 `render_craft_table`（内部调 `craft_inject_gate`），避免两处口径分叉。
+pub fn trigger_tags_intersect(value: &str, active: &[&str]) -> bool {
+    let tags = trigger_tags(value);
+    active.iter().any(|t| tags.contains(*t))
+}
+
+/// 思维资产注入上下文（#23/#29 单源）：消费者标识 + 阶段标签域 + 条件域取值。
+/// - `stage_tags` 取自 `rules::CRAFT_STAGE_CONSUMERS`（宿主阶段0 = 阶段0；审改 = 审改/全程）
+/// - `mode`：当前模式名（`Mode::to_str_name()`），参与模式域条件判定
+/// - `role`：当前角色名（`PipelineRole::storage_key()`）；`None` = 无角色身份
+///   （主持人阶段0），此时角色域条件行**不满足**（如"阶段0/制作"不进主持）
+pub struct CraftInjectCtx<'a> {
+    pub consumer: &'a str,
+    pub stage_tags: &'a [&'a str],
+    pub mode: &'a str,
+    pub role: Option<&'a str>,
+}
+
+/// 思维资产行注入门（**唯一判定函数**：渲染层 / 守护测试 / 角色引用契约共用，
+/// 保证"测试口径 == 运行口径"）。双域语义：
+/// 1. 阶段域：行标签集合 ∩ ctx.stage_tags ≠ ∅（标签精确匹配，非子串；#17）
+/// 2. 预留位：行含"扩展位"即不可注入（非注入标记，走 `rules::CRAFT_RESERVED_ROWS` 登记；#18）
+/// 3. 条件域（**限定**，叠加在阶段域之上；#29）：行内条件标签析取——任一命中 ctx 的
+///    模式/角色域即通过；全部未命中则该行在此上下文不可注入；无条件标签 = 不限
+/// 4. 条件域对 ctx 不可满足的域（role=None 遇角色域条件）按"未命中"处理（fail-closed）
+pub fn craft_inject_gate(trigger: &str, ctx: &CraftInjectCtx) -> bool {
+    let tags = trigger_tags(trigger);
+    if tags.is_empty() {
+        return false;
+    }
+    if tags
+        .iter()
+        .any(|t| crate::rules::CRAFT_TRIGGER_RESERVED.contains(t))
+    {
+        return false;
+    }
+    if !ctx.stage_tags.iter().any(|t| tags.contains(*t)) {
+        return false;
+    }
+    let mut has_conditional = false;
+    for tag in &tags {
+        let scope = match crate::rules::conditional_scope(tag) {
+            Some(s) => s,
+            None => continue,
+        };
+        has_conditional = true;
+        let hit = match scope {
+            crate::rules::CraftConditionalScope::Mode(m) => m == ctx.mode,
+            crate::rules::CraftConditionalScope::Role(r) => {
+                ctx.role.map(|v| v == r).unwrap_or(false)
+            }
+        };
+        if hit {
+            return true;
+        }
+    }
+    !has_conditional
+}
+
+/// 预留位告警去重（每 (表, 行集合) 每进程一次）——避免每角色每轮重复刷屏。
+static RESERVED_WARNED: std::sync::OnceLock<std::sync::Mutex<HashSet<String>>> =
+    std::sync::OnceLock::new();
+
+/// 预留扩展位行**不静默**：命中即告警（#18）。
+/// 运行期覆盖目录（`warm_knowledge` 的用户 knowledge 目录）里的新增预留行无法被编译期守护测试覆盖，
+/// 只能靠此处告警提示用户"该行未注入，如需生效请改 trigger 为 审改/全程 或在 rules::CRAFT_RESERVED_ROWS 登记"。
+fn warn_reserved_rows_once(table: &str, reserved_ids: &[String]) {
+    if reserved_ids.is_empty() {
+        return;
+    }
+    let set = RESERVED_WARNED.get_or_init(|| std::sync::Mutex::new(HashSet::new()));
+    let mut guard = match set.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if guard.insert(format!("{}|{}", table, reserved_ids.join(","))) {
+        tracing::warn!(
+            table = %table,
+            rows = %reserved_ids.join(","),
+            "预留扩展位行未注入（如需生效请改 trigger 为 审改/全程，或在 rules::CRAFT_RESERVED_ROWS 登记保留理由）"
+        );
+    }
+}
+
+/// 可达性违规告警去重（每 (表, 违规集合) 每进程一次）——避免每角色每轮重复刷屏。
+static REACHABILITY_WARNED: std::sync::OnceLock<std::sync::Mutex<HashSet<String>>> =
+    std::sync::OnceLock::new();
 
 /// 一张 CSV 表：表头 + 行数据
 #[derive(Debug, Clone)]
@@ -181,7 +324,9 @@ static KB_SOURCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 /// 取共享缓存（生产路径；测试直调 load/load_embedded）
 pub fn shared_knowledge() -> &'static KnowledgeBase {
     SHARED_KB.get_or_init(|| {
-        load_embedded_internal().expect("嵌入知识库损坏（构建期错误）")
+        let kb = load_embedded_internal().expect("嵌入知识库损坏（构建期错误）");
+        kb.warn_reachability_violations();
+        kb
     })
 }
 
@@ -205,6 +350,8 @@ pub fn warm_knowledge(app_data_dir: &std::path::Path) {
     }
     match KnowledgeBase::load(&dir) {
         Ok(kb) if kb.table_names().len() == 8 => {
+            // #22 运行期通道：覆盖目录里的结构性不可达行必须呐喊（编译期守护测试覆盖不到用户目录）
+            kb.warn_reachability_violations();
             let _ = SHARED_KB.get_or_init(|| kb.clone());
             // get_or_init 已初始化时上面的 clone 白做但无害；来源标记尝试设置
             let _ = KB_SOURCE.set("override".to_string());
@@ -316,11 +463,104 @@ impl KnowledgeBase {
         crate::knowledge::load_embedded_internal()
     }
 
-    /// 按"列名 → 候选值列表"过滤渲染（任一列任一候选 contains 命中即保留该行）。
-    /// 微观② 按需检索：命中时注入命中条目（max_rows 上限）；全部未命中时零行+无示例标注（M18，调用方走确定性默认）。
-    /// cols：列投影（None=全列；角色裁剪字段用，过滤仍基于原表全列）。
-    /// plan：当前方案文本——命中后按表路由多维排序（候选词命中数 + 能量距离/BPM/层级权重），
-    /// 保证截断保留最相关条目（与 instruments 多维排序同一颗粒度）。
+    /// 结构性不可达行审计（#22）：列出**永远无法注入**的行及其原因。
+    /// - 关键词表（`rules::KEYWORD_TABLES`）：检索键为空或短于 `rules::KEYWORD_MIN_CHARS`
+    ///   → `orchestrator::matching_keywords` 直接丢弃该候选，该行永久休眠（旧行为：无日志无测试）
+    /// - 乐器表：`energy_min/energy_max` 缺失/非数值/min>max → `render_instruments_by_energy` 永不命中
+    /// 语义：**可达 = 行具备被注入的必要条件**（是否真被命中取决于当前方案文本，属按需检索设计）。
+    pub fn reachability_violations(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for spec in crate::rules::KEYWORD_TABLES {
+            let table = match self.table(spec.table) {
+                Ok(t) => t,
+                Err(_) => {
+                    out.push(format!("{}：可达性规格声明的表在知识库中不存在", spec.table));
+                    continue;
+                }
+            };
+            let idx = match table.header_index(spec.key_col) {
+                Some(i) => i,
+                None => {
+                    out.push(format!("{}.{}：可达性规格声明的检索列不存在", spec.table, spec.key_col));
+                    continue;
+                }
+            };
+            for (ri, row) in table.rows.iter().enumerate() {
+                let key = row.get(idx).map(|s| s.trim()).unwrap_or("");
+                let n = key.chars().count();
+                if n < crate::rules::KEYWORD_MIN_CHARS {
+                    out.push(format!(
+                        "{}.{} 第 {} 行：检索键 {:?} 长度 {} < 下限 {}，该行永久不可注入",
+                        spec.table,
+                        spec.key_col,
+                        ri + 1,
+                        key,
+                        n,
+                        crate::rules::KEYWORD_MIN_CHARS
+                    ));
+                }
+            }
+        }
+        let (min_col, max_col) = crate::rules::ENERGY_GATE_COLUMNS;
+        if let Ok(table) = self.table("instruments") {
+            let (lo, hi) = (table.header_index(min_col), table.header_index(max_col));
+            match (lo, hi) {
+                (Some(lo), Some(hi)) => {
+                    for (ri, row) in table.rows.iter().enumerate() {
+                        let parse = |i: usize| {
+                            row.get(i).and_then(|v| v.trim().parse::<u32>().ok())
+                        };
+                        match (parse(lo), parse(hi)) {
+                            (Some(a), Some(b)) if a <= b => {}
+                            (Some(a), Some(b)) => out.push(format!(
+                                "instruments 第 {} 行：能量区间 {}-{} 倒置（min > max），该行永不命中",
+                                ri + 1,
+                                a,
+                                b
+                            )),
+                            _ => out.push(format!(
+                                "instruments 第 {} 行：能量区间缺失或非数值（{}={:?}, {}={:?}），该行永不命中",
+                                ri + 1,
+                                min_col,
+                                row.get(lo),
+                                max_col,
+                                row.get(hi)
+                            )),
+                        }
+                    }
+                }
+                _ => out.push(format!(
+                    "instruments：能量门列 {} / {} 不存在，整表不可注入",
+                    min_col, max_col
+                )),
+            }
+        }
+        out
+    }
+
+    /// 可达性违规的运行期告警（每 (表, 违规集合) 每进程一次）。
+    /// 编译期守护测试覆盖不到用户**覆盖目录**里的新增死行，故运行期必须呐喊而不是静默。
+    pub fn warn_reachability_violations(&self) {
+        let violations = self.reachability_violations();
+        if violations.is_empty() {
+            return;
+        }
+        let set = REACHABILITY_WARNED.get_or_init(|| std::sync::Mutex::new(HashSet::new()));
+        let mut guard = match set.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if guard.insert(violations.join("|")) {
+            tracing::warn!(
+                count = violations.len(),
+                violations = %violations.join("；"),
+                "知识库存在结构性不可达行：这些行的检索键/能量区间不满足注入门，永远不会被注入（请修正数据或改检索键）"
+            );
+        }
+    }
+
+    /// 关键词/规则表的按需检索渲染（不含思维资产表——那些表走 `render_craft_table`，
+    /// 因为它们的注入门是"阶段域 + 条件域"，不是候选词 contains）。
     pub fn render_filtered_any(
         &self,
         name: &str,
@@ -328,6 +568,37 @@ impl KnowledgeBase {
         cols: Option<&[&str]>,
         plan: &str,
         max_rows: Option<usize>,
+        required_rows: &[&str],
+    ) -> Result<String, String> {
+        self.render_with_gate(name, conditions, cols, plan, max_rows, required_rows, None)
+    }
+
+    /// 思维资产表（lyric_craft / compose_craft）渲染入口（#23/#29）：
+    /// 注入门 = `craft_inject_gate`（阶段域 + 条件域限定），**必须**提供上下文，
+    /// 否则报错（不允许"无门注入"这种静默路径存在）。
+    pub fn render_craft_table(
+        &self,
+        name: &str,
+        ctx: &CraftInjectCtx,
+        cols: Option<&[&str]>,
+        plan: &str,
+        max_rows: Option<usize>,
+        required_rows: &[&str],
+    ) -> Result<String, String> {
+        self.render_with_gate(name, &[], cols, plan, max_rows, required_rows, Some(ctx))
+    }
+
+    /// 渲染实现单点（过滤 + 排序 + 引用必达 + 条数上限 + 表格输出）。
+    /// `conditions`：关键词/规则表的检索条件；**思维资产表忽略本参数**，由 `craft_ctx` 单源门决定。
+    fn render_with_gate(
+        &self,
+        name: &str,
+        conditions: &[(&str, &[&str])],
+        cols: Option<&[&str]>,
+        plan: &str,
+        max_rows: Option<usize>,
+        required_rows: &[&str],
+        craft_ctx: Option<&CraftInjectCtx>,
     ) -> Result<String, String> {
         let table = self.table(name)?;
         let (headers, rows_all) = project_table(table, cols)?;
@@ -344,18 +615,69 @@ impl KnowledgeBase {
         let bpm_idx = table.header_index("bpm_range");
         let plan_e = plan_energy_range_str(plan);
         let plan_bpm = plan_bpm_value(plan);
+        // 思维资产表（#15）：相关性打分读语义列（rule/check/negative），不读 id/module/trigger 元数据
+        let craft_table = matches!(name, "lyric_craft" | "compose_craft");
+        // 思维资产表必须带注入上下文（#23/#29）：无上下文 = 阶段/条件门无法判定，直接失败
+        if craft_table && craft_ctx.is_none() {
+            return Err(format!(
+                "思维资产表 {} 注入缺少 CraftInjectCtx（阶段域/条件域无法判定）——请改用 render_craft_table",
+                name
+            ));
+        }
+        let craft_cols: Vec<usize> = ["rule", "check", "negative"]
+            .iter()
+            .filter_map(|c| table.header_index(c))
+            .collect();
+        let plan_bigrams = if craft_table { plan_cjk_bigrams(plan) } else { HashSet::new() };
+        // 引用必达集合：行 id 在 required_rows 中的位置（None = 非必达行）
+        let id_idx = table.header_index("id");
+        let required_pos = |row: &[String]| -> Option<usize> {
+            id_idx
+                .and_then(|i| row.get(i))
+                .and_then(|id| required_rows.iter().position(|r| r == id))
+        };
+        // trigger 标签列（仅思维资产表有）——#17：标签精确匹配，不用子串
+        let trigger_idx = table.header_index("trigger");
+        // 预留位行**不静默**告警（#18）：与可注入无关，只看标签是否落"扩展位"
+        if craft_table {
+            let reserved_ids: Vec<String> = table
+                .rows
+                .iter()
+                .filter(|row| {
+                    trigger_idx
+                        .and_then(|i| row.get(i))
+                        .map(|v| trigger_tags_intersect(v, crate::rules::CRAFT_TRIGGER_RESERVED))
+                        .unwrap_or(false)
+                })
+                .filter_map(|row| row.first().cloned())
+                .collect();
+            warn_reserved_rows_once(name, &reserved_ids);
+        }
         let mut matched_idx: Vec<(usize, i32)> = rows_all
             .iter()
             .enumerate()
             .filter(|(ri, _)| {
+                let row = match table.rows.get(*ri) {
+                    Some(r) => r,
+                    None => return false,
+                };
+                // 思维资产（#17/#29）：trigger 是 "/" 分隔的多标签列，且**同一标签可叠加**
+                // （如 "阶段0/审改"、"审改/抖音"）——判定走**唯一门函数** `craft_inject_gate`：
+                // 阶段域（标签精确匹配，非子串）+ 条件域（模式/角色限定）。
+                // 旧实现只做阶段域交集 → 条件标签形同虚设（LC-31 在 D 也注入、CC-22 进所有角色，#29）。
+                if craft_table {
+                    let tv = match trigger_idx.and_then(|i| row.get(i)) {
+                        Some(v) => v.as_str(),
+                        None => return false,
+                    };
+                    let ctx = craft_ctx.expect("思维资产表已在入口校验必带注入上下文");
+                    return craft_inject_gate(tv, ctx);
+                }
                 conditions.iter().any(|(col, vals)| {
                     col_idx
                         .get(*col)
                         .map(|&i| {
-                            table
-                                .rows
-                                .get(*ri)
-                                .and_then(|row| row.get(i))
+                            row.get(i)
                                 .map(|rv| vals.iter().any(|v| rv.contains(v)))
                                 .unwrap_or(false)
                         })
@@ -364,6 +686,16 @@ impl KnowledgeBase {
             })
             .map(|(ri, _)| {
                 let row = table.rows.get(ri).cloned().unwrap_or_default();
+                // 引用必达（#16）：prompt 点名核查的编号行置顶（分数域撑满，按声明序排）
+                if let Some(pos) = required_pos(&row) {
+                    return (ri, i32::MAX - pos as i32);
+                }
+                // 思维资产（#15）：按"规则正文 ↔ 当前方案"的字面重合度排序。
+                // 旧路径的候选词打分在此恒 0（过滤候选是 trigger 标签"审改"，方案永不含），
+                // 会把排序退化为 CSV 行序、使尾部行永不生效——故此处改走内容相关性。
+                if craft_table {
+                    return (ri, craft_overlap_score(&row, &craft_cols, &plan_bigrams));
+                }
                 // 候选词命中数（同一行命中多个候选词说明相关度更高）
                 // 命中权重：行字段匹配的候选词 × 其在方案中的出现次数（反复出现的情绪/主题词权重更高）
                 let mut score: i32 = conditions
@@ -420,10 +752,26 @@ impl KnowledgeBase {
             .map(|(ri, _)| rows_all.get(*ri).cloned().unwrap_or_default())
             .collect();
         let hit = !matched.is_empty();
+        // 引用必达行数（声明集合中真实命中门的行）：上限对它让步——承诺必达的规则不得被条数上限截掉
+        let required_hits = matched.iter().filter(|r| required_pos(r).is_some()).count();
+        if !required_rows.is_empty() {
+            for want in required_rows {
+                let present = matched.iter().any(|r| {
+                    id_idx
+                        .and_then(|i| r.get(i))
+                        .map(|id| id == want)
+                        .unwrap_or(false)
+                });
+                if !present {
+                    tracing::warn!(table = %table.name, id = %want, "引用必达行未命中（不存在或未过注入门）");
+                }
+            }
+        }
         // M18：删随机兜底——未命中时不塞前 3 行，明确标注“无命中”，由调用方走确定性默认。
         // 自矛盾指令“禁止照搬”同步删除，换成“按功能选用并说明理由”（M18，roles.rs 护栏同步）。
         let rows: Vec<&Vec<String>> = if hit {
-            matched.iter().take(max_rows.unwrap_or(usize::MAX)).collect()
+            let cap = max_rows.unwrap_or(usize::MAX).max(required_hits);
+            matched.iter().take(cap).collect()
         } else {
             Vec::new()
         };
@@ -433,8 +781,15 @@ impl KnowledgeBase {
             table.name,
             if hit {
                 let shown = rows.len();
+                let must_note = if required_hits > 0 {
+                    format!("，含引用必达 {} 条", required_hits)
+                } else {
+                    String::new()
+                };
                 if matched.len() > shown {
-                    format!("按需命中 {} 条，以上展示前 {} 条", matched.len(), shown)
+                    format!("按需命中 {} 条{}，以上展示前 {} 条", matched.len(), must_note, shown)
+                } else if required_hits > 0 {
+                    format!("按需命中 {} 条{}", matched.len(), must_note)
                 } else {
                     format!("按需命中 {} 条", matched.len())
                 }
@@ -709,6 +1064,21 @@ fn split_csv_line(line: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 主持人阶段0 注入上下文（#23 真消费者）：阶段标签取 `CRAFT_STAGE_CONSUMERS` 登记，
+    /// 无角色身份（角色域条件行在此不满足）。
+    fn host_ctx(mode: &str) -> CraftInjectCtx<'_> {
+        let c = crate::rules::stage_consumer(crate::rules::CRAFT_STAGE_CONSUMER_HOST0)
+            .expect("阶段消费者登记缺失：host_stage0");
+        CraftInjectCtx { consumer: c.name, stage_tags: c.stage_tags, mode, role: None }
+    }
+
+    /// 审改注入上下文：阶段标签取 `CRAFT_STAGE_CONSUMERS` 登记，带模式 + 角色身份。
+    fn reviewer_ctx<'a>(mode: &'a str, role: Option<&'a str>) -> CraftInjectCtx<'a> {
+        let c = crate::rules::stage_consumer(crate::rules::CRAFT_STAGE_CONSUMER_REVIEWER)
+            .expect("阶段消费者登记缺失：reviewer");
+        CraftInjectCtx { consumer: c.name, stage_tags: c.stage_tags, mode, role }
+    }
 
     /// load() 整组有效则可用作覆盖源（8 张 mini 表）；调用方按组切换
     #[test]
@@ -1015,11 +1385,358 @@ mod tests {
     fn render_filtered_any_matches_any_keyword() {
         let t = parse_csv("t", "emotion,energy_words\n孤独,冷 空 钝\n愤怒,锋利 燥热\n温柔,暖 软\n").unwrap();
         let kb = KnowledgeBase { tables: [("t".to_string(), t)].into_iter().collect() };
-        let out = kb.render_filtered_any("t", &[("emotion", &["孤独", "愤怒"])], None, "", None).unwrap();
+        let out = kb.render_filtered_any("t", &[("emotion", &["孤独", "愤怒"])], None, "", None, &[]).unwrap();
         assert!(out.contains("按需命中 2 条"), "got: {}", out);
         assert!(out.contains("孤独"));
         assert!(out.contains("愤怒"));
         assert!(!out.contains("温柔"));
+    }
+
+    /// #16 修复锁：引用必达——被点名的行必须在投递集合内，且优先于条数上限（不得被截掉）。
+    /// 旧实现只按 CSV 行序 take(max_rows)，点名行一旦落在第 9 行之后即永远不投递。
+    #[test]
+    fn craft_required_rows_force_injected_beyond_cap() {
+        let t = parse_csv(
+            "lyric_craft",
+            "id,module,rule,trigger,check,negative\n\
+             LC-01,画面,无关内容一,审改,无关检查一,无关禁用一\n\
+             LC-02,画面,无关内容二,审改,无关检查二,无关禁用二\n\
+             LC-03,画面,无关内容三,审改,无关检查三,无关禁用三\n",
+        )
+        .unwrap();
+        let kb = KnowledgeBase { tables: [("lyric_craft".to_string(), t)].into_iter().collect() };
+        // 上限 2 条，但点名的是第 3 行 → 必须投递（必达优先于上限）
+        let out = kb
+            .render_craft_table("lyric_craft", &reviewer_ctx("mode_a", Some("lyricist")), None, "", Some(2), &["LC-03"])
+            .unwrap();
+        assert!(out.contains("| LC-03 |"), "引用必达行被上限截掉: {}", out);
+        assert!(out.contains("含引用必达 1 条"), "注入头未标注必达数: {}", out);
+        assert!(out.contains("| LC-01 |"), "上限内仍应按序补足: {}", out);
+        assert!(!out.contains("| LC-02 |"), "上限外的非必达行应被截断: {}", out);
+    }
+
+    /// #15 修复锁：思维资产排序按"规则正文 ↔ 方案"的内容相关性，而非 CSV 行序——
+    /// 尾部行（含用户追加行）在方案谈及其内容时能被注入，不再"永不生效"。
+    #[test]
+    fn craft_rows_ranked_by_plan_overlap_not_csv_order() {
+        let t = parse_csv(
+            "lyric_craft",
+            "id,module,rule,trigger,check,negative\n\
+             LC-01,画面,先建时空物件清单,审改,清单齐全,禁抽象开局\n\
+             LC-02,声律,韵脚律动优先语义,审改,韵脚闭环,禁拗口\n\
+             LC-30,减法,自检三问语义密度,审改,三问有结论,禁跳过自检\n",
+        )
+        .unwrap();
+        let kb = KnowledgeBase { tables: [("lyric_craft".to_string(), t)].into_iter().collect() };
+        // 方案谈韵脚：LC-02 上浮到唯一名额（旧实现恒 0 分 → 永远是 CSV 首行 LC-01）
+        let out = kb
+            .render_craft_table("lyric_craft", &reviewer_ctx("mode_a", Some("lyricist")), None, "韵脚 押韵 声律", Some(1), &[])
+            .unwrap();
+        assert!(out.contains("| LC-02 |"), "相关性命中行未入选: {}", out);
+        assert!(!out.contains("| LC-01 |"), "无关行不应挤掉相关行: {}", out);
+        // 尾部行（模拟用户追加）同样可凭相关性上浮
+        let out2 = kb
+            .render_craft_table("lyric_craft", &reviewer_ctx("mode_a", Some("lyricist")), None, "语义密度 自检", Some(1), &[])
+            .unwrap();
+        assert!(out2.contains("| LC-30 |"), "尾部行应可凭相关性注入: {}", out2);
+    }
+
+    /// #17 阶段域子判定（纯函数）：标签**精确**匹配——"审改"/"全程"落在审改阶段域内，
+    /// "阶段0"（主持阶段域）、"扩展位"（非注入）不落在内，且不会像子串匹配那样把"非审改"误判为命中。
+    /// 完整注入判定（叠加条件域）见 `craft_inject_gate` 的守护测试。
+    #[test]
+    fn craft_trigger_gate_is_tag_exact_not_substring() {
+        let active = crate::rules::CRAFT_TRIGGER_ACTIVE;
+        assert!(trigger_tags_intersect("审改", active));
+        assert!(trigger_tags_intersect("阶段0/审改", active), "多标签叠加：审改应命中");
+        assert!(trigger_tags_intersect("审改/抖音", active));
+        assert!(trigger_tags_intersect("全程", active), "#17：全流程规则必须可注入");
+        assert!(trigger_tags_intersect(" 全程 ", active), "标签应去空白");
+        assert!(!trigger_tags_intersect("阶段0", active), "阶段0 属主持阶段域（消费者 host_stage0），不在审改阶段域");
+        assert!(!trigger_tags_intersect("扩展位", active), "扩展位为已登记预留位");
+        assert!(!trigger_tags_intersect("非审改", active), "标签精确：子串不得误命中");
+        assert!(!trigger_tags_intersect("", active), "空 trigger 不可注入");
+    }
+
+    /// #17 修复锁（红灯先行）：trigger="全程" 的行必须可达——旧子串匹配下 CC-23/CC-28 任何角色不可达。
+    /// 端到端断言：单源门判定通过 + 实际渲染文本中出现该行。
+    #[test]
+    fn craft_full_process_rows_are_injectable() {
+        let kb = KnowledgeBase::load_embedded().unwrap();
+        let t = kb.table("compose_craft").unwrap();
+        let id_idx = t.header_index("id").unwrap();
+        let trg_idx = t.header_index("trigger").unwrap();
+        let full_process: Vec<String> = t
+            .rows
+            .iter()
+            .filter(|row| row.get(trg_idx).map(|v| v == "全程").unwrap_or(false))
+            .filter_map(|row| row.get(id_idx).cloned())
+            .collect();
+        assert!(
+            !full_process.is_empty(),
+            "compose_craft 应存在 trigger=全程 的行（#17 反例集不应为空）"
+        );
+        for id in &full_process {
+            let row = t
+                .rows
+                .iter()
+                .find(|r| r.get(id_idx).map(|v| v == id).unwrap_or(false))
+                .unwrap();
+            assert!(
+                craft_inject_gate(&row[trg_idx], &reviewer_ctx("mode_a", Some("producer"))),
+                "{} trigger=全程 未通过唯一注入门（#17 回归）",
+                id
+            );
+        }
+        // 渲染实测：全量（不设上限）下"全程"行必须在注入文本内
+        let out = kb
+            .render_craft_table("compose_craft", &reviewer_ctx("mode_a", Some("producer")), None, "（占位方案）", None, &[])
+            .unwrap();
+        for id in &full_process {
+            assert!(out.contains(&format!("| {} |", id)), "{} 未出现在注入文本中（#17 回归）: {}", id, out);
+        }
+    }
+
+    /// #18 修复锁：CSV 中 trigger 含"扩展位"的行集合 == rules::CRAFT_RESERVED_ROWS 登记集合。
+    /// 新增预留行未登记即红——强制"预留"成为显式决策，杜**用户追加内容静默失效**。
+    #[test]
+    fn craft_reserved_rows_match_registry() {
+        let kb = KnowledgeBase::load_embedded().unwrap();
+        let mut actual: Vec<String> = Vec::new();
+        for name in ["lyric_craft", "compose_craft"] {
+            let t = kb.table(name).unwrap();
+            let id_idx = t.header_index("id").unwrap();
+            let trg_idx = t.header_index("trigger").unwrap();
+            for row in &t.rows {
+                if trigger_tags_intersect(&row[trg_idx], crate::rules::CRAFT_TRIGGER_RESERVED) {
+                    actual.push(row[id_idx].clone());
+                }
+            }
+        }
+        actual.sort();
+        let mut declared: Vec<String> = crate::rules::CRAFT_RESERVED_ROWS
+            .iter()
+            .map(|(id, _)| (*id).to_string())
+            .collect();
+        declared.sort();
+        assert_eq!(
+            actual, declared,
+            "扩展位行与 CRAFT_RESERVED_ROWS 登记不一致（CSV={:?} 登记={:?}）——\
+             新增预留行须在 rules::CRAFT_RESERVED_ROWS 登记理由；若本应生效请改 trigger 为 审改/全程",
+            actual, declared
+        );
+        for (id, reason) in crate::rules::CRAFT_RESERVED_ROWS {
+            assert!(!reason.trim().is_empty(), "{} 的预留登记缺理由", id);
+        }
+    }
+
+    /// #17/#18/#23/#29 修复锁：trigger 词表**有消费者且域取值真实**——三向守护：
+    /// ① CSV 标签 ⊆ 词表（防新标签静默丢弃）；
+    /// ② 每个**阶段标签**至少有一个消费者上下文（`CRAFT_STAGE_CONSUMERS`），且消费者的
+    ///    阶段标签只能取自阶段域词表——防"词表可见、执行零消费者"（#23 的"阶段0"零消费者）；
+    /// ③ 每个**条件标签**的判定域取值真实：模式域 ∈ `ALL_MODES`、角色域 ∈ `PipelineRole::storage_key()`，
+    ///    且该标签确实被至少一行 CSV 使用（防登记即死条目）。
+    #[test]
+    fn craft_trigger_vocabulary_has_consumers_and_real_scope() {
+        let conditional_keys: Vec<&str> =
+            crate::rules::CRAFT_CONDITIONAL_TAGS.iter().map(|(t, _)| *t).collect();
+        let vocab: HashSet<&str> = crate::rules::CRAFT_TRIGGER_ACTIVE
+            .iter()
+            .chain(crate::rules::CRAFT_TRIGGER_HOST_ONLY)
+            .chain(crate::rules::CRAFT_TRIGGER_RESERVED)
+            .chain(conditional_keys.iter())
+            .copied()
+            .collect();
+        let kb = KnowledgeBase::load_embedded().unwrap();
+        let mut used_tags: HashSet<&str> = HashSet::new();
+        for name in ["lyric_craft", "compose_craft"] {
+            let t = kb.table(name).unwrap();
+            let id_idx = t.header_index("id").unwrap();
+            let trg_idx = t.header_index("trigger").unwrap();
+            for row in &t.rows {
+                assert!(
+                    !trigger_tags(&row[trg_idx]).is_empty(),
+                    "{} 缺 trigger 标签",
+                    row[id_idx]
+                );
+                for tag in trigger_tags(&row[trg_idx]) {
+                    assert!(
+                        vocab.contains(tag),
+                        "{} trigger 含词表外标签 {:?}（词表：{:?}）——请登记到 rules::CRAFT_TRIGGER_* / CRAFT_CONDITIONAL_TAGS 后再用",
+                        row[id_idx],
+                        tag,
+                        vocab
+                    );
+                    used_tags.insert(tag);
+                }
+            }
+        }
+        // ② 阶段标签必须各有消费者；消费者只能消费阶段域标签（不得把条件标签当阶段标签）
+        let stage_vocab: HashSet<&str> = crate::rules::CRAFT_TRIGGER_ACTIVE
+            .iter()
+            .chain(crate::rules::CRAFT_TRIGGER_HOST_ONLY)
+            .copied()
+            .collect();
+        for tag in &stage_vocab {
+            assert!(
+                crate::rules::CRAFT_STAGE_CONSUMERS
+                    .iter()
+                    .any(|c| c.stage_tags.contains(tag)),
+                "阶段标签 {:?} 无消费者上下文（= 零消费者静默死角，#23）",
+                tag
+            );
+            assert!(
+                used_tags.contains(tag),
+                "阶段标签 {:?} 在 CSV 中零使用（词表条目即死条目）",
+                tag
+            );
+        }
+        for c in crate::rules::CRAFT_STAGE_CONSUMERS {
+            for tag in c.stage_tags {
+                assert!(
+                    stage_vocab.contains(tag),
+                    "消费者 {} 声明的阶段标签 {:?} 不在阶段域词表内",
+                    c.name,
+                    tag
+                );
+            }
+            assert!(!c.stage_tags.is_empty(), "消费者 {} 的阶段标签为空", c.name);
+        }
+        // ③ 条件标签域取值真实 + 确实被使用
+        let all_modes: HashSet<&str> = crate::rules::ALL_MODES.iter().copied().collect();
+        let all_roles: HashSet<&str> =
+            crate::models::PipelineRole::all().iter().map(|r| r.storage_key()).collect();
+        for (tag, scope) in crate::rules::CRAFT_CONDITIONAL_TAGS {
+            match scope {
+                crate::rules::CraftConditionalScope::Mode(m) => assert!(
+                    all_modes.contains(m),
+                    "条件标签 {:?} 的模式域取值 {:?} 不在 ALL_MODES（{:?}）",
+                    tag,
+                    m,
+                    crate::rules::ALL_MODES
+                ),
+                crate::rules::CraftConditionalScope::Role(r) => assert!(
+                    all_roles.contains(r),
+                    "条件标签 {:?} 的角色域取值 {:?} 不在 PipelineRole::storage_key()（{:?}）",
+                    tag,
+                    r,
+                    all_roles
+                ),
+            }
+            assert!(
+                used_tags.contains(tag),
+                "条件标签 {:?} 在 CSV 中零使用（登记即死条目）",
+                tag
+            );
+        }
+    }
+
+    /// #29 修复锁（**红灯先行**）：条件标签是**限定门**，不是装饰——同一行在不同
+    /// (模式, 角色) 上下文下命中与否必须分化。旧实现只做阶段域交集 → 下列 assert 全红。
+    #[test]
+    fn craft_conditional_gate_is_restrictive_gate() {
+        let lyricist = Some("lyricist");
+        // 抖音限定（LC-10/LC-24 = 审改/抖音）：仅 mode_d 生效
+        assert!(
+            !craft_inject_gate("审改/抖音", &reviewer_ctx("mode_a", lyricist)),
+            "#29：抖音限定行不得进 mode_a"
+        );
+        assert!(craft_inject_gate("审改/抖音", &reviewer_ctx("mode_d", lyricist)));
+        // 模式域条件（LC-31 = 审改/A/B/C）：D 不生效、C 生效（旧实现 D 也注入 = 红）
+        assert!(
+            !craft_inject_gate("审改/A/B/C", &reviewer_ctx("mode_d", lyricist)),
+            "#29：审改/A/B/C 行不得进 mode_d"
+        );
+        for m in ["mode_a", "mode_b", "mode_c"] {
+            assert!(
+                craft_inject_gate("审改/A/B/C", &reviewer_ctx(m, lyricist)),
+                "#29：审改/A/B/C 行应在 {} 生效",
+                m
+            );
+        }
+        // 角色域条件（CC-22 = 审改/制作）：只进制作人（旧实现所有 craft 角色都注入 = 红）
+        assert!(craft_inject_gate("审改/制作", &reviewer_ctx("mode_a", Some("producer"))));
+        for r in ["emotion", "lyricist", "reviser", "style_analyst"] {
+            assert!(
+                !craft_inject_gate("审改/制作", &reviewer_ctx("mode_a", Some(r))),
+                "#29：制作限定行不得进 {}",
+                r
+            );
+        }
+        // 阶段域与条件域是"与"：条件命中但阶段域不符 → 不注入
+        assert!(
+            !craft_inject_gate("阶段0/制作", &reviewer_ctx("mode_a", Some("producer"))),
+            "阶段域：阶段0 行不得进审改上下文"
+        );
+        // 角色域条件遇无角色身份（主持人阶段0）按未命中（fail-closed）
+        assert!(
+            !craft_inject_gate("阶段0/制作", &host_ctx("mode_a")),
+            "#29：角色域条件在 role=None 上下文必须不满足"
+        );
+        assert!(craft_inject_gate("阶段0", &host_ctx("mode_a")));
+        // 无条件标签 = 不限模式/角色：全程行在任意审改上下文均可注入
+        assert!(craft_inject_gate("全程", &reviewer_ctx("mode_d", Some("style_analyst"))));
+        // 但阶段域仍要满足：阶段0 上下文只消费"阶段0"标签（全程/审改行不进主持初稿）
+        assert!(
+            !craft_inject_gate("全程", &host_ctx("mode_a")),
+            "阶段域隔离：全程行不进主持人阶段0"
+        );
+        assert!(!craft_inject_gate("审改", &host_ctx("mode_a")), "阶段域隔离：审改行不进主持人阶段0");
+        // 预留位 / 空 trigger 恒不可注入
+        assert!(!craft_inject_gate("扩展位", &reviewer_ctx("mode_a", lyricist)));
+        assert!(!craft_inject_gate("审改/扩展位", &reviewer_ctx("mode_a", lyricist)));
+        assert!(!craft_inject_gate("", &reviewer_ctx("mode_a", lyricist)));
+        // 未知标签按"非条件"处理（不构成限定），阶段域命中即通过
+        assert!(craft_inject_gate("审改/未知标签", &reviewer_ctx("mode_a", lyricist)));
+    }
+
+    /// #23/#29 修复锁：思维资产表**必须**带注入上下文——无上下文的注入路径直接失败，
+    /// 不允许"无门注入"（阶段域/条件域都无法判定，正是历史缺陷的温床）。
+    #[test]
+    fn craft_render_requires_inject_context() {
+        let kb = KnowledgeBase::load_embedded().unwrap();
+        let err = kb
+            .render_filtered_any("lyric_craft", &[("trigger", &["审改"])], None, "", None, &[])
+            .unwrap_err();
+        assert!(err.contains("CraftInjectCtx"), "错误信息须指明缺上下文: {}", err);
+        // 非思维资产表不受影响
+        assert!(kb
+            .render_filtered_any("suno_rules", &[("trigger", &["审改"])], None, "", None, &[])
+            .is_ok());
+    }
+
+    /// #22 修复锁（① 现状）：真实知识库中不得存在**结构性不可达行**——
+/// 关键词表检索键必须非空且 ≥ rules::KEYWORD_MIN_CHARS（短于此值的候选被
+/// orchestrator::matching_keywords 静默丢弃 → 该行永久休眠），
+/// 乐器表能量区间必须可解析且 min ≤ max。
+/// 旧状态实测：cliches 的 家/雨/夜/光 4 行是死行（单字键被丢弃，无日志无测试）。
+    #[test]
+    fn keyword_tables_have_no_structurally_unreachable_rows() {
+        let kb = KnowledgeBase::load_embedded().unwrap();
+        let v = kb.reachability_violations();
+        assert!(v.is_empty(), "存在结构性不可达行（永久休眠且无告警）：{:?}", v);
+    }
+
+    /// #22 修复锁（② 红灯先行）：审计本身必须真能抓到死行——单字检索键与倒置能量区间。
+    /// 若本测试不红而真实数据"全绿"，说明守护网是假的。
+    #[test]
+    fn reachability_audit_detects_single_char_key_and_bad_energy() {
+        let mut kb = KnowledgeBase::default();
+        kb.tables.insert(
+            "cliches".to_string(),
+            parse_csv("cliches", "cliche,replacement\n夜,写具体场景\n黑夜,写具体场景\n").unwrap(),
+        );
+        kb.tables.insert(
+            "instruments".to_string(),
+            parse_csv("instruments", "instrument,energy_min,energy_max\nfelt piano,7,2\n").unwrap(),
+        );
+        let v = kb.reachability_violations();
+        assert!(
+            v.iter().any(|s| s.contains("夜") && s.contains("长度 1")),
+            "单字检索键未被审计抓出: {:?}",
+            v
+        );
+        assert!(v.iter().any(|s| s.contains("倒置")), "能量区间倒置未被审计抓出: {:?}", v);
     }
 
     /// 微观②改写（M18）：全部未命中 → 零行 + 无示例标注，由调用方走确定性默认
@@ -1027,7 +1744,7 @@ mod tests {
     fn render_filtered_any_no_match_fallback() {
         let t = parse_csv("t", "a,b\nx,1\ny,2\nz,3\nw,4\n").unwrap();
         let kb = KnowledgeBase { tables: [("t".to_string(), t)].into_iter().collect() };
-        let out = kb.render_filtered_any("t", &[("a", &["zzz"])], None, "", None).unwrap();
+        let out = kb.render_filtered_any("t", &[("a", &["zzz"])], None, "", None, &[]).unwrap();
         assert!(out.contains("未命中关键词"), "got: {}", out);
         assert!(out.contains("无示例"), "未命中应明确无示例: {}", out);
         assert!(out.contains("按功能选用并说明理由"), "未命中应给新指令: {}", out);
@@ -1079,7 +1796,7 @@ mod tests {
         let kb = KnowledgeBase { tables: [("emotions".to_string(), t)].into_iter().collect() };
         // 分数：愤怒=能量9+命中3+core2=14 > 喜悦=能量10+core2=12 > 悲伤=能量6+core2=8 > 忐忑=能量7=7 > 麻木=能量5=5
         let out = kb
-            .render_filtered_any("emotions", &[("emotion", &["愤怒", "悲伤", "麻木", "喜悦", "忐忑"])], None, "愤怒 能量:6 到 能量:9", None)
+            .render_filtered_any("emotions", &[("emotion", &["愤怒", "悲伤", "麻木", "喜悦", "忐忑"])], None, "愤怒 能量:6 到 能量:9", None, &[])
             .unwrap();
         let i_x = out.find("| 喜悦 |").expect("喜悦应命中");
         let i_f = out.find("| 愤怒 |").expect("愤怒应命中");
@@ -1104,7 +1821,7 @@ mod tests {
         let kb = KnowledgeBase { tables: [("style_genre".to_string(), t)].into_iter().collect() };
         // 方案含 130BPM：EDM(120-140 命中) 优先于民谣(60-75 不命中)
         let out = kb
-            .render_filtered_any("style_genre", &[("genre", &["深夜室内民谣", "festival EDM", "抒情流行"])], None, "130BPM 4/4 全场高能", None)
+            .render_filtered_any("style_genre", &[("genre", &["深夜室内民谣", "festival EDM", "抒情流行"])], None, "130BPM 4/4 全场高能", None, &[])
             .unwrap();
         let i_edm = out.find("| festival EDM |").expect("EDM 应命中");
         let i_folk = out.find("| 深夜室内民谣 |").expect("民谣应命中");
@@ -1175,6 +1892,7 @@ mod tests {
                 Some(&["cliche", "banned_formula", "replacement"]),
                 "",
                 None,
+                &[],
             )
             .unwrap();
         assert!(out.contains("| cliche | banned_formula | replacement |"), "got: {}", out);
@@ -1188,7 +1906,7 @@ mod tests {
     fn render_with_cols_missing_column_errors() {
         let t = parse_csv("t", "a,b\nx,1\n").unwrap();
         let kb = KnowledgeBase { tables: [("t".to_string(), t)].into_iter().collect() };
-        let err = kb.render_filtered_any("t", &[("a", &["x"])], Some(&["a", "nope"]), "", None).unwrap_err();
+        let err = kb.render_filtered_any("t", &[("a", &["x"])], Some(&["a", "nope"]), "", None, &[]).unwrap_err();
         assert!(err.contains("缺少列: nope"), "got: {}", err);
     }
 }

@@ -127,7 +127,8 @@ function Seat({
         style={{ zIndex: 15 }}
       >
         {expert.emoji} {expert.name}
-        {/* D-1（#13）：working 角标——"审改中"而非抢话；与 done/并发阶段叙事一致 */}
+        {/* D-1（#13）：working 角标——"审改中"而非抢话。
+            #14：讨论轮为阵容序串行，同一时刻至多一个 working，角标即"当前轮到谁"。 */}
         {talking && <span className="ml-1 text-brand-500">{t(locale, "round.seat.working")}</span>}
         {done && <span className="ml-1 text-success/70">{t(locale, "round.seat.done")}</span>}
       </div>
@@ -238,12 +239,8 @@ export default function RoundtablePanel({
         <div className="flex items-center gap-2">
           <span className="text-[13px] font-semibold text-text-1">🪑 圆桌会议</span>
           <span className="text-[11px] text-text-muted">{phaseLabel}</span>
-          {/* D-1（#13）：并发是设计行为——阶段叙事让"多专家同时动"可理解，而非像抢话。
-              实测 phase==="discussing" 覆盖的是主持人统领流式窗口，专家真并发时已是
-              synthesizing（22:3x 帧证据），故改绑"≥2 座位同时 working"= 真实并发窗口。 */}
-          {experts.filter((e) => e.status === "working").length >= 2 && (
-            <span className="text-[10px] text-text-muted/80 hidden sm:inline">· {t(locale, "round.parallel.hint")}</span>
-          )}
+          {/* #14：讨论轮改阵容序串行后，同一时刻至多一个座位 working，
+              "多专家并发"横幅已成死代码 + 假叙事，随并发机制一并退役。 */}
         </div>
         <div className="flex items-center gap-2">
           <div className="h-1.5 w-24 rounded-full bg-surface-3 overflow-hidden">

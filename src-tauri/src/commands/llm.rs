@@ -31,7 +31,11 @@ fn retry_plan(attempt: usize, status: Option<u16>, network_err: bool) -> Option<
 }
 
 /// R4：退避抖动 0–5 秒（无 rand 依赖，用纳秒取模；纯函数阈值不动，抖动包在外面）。
-/// 四角色并发同时 429 时错峰重发，避免同秒齐射撞出第二波 60s。
+/// 429 错峰重发，避免同秒齐射撞出第二波 60s。
+///
+/// #14（第八批）更正注记：原设计前提是"四角色**并发**同时 429"（讨论轮 join_all）。
+/// 讨论轮已改阵容序串行，同轮至多一路请求，该前提不再成立；但抖动机制本身仍覆盖
+/// 其他并发源（终稿流式与重试重叠、跨 run 边界），故保留不动——**只更正前提，不改行为**。
 fn backoff_jitter_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -84,7 +88,8 @@ async fn send_with_retry(
                 match retry_plan(attempt, Some(status.as_u16()), false) {
                     Some(wait) => {
                         last_err = format!("{} 错误", status);
-                        // R4：计划等待 + 0–5s 抖动，四路并发错峰（阈值不动，离散包在外面）
+                        // R4：计划等待 + 0–5s 抖动错峰（阈值不动，离散包在外面；#14 后讨论轮串行，
+                        // 抖动仍覆盖终稿/跨 run 等其他并发源）
                         let planned = wait + backoff_jitter_secs();
                         tracing::warn!(status = %status, wait_secs = planned, attempt = attempt + 1, "LLM 请求错误，退避重试");
                         // 退避等待可被预算到期中断——不等满，只等到 deadline

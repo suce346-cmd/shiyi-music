@@ -150,19 +150,48 @@ fn declared_minimal_sections(text: &str) -> Vec<String> {
     result
 }
 
+/// 说明行长度门（终稿层单源，A/B/C/D 全模式共用）：上限 rules::DESC_LINE_MAX_CHARS。
+/// 与方案侧信封门（rules::envelope_defect_mode）同读一个常量、共用同一个行型谓词（rules::is_desc_line）——
+/// 上游输出约束与下游校验约束不再各写一套（R1 根因：上游零告知 + 下游 80 硬门 → 必然降级）。
+/// 报前 3 条明细 + 总数汇总（与其他硬门同口径），文案给出可执行的修复方向。
+pub fn desc_line_length_issues(text: &str) -> Vec<String> {
+    let mut issues = Vec::new();
+    let mut over = 0usize;
+    for line in text.lines().filter(|l| rules::is_desc_line(l)) {
+        let t = line.trim();
+        let n = t.chars().count();
+        if n > rules::DESC_LINE_MAX_CHARS {
+            over += 1;
+            if over <= 3 {
+                issues.push(format!(
+                    "说明行超 {} 字符（{} 字符）: {}",
+                    rules::DESC_LINE_MAX_CHARS,
+                    n,
+                    t.chars().take(40).collect::<String>()
+                ));
+            }
+        }
+    }
+    if over > 0 {
+        issues.push(format!(
+            "说明行超限共 {} 行（上限 {} 字符，含方括号整行计）——须压缩到限内：保乐器+行为动词，删修饰词/重复空间描述；不得删乐器（配器 3-7 件与最强段 ≥5 件照常校验）",
+            over,
+            rules::DESC_LINE_MAX_CHARS
+        ));
+    }
+    issues
+}
+
 /// Mode A/B：校验生产方案（真硬校验）
 pub fn validate_production(mode: &str, text: &str) -> ValidationResult {
     let mut issues = Vec::new();
 
-    // 1. Style Prompt 长度 ≤ 单源上限
-    match extract_style_prompt(text) {
-        Some(sp) => {
-            let len = sp.chars().count();
-            if len > rules::STYLE_PROMPT_MAX_CHARS {
-                issues.push(format!("Style Prompt 长度 {} 超限（> {}）", len, rules::STYLE_PROMPT_MAX_CHARS));
-            }
-        }
-        None => issues.push("未找到 Style Prompt 字段".to_string()),
+    // 1. Style Prompt 存在性（A/B）。
+    //    长度门（上限 ≤350 / 下限 ≥30）不再在此复述——全模式唯一执行者 =
+    //    `style_prompt_length_issues`，由 `orchestrator::collect_hard_issues` 单点接线。
+    //    同规则两套判法会产生双报，且 C/D 无执行者（审计第三批缺口）正是这么漏出来的。
+    if extract_style_prompt(text).is_none() {
+        issues.push("未找到 Style Prompt 字段".to_string());
     }
 
     // 2. 结构标签必须存在（至少单源段落数）
@@ -250,6 +279,8 @@ pub fn validate_production(mode: &str, text: &str) -> ValidationResult {
         // O5（2026-09-13）：断句/禁用标点硬门——校验清单声明"断句单空格、禁 / 与 、"，
         // 此前仅提示词承诺无执行点（清单-代码口径漂移复发案例）。歌词行检出即报（带行号）。
         issues.extend(forbidden_break_marks(text));
+        // R1：说明行长度硬门（上游 checklist/信封规范/primer 同源告知同一数字）
+        issues.extend(desc_line_length_issues(text));
     }
 
     if issues.is_empty() { ValidationResult::ok() } else { ValidationResult::fail(issues) }
@@ -561,6 +592,9 @@ pub fn validate_lyric_fill(original: &str, new: &str) -> ValidationResult {
     }
     // O5：C 模式同禁断句符号（校验清单同源）
     issues.extend(forbidden_break_marks(new));
+    // R1：C 模式同样过说明行长度门（下游此前只有方案侧信封门在拦、终稿侧无门，
+    // 上游 CHECKLIST_C 又零告知——两侧口径与告知现已同源）
+    issues.extend(desc_line_length_issues(new));
 
     // 字数逐行对比：前 N 行（N=原歌词行数）逐行等字数（去空白+去标点，Q2 与 prompt 同口径）。
     // 允许尾部 ≤2 行收尾（如 Outro 一句）；超过报"多余歌词行"。
@@ -667,14 +701,9 @@ pub fn validate_douyin(text: &str) -> ValidationResult {
         issues.push("缺少骤停标记（结尾应一刀切）".to_string());
     }
 
-    // 3b. 说明行 ≤ 单源上限（Q2：此前仅 prompt/checklist 声称，代码零执行；现补硬门）。
-    for line in text.lines().map(|l| l.trim()).filter(|l| l.starts_with('[') && l.ends_with(']') && l.contains(',')) {
-        let n = line.chars().count();
-        if n > rules::DOUYIN_DESC_LINE_MAX_CHARS {
-            issues.push(format!("说明行超 {} 字符（{} 字符）: {}", rules::DOUYIN_DESC_LINE_MAX_CHARS, n, line.chars().take(30).collect::<String>()));
-            break;
-        }
-    }
+    // 3b. 说明行 ≤ 单源上限（Q2 起 D 单模式门；R1 起并入全模式共用门 desc_line_length_issues——
+    // 同一上限/同一行型谓词，A/B/C/D 判法一致，不再各写一套）
+    issues.extend(desc_line_length_issues(text));
 
     // 3c. C1/ADR-2：参数抖音区间硬门——CHECKLIST_D 承诺"抖音12-20/85-95（仅当含≥2叙事段且写明'叙事型'归类方可回落A/B弧线区间）"。
     // 此前仅提示词表述（roles.rs 四处）+ 死常量（rules::DOUYIN_WEIRD/STYLE），代码零执行。
@@ -717,14 +746,22 @@ pub fn check_bpm_range(mode: &str, bpm: u32) -> Option<String> {
     }
 }
 
-/// 检查 Style Prompt 是否过短（极端缺失提示）。
-/// 对齐原指令 prompts.rs：信息块"选填，不需要填满所有块"（:102）、允许创造新流派（:85）——
-/// 不设流派/乐器/人声词表强制（词表必然误杀原指令允许的合法流派，如喜剧/emo/自创方向），
-/// 信息块完整性由制作人讨论轮审查（prompt 维度 1）把关。
-pub fn check_style_prompt_blocks(style_prompt: &str) -> Vec<String> {
+/// 全模式 Style Prompt 长度门（上/下限同门，唯一执行者）。
+///
+/// - 单点接线：`orchestrator::collect_hard_issues`（四模式共用同一调用，无第二处判法）。
+/// - 模式域单源：`rules::STYLE_PROMPT_MAX_MODES` / `STYLE_PROMPT_MIN_MODES`（注册表同读同两个常量，
+///   杜绝"注册模式域 ≠ 执行模式域"漂移——本轮实测的 `douyin_bpm_min` 错挂执行者即此类）。
+/// - 上游承诺对齐：CHECKLIST_A/B/C/D 均承诺上限（≤350）；下限（≥30）仅 A/B/D 承诺，
+///   C 的 STYLE 节是"氛围/流派基调一句"、上游无下限告知——故下限不对 C 执行
+///   （多执行即上游零告知的隐性降级，违反"上游输出约束 ↔ 下游校验约束"同域原则）。
+/// - 不设流派/乐器/人声词表强制（原指令允许创造新流派），信息块完整性由制作人讨论轮把关。
+pub fn style_prompt_length_issues(mode: &str, style_prompt: &str) -> Vec<String> {
     let mut issues = Vec::new();
     let chars = style_prompt.chars().count();
-    if chars < rules::STYLE_PROMPT_MIN_CHARS {
+    if rules::STYLE_PROMPT_MAX_MODES.contains(&mode) && chars > rules::STYLE_PROMPT_MAX_CHARS {
+        issues.push(format!("Style Prompt 长度 {} 超限（> {}）", chars, rules::STYLE_PROMPT_MAX_CHARS));
+    }
+    if rules::STYLE_PROMPT_MIN_MODES.contains(&mode) && chars < rules::STYLE_PROMPT_MIN_CHARS {
         issues.push(format!("Style Prompt 过短（{} 字符），缺少信息块", chars));
     }
     issues
@@ -1001,10 +1038,10 @@ TRANSCRIPTION_ISSUE: 收敛方案含 ``` 围栏与参数行格式错误，需主
 
     #[test]
     fn style_prompt_too_long_fails() {
-        let long_prompt = format!("**Style Prompt**: {}", "a,".repeat(200));
-        let r = validate_production("mode_a", &long_prompt);
-        assert!(!r.passed);
-        assert!(r.issues.iter().any(|i| i.contains("350")));
+        // 长度门唯一执行者 = style_prompt_length_issues（validate_production 不再复述上限）
+        let long_prompt = "a,".repeat(200);
+        let issues = style_prompt_length_issues("mode_a", &long_prompt);
+        assert!(issues.iter().any(|i| i.contains("350")), "issues: {:?}", issues);
     }
 
     /// 标签回退（B 实测根治）：模型丢标签但首行写风格正文时仍能提取——
@@ -1223,10 +1260,71 @@ TRANSCRIPTION_ISSUE: 收敛方案含 ``` 围栏与参数行格式错误，需主
         assert!(r.issues.iter().any(|i| i.contains("最强段配器")), "issues: {:?}", r.issues);
     }
 
-    /// Q2：Mode D 说明行超 80 字必须被揪出
+    /// R1：说明行长度门单源（A/B/C/D 共用同一函数、同一上限常量、同一行型谓词）
     #[test]
-    fn douyin_desc_line_over_80_fails() {
-        let long_desc = format!("[{}, wide hall, aggressive male voice]", "acoustic guitar strummed, cello dark bowing, warm piano cushions, light drums, deep bass pulses");
+    fn desc_line_gate_shared_across_modes() {
+        let over = format!("[{}, room]", "a".repeat(rules::DESC_LINE_MAX_CHARS));
+        assert_eq!(over.chars().count(), rules::DESC_LINE_MAX_CHARS + 8);
+        let issues = desc_line_length_issues(&over);
+        assert_eq!(issues.len(), 2, "1 条明细 + 1 条汇总: {:?}", issues);
+        assert!(issues[0].contains("说明行超"), "{:?}", issues);
+        assert!(issues[1].contains("说明行超限共 1 行") && issues[1].contains("不得删乐器"), "{:?}", issues);
+        // 恰好等于上限：放行（上限口径=含方括号整行字符数）
+        let exact = format!("[{}, room]", "a".repeat(rules::DESC_LINE_MAX_CHARS - 8));
+        assert_eq!(exact.chars().count(), rules::DESC_LINE_MAX_CHARS);
+        assert!(desc_line_length_issues(&exact).is_empty(), "恰好等于上限应放行");
+        // 行型谓词单源：缩进说明行同样入检；结构标签与歌词行不误伤
+        assert!(!desc_line_length_issues(&format!("   {}", over)).is_empty(), "缩进超长说明行应入检");
+        assert!(desc_line_length_issues("[Chorus]").is_empty());
+        assert!(desc_line_length_issues(&format!("{}, 就是这样", "啊".repeat(300))).is_empty(), "歌词行不属说明行门");
+    }
+
+    /// R1：明细上限 3 条 + 总数汇总（回炉文案可执行且不刷屏）
+    #[test]
+    fn desc_line_gate_reports_capped_details() {
+        let over = format!("[{}, room]", "a".repeat(rules::DESC_LINE_MAX_CHARS));
+        let text = (0..5).map(|_| over.clone()).collect::<Vec<_>>().join("\n");
+        let issues = desc_line_length_issues(&text);
+        assert_eq!(issues.len(), 4, "3 条明细 + 1 条汇总: {:?}", issues);
+        assert!(issues[3].contains("共 5 行"), "{:?}", issues);
+    }
+
+    /// R1：A/B 终稿说明行超上限必须被揪出（保留既有硬门行为，上限改为单源常量）
+    #[test]
+    fn production_desc_line_over_limit_fails() {
+        let long_outro = format!(
+            "[felt piano {}, soft pad, nylon guitar, close-room, no voice, 能量:2]",
+            "very gentle sustained pedalled sparse ".repeat(6)
+        );
+        assert!(long_outro.chars().count() > rules::DESC_LINE_MAX_CHARS, "夹具须超上限");
+        let text = valid_mode_b_text_with_params(25, 80)
+            .replace("[felt piano, soft pad, nylon guitar, fading, 能量:2]", &long_outro);
+        assert!(text.contains(&long_outro), "夹具替换失败");
+        let r = validate_production("mode_b", &text);
+        assert!(!r.passed, "超长说明行应被拒（issues: {:?}）", r.issues);
+        assert!(r.issues.iter().any(|i| i.contains("说明行超")), "issues: {:?}", r.issues);
+        // 不得误伤其他门：说明行长度独立于配器/能量（超长≠配器超标）
+        assert!(!r.issues.iter().any(|i| i.contains("配器差") || i.contains("能量差")), "误伤其他门: {:?}", r.issues);
+        assert!(!r.issues.iter().any(|i| i.contains("最弱段配器")), "误伤配器下限门: {:?}", r.issues);
+    }
+
+    /// R1：Mode C 终稿说明行超上限必须被揪出（旧实现 C 终稿侧零门、方案侧信封门在拦——两侧口径现已同源）
+    #[test]
+    fn lyric_fill_desc_line_over_limit_fails() {
+        let original = "我们 很早前 就 谋过面\n我一直 带给你 麻烦不断";
+        let long_desc = format!("[{}, room]", "a".repeat(rules::DESC_LINE_MAX_CHARS));
+        let new = format!("[Verse]\n{}\n你们 很晚后 也 想过我\n她总是 送给你 快乐满满", long_desc);
+        let r = validate_lyric_fill(original, &new);
+        assert!(!r.passed, "超长说明行应被拒");
+        assert!(r.issues.iter().any(|i| i.contains("说明行超")), "issues: {:?}", r.issues);
+        // 说明行不参与字数比对（行型解析），字数门仍全绿 → 唯一问题就是说明行超限
+        assert!(!r.issues.iter().any(|i| i.contains("字数不符") || i.contains("行数")), "误伤字数门: {:?}", r.issues);
+    }
+
+    /// R1：Mode D 说明行超上限必须被揪出（上限单源 rules::DESC_LINE_MAX_CHARS，不再硬写 80）
+    #[test]
+    fn douyin_desc_line_over_limit_fails() {
+        let long_desc = format!("[{}, wide hall, aggressive male voice]", "a".repeat(rules::DESC_LINE_MAX_CHARS));
         let text = format!("[Hook]\n我 真的 会谢\n我 真的 会谢\n[Hook]\n{}\n我 真的 会谢\n[Verse]\n一行\n[Hook]\n[all instruments cut abruptly]", long_desc);
         let r = validate_douyin(&text);
         assert!(!r.passed);
@@ -1499,22 +1597,66 @@ TRANSCRIPTION_ISSUE: 收敛方案含 ``` 围栏与参数行格式错误，需主
 
     #[test]
     fn style_prompt_short_detected() {
-        let issues = check_style_prompt_blocks("民谣");
-        assert!(issues.iter().any(|i| i.contains("过短")));
+        let issues = style_prompt_length_issues("mode_a", "民谣");
+        assert!(issues.iter().any(|i| i.contains("过短")), "issues: {:?}", issues);
     }
 
     #[test]
     fn style_prompt_comedy_allowed() {
         // 对齐原指令：喜剧/搞笑是合法流派（prompts.rs:713"喜剧/整活方向"）、可创造新方向（:85）
         // 信息块选填（:102）——只要不短就不报
-        let issues = check_style_prompt_blocks("喜剧整活, 130BPM, 滑稽滑音合成器, 弹拨贝斯, 密集军鼓, 痞气半说半唱, 拥挤商场混响");
+        let issues = style_prompt_length_issues("mode_a", "喜剧整活, 130BPM, 滑稽滑音合成器, 弹拨贝斯, 密集军鼓, 痞气半说半唱, 拥挤商场混响");
         assert!(issues.is_empty(), "喜剧流派不应误报: {:?}", issues);
     }
 
     #[test]
     fn style_prompt_emo_allowed() {
-        let issues = check_style_prompt_blocks("emo破碎, 110BPM, 延迟吉他, 氛围垫, 稀疏鼓, 近麦气声");
+        let issues = style_prompt_length_issues("mode_a", "emo破碎, 110BPM, 延迟吉他, 氛围垫, 稀疏鼓, 近麦气声");
         assert!(issues.is_empty(), "emo 流派不应误报: {:?}", issues);
+    }
+
+    /// 第三批锁（红灯先行）：上限门必须覆盖四模式（C/D 此前上游承诺、下游零执行者），
+    /// 下限门只覆盖 A/B/D（C 上游无下限告知）+ 模式域与注册表同读同一常量（无二源）。
+    #[test]
+    fn style_prompt_length_gate_mode_domain_single_sourced() {
+        let long = "a,".repeat(200);
+        for m in rules::STYLE_PROMPT_MAX_MODES {
+            assert!(
+                style_prompt_length_issues(m, &long).iter().any(|i| i.contains("350")),
+                "{} 上限门未执行（第三批缺口回归）",
+                m
+            );
+        }
+        for m in ["mode_a", "mode_b", "mode_d"] {
+            assert!(
+                style_prompt_length_issues(m, "民谣").iter().any(|i| i.contains("过短")),
+                "{} 下限门缺失",
+                m
+            );
+        }
+        assert!(
+            style_prompt_length_issues("mode_c", "民谣").is_empty(),
+            "C 上游无下限承诺（CHECKLIST_C 只写 ≤350），不得多执行"
+        );
+        // 模式域单源：注册表模式域必须等于执行者读取的同一常量值（改常量而不改注册表/反之即红）
+        let reg = crate::rules::RULE_REGISTRY.iter().find(|r| r.id == "style_prompt_max").expect("注册表缺 style_prompt_max");
+        assert_eq!(reg.modes, rules::STYLE_PROMPT_MAX_MODES, "注册表模式域须与执行者同源");
+        let reg_min = crate::rules::RULE_REGISTRY.iter().find(|r| r.id == "style_prompt_min").expect("注册表缺 style_prompt_min");
+        assert_eq!(reg_min.modes, rules::STYLE_PROMPT_MIN_MODES, "注册表模式域须与执行者同源");
+        assert_eq!(reg.executor, reg_min.executor, "上/下限须同一执行者（避免两套判法）");
+    }
+
+    /// 上限/下限边界：恰好等于放行、越界一字打回。
+    #[test]
+    fn style_prompt_length_boundary() {
+        let exact = "x".repeat(rules::STYLE_PROMPT_MAX_CHARS);
+        assert!(style_prompt_length_issues("mode_c", &exact).is_empty(), "恰好等于上限应放行");
+        let over = "x".repeat(rules::STYLE_PROMPT_MAX_CHARS + 1);
+        assert!(!style_prompt_length_issues("mode_c", &over).is_empty(), "超一字应打回");
+        let min_exact = "x".repeat(rules::STYLE_PROMPT_MIN_CHARS);
+        assert!(style_prompt_length_issues("mode_a", &min_exact).is_empty(), "恰好等于下限应放行");
+        let under = "x".repeat(rules::STYLE_PROMPT_MIN_CHARS - 1);
+        assert!(!style_prompt_length_issues("mode_a", &under).is_empty(), "低于下限一字应打回");
     }
 
     /// 裸 Style Prompt/裸说明行（无 "Style Prompt:" 前缀、无方括号）不算歌词行（LLM 输出波动兜底）

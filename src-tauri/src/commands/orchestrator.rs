@@ -309,13 +309,56 @@ fn column_values(kb: &KnowledgeBase, table: &str, col: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// 从方案文本提取候选词命中（候选词出现在方案中即命中；单字候选跳过——避免"深夜"误命中"夜"）
+/// 从方案文本提取候选词命中（候选词出现在方案中即命中）。
+/// 单字（短于 `rules::KEYWORD_MIN_CHARS`）候选直接丢弃——避免"深夜"误命中关键词"夜"；
+/// 因此数据侧必须满足同一字长下限，否则该行**永久不可达**（旧行为静默丢弃，无日志无守护；
+/// 现由 `knowledge::reachability_violations` 审计 + 守护测试 + 运行期告警三重兜底，#22）。
 fn matching_keywords(plan: &str, candidates: &[String]) -> Vec<String> {
     candidates
         .iter()
-        .filter(|c| c.chars().count() >= 2 && plan.contains(c.as_str()))
+        .filter(|c| c.chars().count() >= crate::rules::KEYWORD_MIN_CHARS && plan.contains(c.as_str()))
         .cloned()
         .collect()
+}
+
+/// 关键词表全表休眠告警去重（每表每进程一次）——旧行为下"整表零命中"完全静默（#22）。
+static KEYWORD_DORMANT_WARNED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::OnceLock::new();
+
+/// #22：关键词表零命中不再静默——整表休眠即告警一次（含行数），提示"补充行的检索键未出现在方案里"。
+fn warn_keyword_table_all_dormant_once(table: &str, kb: &KnowledgeBase) {
+    let set = KEYWORD_DORMANT_WARNED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+    let mut guard = match set.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if guard.insert(table.to_string()) {
+        let rows = kb.table(table).map(|t| t.rows.len()).unwrap_or(0);
+        tracing::warn!(
+            table = %table,
+            rows,
+            "关键词表本轮整表零命中：全部行均未注入（检索键列见 rules::KEYWORD_TABLES；补充行若其检索键不出现在方案文本中将永久休眠）"
+        );
+    }
+}
+
+/// 关键词表注入（#22）：检索键列与条数上限取自 `rules::KEYWORD_TABLES` 单源；
+/// 命中即注入（上限随规格），全部未命中 → 零行 + 无示例标注（M18）并告警一次。
+fn keyword_table_render(
+    kb: &KnowledgeBase,
+    table: &str,
+    proj: Option<&[&str]>,
+    plan: &str,
+) -> Result<String, String> {
+    let spec = crate::rules::keyword_table(table)
+        .ok_or_else(|| format!("{} 未登记为关键词表（rules::KEYWORD_TABLES）", table))?;
+    let cands = matching_keywords(plan, &column_values(kb, table, spec.key_col));
+    if cands.is_empty() {
+        warn_keyword_table_all_dormant_once(table, kb);
+        return kb.render_filtered_any(table, &[(spec.key_col, &[])], proj, plan, None, &[]);
+    }
+    let refs: Vec<&str> = cands.iter().map(|s| s.as_str()).collect();
+    kb.render_filtered_any(table, &[(spec.key_col, &refs)], proj, plan, Some(spec.max_rows), &[])
 }
 
 
@@ -328,18 +371,28 @@ fn matching_keywords(plan: &str, candidates: &[String]) -> Vec<String> {
 // - 乐器表：15 件封顶——能量区间覆盖弧线两端，"少而准"验证值
 // - 未命中：零行+无示例标注（M18，调用方走确定性默认；见 render_filtered_any 内部）
 // - suno_rules：校验员全量（40 条 < 50 截断上限）；其他角色按规则子集过滤
-// - 单角色一次注入总字数封顶：预算按最坏情况实测标定（制作人最大 ≈ 4800 字，取 5200）
+// - 思维资产（lyric_craft/compose_craft）：引用必达（prompt 点名核查的编号强制投递）+ 按
+//   与当前方案的内容相关性补足，8 条封顶（必达项数受守护测试约束 ≤ 本上限）
+// - 单角色一次注入总字数封顶：预算按最坏情况**实测**标定（第六批 #19 扩绑 suno_rules 子集后重标）：
+//   制作人 = style_genre 3 + instruments 15 + suno_rules 23 + compose_craft 8 → 4969 字（最大）；
+//   情感分析师 3313 / 校验员 3149 / 作词人 2504 / 改词人 1830 / 流行风格分析师 1679；
+//   取 5400 = 实测最大 + ~8.7% 余量（旧值 5200 在扩绑后仅剩 231 字余量，任何一次加表都会假告警）
 // ---------------------------------------------------------------------------
-/// 关键词表（emotions/cliches/hooks）命中条数上限
-pub const INJECT_MAX_KEYWORD_ROWS: usize = 6;
-/// 流派表命中条数上限
-pub const INJECT_MAX_STYLE_GENRE_ROWS: usize = 3;
+/// 关键词表（emotions/cliches/hooks）命中条数上限（单源：rules::KEYWORD_MAX_ROWS）
+pub const INJECT_MAX_KEYWORD_ROWS: usize = crate::rules::KEYWORD_MAX_ROWS;
+/// 流派表命中条数上限（单源：rules::STYLE_GENRE_MAX_ROWS）
+pub const INJECT_MAX_STYLE_GENRE_ROWS: usize = crate::rules::STYLE_GENRE_MAX_ROWS;
 /// 乐器表能量区间命中件数上限
 pub const INJECT_MAX_INSTRUMENTS_ROWS: usize = 15;
+/// 思维资产（lyric_craft/compose_craft）单次注入条数上限。
+/// 语义：**引用必达行优先占位**（prompt 点名要求核查的编号必须可见，不得被上限截掉），
+/// 余下名额按内容相关性补足——不再是"CSV 前 8 条"（#15 旧行为）。
+pub const INJECT_MAX_CRAFT_ROWS: usize = 8;
 /// 全量表（suno_rules）渲染截断上限（当前 40 条规则，留 10 条余量防静默截断）
 pub const INJECT_MAX_FULL_ROWS: usize = 50;
-/// 单角色一次注入总字数封顶（超过告警；最坏情况 = 制作人四表全命中含 22 条规则子集+8 条思维资产 ≈ 4800 字）
-pub const INJECT_MAX_TOTAL_CHARS: usize = 5200;
+/// 单角色一次注入总字数封顶（超过告警；最坏情况 = 制作人四表全命中含 23 条规则子集 + 8 条思维资产，
+/// 第六批 #19 扩绑后实测 4969 字，取 5400 留 ~8.7% 余量；次大为情感分析师 3313 字）
+pub const INJECT_MAX_TOTAL_CHARS: usize = 5400;
 /// 完整档案传递原则（2026-09-13，用户设计确认）：方案/修订史全量传给每个角色——
 /// 每个角色拿到的是完整档案（情绪/歌词/编曲/指令/分析），不做信息孤岛。
 /// 旧值 8000 字在 NOTES 分析并入方案后（M1）已达 80%，一旦越线从尾部切掉的
@@ -384,46 +437,43 @@ fn fold_log(log: &[(String, String)]) -> Vec<(String, String)> {
 }
 
 /// 微观②：按需检索注入——按角色绑定表 + 列投影 + 当前方案关键词过滤，只注入命中条目。
-/// - emotions/cliches/hooks/style_genre：候选词（emotion/cliche/hook_type/genre 列值）命中 → 过滤注入
+/// - emotions/cliches/hooks/style_genre（关键词表）：候选词与过滤条件同取单源检索键列
+///   （`rules::KEYWORD_TABLES`，条数上限随规格）；整表零命中时告警一次（#22）
 /// - instruments：按方案能量区间数值过滤（覆盖弧线两端），上限 15 件
 /// - suno_rules：校验员全量（格式端口必须全见）；其他角色按行子集过滤（rule 列 contains 匹配）
+///   行子集单源 = `rules::SUNO_RULES_FOR_*`（#19：规则对职责角色可达）
 /// - cols 投影：空切片 = 全列；非空 = 按角色只注入这些列（多角色侧重点）
 /// - subset 行子集：空切片 = 全行；非空 = 按 rule 列值过滤（如制作人只要参数/配器类规则）
+/// - craft_refs：角色 prompt 点名要求核查的思维资产编号（`rules::CRAFT_REFS_*` 单源）——
+///   透传给渲染层做**引用必达**（强制投递，不受条数上限截断），与 prompt 要求同源
+/// - mode / role：**审改注入上下文**（#29）——思维资产行的条件标签（抖音→mode_d、
+///   A/B/C→mode_a/b/c、制作→producer）据此成为**真限定**；阶段标签取自
+///   `rules::CRAFT_STAGE_CONSUMER_REVIEWER` 单源登记（调用点不得自造标签集合）
 /// 条数上限见 INJECT_MAX_* 常量（集中定义，测试锁定）。
-fn inject_knowledge(kb: &KnowledgeBase, tables: &[(&str, &[&str], &[&str])], plan: &str) -> String {
+fn inject_knowledge(
+    kb: &KnowledgeBase,
+    tables: &[(&str, &[&str], &[&str])],
+    craft_refs: &[&str],
+    plan: &str,
+    mode: &str,
+    role: Option<&str>,
+) -> String {
+    // 审改上下文：阶段标签单源取自规则登记（未登记即空 → 思维资产渲染报错并被下方 warn 捕获）
+    let craft_ctx = crate::rules::stage_consumer(crate::rules::CRAFT_STAGE_CONSUMER_REVIEWER).map(|c| {
+        crate::knowledge::CraftInjectCtx { consumer: c.name, stage_tags: c.stage_tags, mode, role }
+    });
     let mut out = String::new();
     for (t, cols, subset) in tables {
         // 列投影：空切片 = 全列（None），非空 = 角色裁剪
         let proj: Option<&[&str]> = if cols.is_empty() { None } else { Some(cols) };
         let rendered = match *t {
-            "emotions" | "cliches" | "hooks" | "style_genre" => {
-                let col = match *t {
-                    "emotions" => "emotion",
-                    "cliches" => "cliche",
-                    "hooks" => "hook_type",
-                    _ => "genre",
-                };
-                let cands = matching_keywords(plan, &column_values(kb, t, col));
-                let refs: Vec<&str> = cands.iter().map(|s| s.as_str()).collect();
-                // 条数规范：流派 3 条封顶（命中通常 1-2 个），其余关键词表 6 条封顶
-                let limit: Option<usize> = if *t == "style_genre" {
-                    Some(INJECT_MAX_STYLE_GENRE_ROWS)
-                } else {
-                    Some(INJECT_MAX_KEYWORD_ROWS)
-                };
-                if refs.is_empty() {
-                    kb.render_filtered_any(t, &[(col, &[])], proj, plan, None)
-                } else {
-                    kb.render_filtered_any(t, &[(col, &refs)], proj, plan, limit)
-                }
-            }
             "instruments" => {
                 match plan_energy_range(plan) {
                     // 条数规范：能量区间命中 ≤15 件（"少而准"验证值）
                     Some((e_min, e_max)) => {
                         kb.render_instruments_by_energy(e_min, e_max, proj, plan, Some(INJECT_MAX_INSTRUMENTS_ROWS))
                     }
-                    None => kb.render_filtered_any("instruments", &[("instrument", &[])], proj, plan, None), // 无能量：兜底
+                    None => kb.render_filtered_any("instruments", &[("instrument", &[])], proj, plan, None, &[]), // 无能量：兜底
                 }
             }
             "suno_rules" => {
@@ -432,16 +482,35 @@ fn inject_knowledge(kb: &KnowledgeBase, tables: &[(&str, &[&str], &[&str])], pla
                     kb.render_table(t, proj, Some(INJECT_MAX_FULL_ROWS))
                 } else {
                     // 其他角色：按规则名子集过滤（rule 列 contains 匹配）
-                    kb.render_filtered_any(t, &[("rule", subset)], proj, plan, None)
+                    kb.render_filtered_any(t, &[("rule", subset)], proj, plan, None, &[])
                 }
             }
-            // P2：思维资产表（lyric_craft/compose_craft）按 trigger 列做模式过滤 + 8 条上限。
-            // trigger 含"审改"即本轮可用；"阶段0"仅主持 primer 用；"扩展位"默认不注入。
-            "lyric_craft" | "compose_craft" => {
-                kb.render_filtered_any(t, &[("trigger", &["审改"])], proj, plan, Some(8))
-            }
-            // 未知表：保守全量
-            _ => kb.render_table(t, proj, Some(INJECT_MAX_FULL_ROWS)),
+            // 思维资产表（lyric_craft/compose_craft）：注入门 = `knowledge::craft_inject_gate`
+            // （阶段域"审改/全程" + 条件域限定抖音/A/B/C/制作，见 #29）；在上限内
+            // **引用必达优先 + 内容相关性补足**。
+            // 旧行为（#15）：恒 0 打分 + 稳定排序 → 永远只注入 CSV 前 8 行，尾部（含用户追加）永不生效。
+            // 旧行为（#17）：子串匹配字面"审改" → trigger="全程" 的行（CC-23/CC-28）任何角色不可达。
+            // 旧行为（#29）：条件标签无执行门 → LC-31（审改/A/B/C）在 D 模式也注入、CC-22（审改/制作）进所有角色。
+            "lyric_craft" | "compose_craft" => match craft_ctx.as_ref() {
+                Some(ctx) => kb.render_craft_table(
+                    t,
+                    ctx,
+                    proj,
+                    plan,
+                    Some(INJECT_MAX_CRAFT_ROWS),
+                    craft_refs,
+                ),
+                None => Err(format!(
+                    "思维资产表 {} 注入缺少审改上下文（CRAFT_STAGE_CONSUMER_REVIEWER 未登记）",
+                    t
+                )),
+            },
+            // 关键词表（emotions/cliches/hooks/style_genre）：路由与条数上限单源在
+            // rules::KEYWORD_TABLES——**新增关键词表只改单源**（此处无需改动）；未登记的表保守全量。
+            _ => match crate::rules::keyword_table(t) {
+                Some(_) => keyword_table_render(kb, t, proj, plan),
+                None => kb.render_table(t, proj, Some(INJECT_MAX_FULL_ROWS)),
+            },
         };
         match rendered {
             Ok(rendered) => {
@@ -465,12 +534,62 @@ fn inject_knowledge(kb: &KnowledgeBase, tables: &[(&str, &[&str], &[&str])], pla
     out
 }
 
+/// 角色审改 user prompt 构建（纯函数，可测）。
+///
+/// #14 修复（同轮互盲）：讨论轮改**阵容序串行**后，第 k 个角色能拿到前 k-1 个角色
+/// **本轮**已提的修订（`round_peers`）——落到同一 target 的修订在产生前即可被看到：
+/// 可细化、可明确反对，冲突不再只能拖到汇总阶段由主持人"事后整合"。
+/// 三段可见性严格分工，避免与历史日志重复：
+/// ① 主持人当前方案；② **本轮同轮其他角色已提修订**；③ 历史（往轮）已提修订。
+fn build_role_review_user_prompt(
+    current_plan: &str,
+    round_peers: &[(String, String)],
+    history_log: &[(String, String)],
+    next_tasks: &str,
+    req: &PipelineRequest,
+) -> String {
+    // 方案截断 + log 折叠（预算纪律；知识库注入同风格）
+    let plan_view = truncate_plan(current_plan);
+    let log_view = fold_log(history_log);
+    let mut user = format!("【主持人当前方案】\n{}\n\n", plan_view);
+    // Mode C：原歌词全链路传递——审改员逐行字数/韵脚对齐的依据
+    if let Some(original) = req.original_lyrics_text() {
+        user.push_str(&format!("【原歌词（改写需逐行对齐）】\n{}\n\n", original));
+    }
+    if !round_peers.is_empty() {
+        user.push_str("【本轮同轮其他角色已提修订（已按阵容顺序先行；可在此基础上细化，若不同意必须说明理由，禁止重复提同一问题）】\n");
+        for (name, rev) in round_peers {
+            user.push_str(&format!("- {}：{}\n", name, rev));
+        }
+        user.push('\n');
+    }
+    if !log_view.is_empty() {
+        user.push_str("【往轮已提修订（可参考，不要重复提同一问题）】\n");
+        for (name, rev) in &log_view {
+            user.push_str(&format!("- {}：{}\n", name, rev));
+        }
+        user.push('\n');
+    }
+    if !next_tasks.is_empty() {
+        user.push_str(&format!(
+            "【主持人本轮任务分发（你这一轮要重点解决的问题）】\n{}\n\n",
+            next_tasks
+        ));
+    }
+    user.push_str("请审查：同意则输出 {\"agree\":true}；有优化点则输出 {\"agree\":false, \"changes\":[...]}。");
+    user
+}
+
 /// 角色审改：审查主持人当前方案 → 查 CSV → 输出修订片段 JSON
+///
+/// `history_log` = 本轮开始前的修订日志（往轮 + 用户插话）；`round_peers` = 本轮
+/// 阵容序中**排在本角色之前**的角色已提交的修订（串行产生的同轮可见性）。
 async fn execute_review<R: Runtime>(
     app: &AppHandle<R>,
     role: PipelineRole,
     current_plan: &str,
-    revisions_log: &[(String, String)],
+    round_peers: &[(String, String)],
+    history_log: &[(String, String)],
     next_tasks: &str,
     req: &PipelineRequest,
     budget: &crate::budget::SharedBudget,
@@ -491,35 +610,23 @@ async fn execute_review<R: Runtime>(
     // C3：角色提示词过数值单源插值（${占位符} → rules 常量派生值）
     system.push_str(&format!("{}\n", crate::rules::interpolate(r.system_prompt)));
     // 微观②：按需检索注入——按角色绑定表 + 当前方案关键词过滤，只注入命中条目（suno_rules 规则全量）
-    system.push_str(&inject_knowledge(&kb, r.knowledge_tables, current_plan));
+    // #29：思维资产条件标签（抖音/A/B/C/制作）在此以「当前模式 + 当前角色」判定，成为真限定
+    system.push_str(&inject_knowledge(
+        &kb,
+        r.knowledge_tables,
+        r.craft_refs,
+        current_plan,
+        req.mode.to_str_name(),
+        Some(role.storage_key()),
+    ));
     // P4：单源校验清单（数字唯一 prose 载体；审改口径与硬校验同源）
-    system.push_str(crate::rules::checklist(req.mode.to_str_name()));
+    system.push_str(&crate::rules::checklist(req.mode.to_str_name()));
     system.push('\n');
     system.push_str("\n输出 JSON（严格符合格式，不输出其他内容）：\n");
     system.push_str(&crate::rules::interpolate(r.output_schema));
 
-    // 方案截断 + log 折叠（预算纪律；知识库注入同风格）
-    let plan_view = truncate_plan(current_plan);
-    let log_view = fold_log(revisions_log);
-    let mut user = format!("【主持人当前方案】\n{}\n\n", plan_view);
-    // Mode C：原歌词全链路传递——审改员逐行字数/韵脚对齐的依据
-    if let Some(original) = req.original_lyrics_text() {
-        user.push_str(&format!("【原歌词（改写需逐行对齐）】\n{}\n\n", original));
-    }
-    if !log_view.is_empty() {
-        user.push_str("【已提修订（可参考，不要重复提同一问题）】\n");
-        for (name, rev) in &log_view {
-            user.push_str(&format!("- {}：{}\n", name, rev));
-        }
-        user.push('\n');
-    }
-    if !next_tasks.is_empty() {
-        user.push_str(&format!(
-            "【主持人本轮任务分发（你这一轮要重点解决的问题）】\n{}\n\n",
-            next_tasks
-        ));
-    }
-    user.push_str("请审查：同意则输出 {\"agree\":true}；有优化点则输出 {\"agree\":false, \"changes\":[...]}。");
+    // #14：同轮可见性由纯函数单源构建（本轮同轮修订块 + 往轮日志块严格分工）
+    let user = build_role_review_user_prompt(current_plan, round_peers, history_log, next_tasks, req);
 
     let (base_url, api_key, model) = resolve_api(req, role);
     let _ = emit(PipelineEvent::StepStart { role });
@@ -617,7 +724,7 @@ fn build_audit_review_user_prompt(
         user.push('\n');
     }
     if !log_view.is_empty() {
-        user.push_str("【已提修订（不要重复提同一问题）】\n");
+        user.push_str("【往轮已提修订（不要重复提同一问题）】\n");
         for (name, rev) in &log_view {
             user.push_str(&format!("- {}：{}\n", name, rev));
         }
@@ -663,7 +770,7 @@ async fn execute_audit_review<R: Runtime>(
         system.push('\n');
     }
     // P4：单源校验清单（校验员审查口径与硬校验同源）
-    system.push_str(crate::rules::checklist(req.mode.to_str_name()));
+    system.push_str(&crate::rules::checklist(req.mode.to_str_name()));
     system.push('\n');
     system.push_str("\n输出 JSON（严格符合格式，不输出其他内容）：\n");
     system.push_str(roles::REVIEW_SCHEMA_AUDITOR);
@@ -731,23 +838,78 @@ async fn execute_audit_review<R: Runtime>(
 // 主持人（阶段 0 统领 / 阶段 1 汇总）
 // ---------------------------------------------------------------------------
 
-/// 阶段 0 主持人 system 组装单源：模式指令（含 override）+ 地基 primer + 校验清单（D3 同口径）。
-fn host_initial_system(mode: &Mode) -> String {
-    let mut system = prompt_for_mode(mode);
-    // P4：阶段 0 地基 primer（模式专属静态文本；缺失回退无 primer 旧行为；主持人仍零 CSV）
+/// 主持人 system 组装单源（阶段 0 初稿 / 阶段 1 汇总与所有回炉共用）：
+/// 人设底座（阶段 0 = 模式完整指令；汇总 = host 统领人设）+ 地基 primer + 校验清单 + 信封契约。
+///
+/// R2 根因修复（2026-09-17）：汇总/回炉阶段旧实现只拼 `host 人设 + 信封规范`，看不到 primer 与
+/// checklist——主持人整合修订时手里没有数字口径（说明行上限、配器 3-7 件、最强段 ≥5 件…），
+/// 于是"修完一处又踩另一处"，硬校验打回 → 回炉 → 再违规，无限降级。
+/// 现两阶段同走本函数：凡是主持人写方案的地方，看到的约束完全一致（上游告知 = 下游校验）。
+fn host_system_with(base: &str, mode: &Mode, kb: &KnowledgeBase, plan: &str) -> String {
+    let mut system = base.to_string();
+    // P4：地基 primer（模式专属静态文本；缺失回退无 primer 旧行为）
     if let Some(primer) = crate::rules::host_primer(mode.to_str_name()) {
         system.push_str("\n\n");
         system.push_str(&crate::rules::interpolate(primer));
     }
-    // C3/D3：阶段 0 纳入单源——主持人与审改员/校验员同一清单（数字口径同源，加载一致）
+    // #23 修复：阶段0 思维资产（trigger=阶段0）真消费者——旧实现该标签**零消费者**
+    // （词表里可见、primer 是静态手写文本不读 CSV），于是 LC-12/LC-01/CC-24 在 C/D 模式
+    // 彻底不可达、在 A/B 只能靠 primer 手写句双载体。现主持人写方案的**全部**上下文
+    // （阶段0 初稿 + 阶段1 汇总/回炉）经唯一门 `knowledge::craft_inject_gate` 注入这些行，
+    // 上下文（阶段标签/无角色身份）取自 `rules::CRAFT_STAGE_CONSUMERS` 单源登记。
+    system.push_str(&host_craft_injection(kb, mode.to_str_name(), plan));
+    // C3/D3：纳入单源——主持人与审改员/校验员同一清单（数字口径同源，加载一致）
     system.push_str("\n\n");
-    system.push_str(crate::rules::checklist(mode.to_str_name()));
-    // D-Envelope：方案信封契约（开关关=不注入，回退自由格式）
+    system.push_str(&crate::rules::checklist(mode.to_str_name()));
+    // D-Envelope：方案信封契约（开关关=不注入信封，但说明行契约仍单独注入——
+    // 格式契约不能随开关消失，否则上游又变成"看不见下游规范"的 #20 降级环）
     if crate::rules::plan_envelope_enabled() {
         system.push_str("\n\n");
-        system.push_str(crate::rules::ENVELOPE_SPEC);
+        system.push_str(&crate::rules::envelope_spec());
+    } else {
+        system.push_str("\n\n");
+        system.push_str(&crate::rules::desc_line_contract());
     }
     system
+}
+
+/// #23：主持人阶段0 思维资产注入块（**唯一调用点**在 `host_system_with`，两阶段共享）。
+/// 阶段域 = `rules::CRAFT_STAGE_CONSUMER_HOST0`（标签"阶段0"），角色身份 = None
+/// （角色域条件行如"阶段0/制作"在此不满足，fail-closed）；条数上限与审改侧同源
+/// （`INJECT_MAX_CRAFT_ROWS`）。渲染失败/表缺失不阻断（与 `inject_knowledge` 同策略）。
+fn host_craft_injection(kb: &KnowledgeBase, mode: &str, plan: &str) -> String {
+    let consumer = match crate::rules::stage_consumer(crate::rules::CRAFT_STAGE_CONSUMER_HOST0) {
+        Some(c) => c,
+        None => return String::new(), // 登记缺失由守护测试拦截，运行期不阻断
+    };
+    let ctx = crate::knowledge::CraftInjectCtx {
+        consumer: consumer.name,
+        stage_tags: consumer.stage_tags,
+        mode,
+        role: None,
+    };
+    let mut block = String::new();
+    for t in ["lyric_craft", "compose_craft"] {
+        match kb.render_craft_table(t, &ctx, None, plan, Some(INJECT_MAX_CRAFT_ROWS), &[]) {
+            Ok(rendered) => {
+                block.push_str("\n\n");
+                block.push_str(&rendered);
+            }
+            Err(e) => tracing::warn!(table = %t, error = %e, "主持人阶段0 思维资产注入失败"),
+        }
+    }
+    block
+}
+
+/// 阶段 0 主持人 system：模式完整指令（含 override）作底座。
+fn host_initial_system(mode: &Mode, kb: &KnowledgeBase, plan: &str) -> String {
+    host_system_with(&prompt_for_mode(mode), mode, kb, plan)
+}
+
+/// 阶段 1 汇总/回炉主持人 system：host 统领人设作底座，primer + 阶段0 思维资产 + 清单 +
+/// 信封与阶段 0 同源（汇总期主持人手里同样要有完整规则，否则"修完一处踩另一处"）。
+fn host_summarize_system(mode: &Mode, kb: &KnowledgeBase, plan: &str) -> String {
+    host_system_with(&crate::rules::interpolate(roles::host().system_prompt), mode, kb, plan)
 }
 
 /// 阶段 0：主持人用该模式的完整指令产出方案初稿（流式）
@@ -763,7 +925,10 @@ async fn run_host_initial<R: Runtime>(
         let _ = app.emit("pipeline", PipelineEnvelope::new(run_id.to_string(), event));
     };
     let _ = emit(PipelineEvent::HostStart { stage: HostStage::Initial });
-    let system = host_initial_system(&req.mode);
+    // #23：阶段0 思维资产注入需要知识库（阶段0 行不再只靠 primer 手写句）；
+    // 相关性排序基准 = 用户输入（初稿阶段还没有方案文本）
+    let kb = load_knowledge()?;
+    let system = host_initial_system(&req.mode, &kb, &req.user_input);
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Host);
     let mut user = format!("用户输入：\n{}\n\n请按上述方法论直接输出完整方案。", req.user_input);
     // Mode C：原歌词在 extra，指令期望"原歌词 + 新主题"
@@ -864,7 +1029,7 @@ async fn enforce_envelope<R: Runtime>(
     );
     let corrective = format!(
         "{}\n\n【格式纠正】你上一版方案存在以下契约违规：\n{}\n请严格按信封契约重新输出完整方案（内容尽量保留，格式必须全部合规）：\n\n{}",
-        crate::rules::ENVELOPE_SPEC,
+        crate::rules::envelope_spec(),
         defect_msg,
         plan
     );
@@ -983,18 +1148,16 @@ async fn run_host_summarize<R: Runtime>(
     let emit = |event: PipelineEvent| {
         let _ = app.emit("pipeline", PipelineEnvelope::new(run_id.to_string(), event));
     };
-    let host = roles::host();
     // L-4 新规则：Mode C 原歌词贯穿全链路——阶段 0（初稿）与阶段 2（格式输出）都带原词，
     // 旧规则唯独汇总阶段不带，主持人整合修订时无比对基准，属盲改。措辞与阶段 2 同口径。
     let user = build_summarize_user_prompt(current_plan, round_changes, req.original_lyrics_text());
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Host);
     let _ = emit(PipelineEvent::HostStart { stage: HostStage::Summarize });
-    // D-Envelope：汇总阶段 system 同样注入信封契约（与阶段 0 同源）
-    let mut host_system = crate::rules::interpolate(host.system_prompt);
-    if crate::rules::plan_envelope_enabled() {
-        host_system.push_str("\n\n");
-        host_system.push_str(crate::rules::ENVELOPE_SPEC);
-    }
+    // D-Envelope + R2：汇总阶段 system 与阶段 0 同源单源——primer + 阶段0 思维资产 + 校验清单
+    // + 信封契约全部注入（旧实现只有 host 人设 + 信封，无 primer/清单 → 整合时无数字口径，回炉必再违规）。
+    // #23：阶段0 思维资产相关性排序基准 = 当前方案（汇总期手里有方案文本）
+    let kb = load_knowledge()?;
+    let host_system = host_summarize_system(&req.mode, &kb, current_plan);
     let messages = vec![
         json!({"role":"system","content":host_system}),
         json!({"role":"user","content":user}),
@@ -1317,9 +1480,14 @@ fn auditor_repair_changes(marker_descs: &[String]) -> Vec<(PipelineRole, Vec<Rev
 fn plan_repair_changes(plan_issues: &[String]) -> Vec<(PipelineRole, Vec<ReviewChange>, String)> {
     let content = plan_issues.join("；");
     let hint = if plan_issues.iter().any(|i| i.contains("说明行超")) {
-        "（说明行超长按 R-4 归制作人：压缩至 80 字符内，保乐器+行为，乐器信息一个不得丢）"
+        // R-4 归制作人；上限数字单源 rules::DESC_LINE_MAX_CHARS（旧实现硬写"80 字符内"——
+        // 与常量 200 打架，回炉指令自相矛盾，是 R1 降级链的一环）
+        format!(
+            "（说明行超长按 R-4 归制作人：压缩至 {} 字符内，保乐器+行为，乐器信息一个不得丢）",
+            crate::rules::DESC_LINE_MAX_CHARS
+        )
     } else {
-        "（请按领地归属分发整合）"
+        "（请按领地归属分发整合）".to_string()
     };
     vec![(
         PipelineRole::Auditor,
@@ -1663,7 +1831,9 @@ fn collect_hard_issues(mode: &Mode, final_text: &str, extra: Option<&str>) -> Ve
     let v = validator::validate_for_mode(mode.to_str_name(), final_text, extra);
     issues.extend(v.issues);
     if let Some(style_prompt) = validator::extract_style_prompt(final_text) {
-        issues.extend(validator::check_style_prompt_blocks(&style_prompt));
+        // Style Prompt 长度门（上限 ≤350 / 下限 ≥30）：四模式唯一接线点 = 此处，
+        // 执行者唯一 = validator::style_prompt_length_issues（模式域单源见 rules::STYLE_PROMPT_*_MODES）。
+        issues.extend(validator::style_prompt_length_issues(mode.to_str_name(), &style_prompt));
         // BPM 模式感知检查（对齐原指令：仅 mode_d 要求 BPM>=90）
         // Q3存在性门：D 终稿无 BPM 标注直接打回（此前缺标注一路放行）；显式-only 语义不变。
         if mode.to_str_name() == "mode_d" && crate::knowledge::plan_bpm_value(&style_prompt).is_none() {
@@ -1871,47 +2041,37 @@ async fn run_pipeline_inner<R: Runtime>(
                 summary: format!("收到用户插话，已纳入本轮讨论：{}", preview),
             });
         }
-        // ① 动态角色并发审改（同轮角色互相无依赖，join_all 并发；顺序收敛保证 revisions_log 确定性）
-        // R4：同轮 staggered 启动（index * 2s 错峰，人为岔开四路请求；可被取消打断，不阻塞停止）
-        let review_futs: Vec<_> = roles
-            .iter()
-            .enumerate()
-            .map(|(idx, role)| {
-                let app = app.clone();
-                let current_plan = current_plan.clone();
-                let revisions_log = revisions_log.clone();
-                let next_tasks = next_tasks.clone();
-                let request = request.clone();
-                let budget = budget.clone();
-                let run_id = run_id.clone();
-                async move {
-                    if idx > 0 {
-                        let stagger = std::time::Duration::from_secs((idx as u64) * 2);
-                        // 错峰等待可被取消打断——不等满，只等预算允许
-                        let _ = tokio::time::timeout(
-                            budget.remaining(),
-                            tokio::time::sleep(stagger),
-                        )
-                        .await;
-                        if cancel::is_cancelled(&run_id) {
-                            return Err(crate::errors::AppError::cancelled());
-                        }
-                    }
-                    execute_review(&app, *role, &current_plan, &revisions_log, &next_tasks, &request, &budget, &run_id).await
-                }
-            })
-            .collect();
-        let review_results = futures_util::future::join_all(review_futs).await;
-        for (role, result) in roles.iter().zip(review_results) {
-            let result = result?;
+        // ① 动态角色**阵容序串行**审改（#14 内容层修复）。
+        //
+        // 旧实现：`join_all` 并发 —— 同轮角色互相无依赖，每个角色只拿得到**轮前**的
+        // `revisions_log`，本轮兄弟角色刚提的修订对它是不可见的（同轮互盲）。后果：
+        // 两个角色对同一 target 各提一套彼此不相容的修订，只能在汇总阶段由主持人
+        // "事后整合"，而主持人又被人设限定"只做整合不改细节"= 冲突无人裁决。
+        //
+        // 现实现：按 `roles`（= `steps_for_mode` 阵容序，权威单源）串行执行，跑完一个
+        // 立即把其修订并入 `round_peers`，后续角色的 prompt 里就出现"【本轮同轮其他
+        // 角色已提修订】"块——可细化、可明确反对，冲突在产生前被看到；残余分歧仍有
+        // 汇总阶段的冲突预检 + 领地裁决兜底（两条腿缺一不可）。
+        // 串行天然免错峰：旧 `index * 2s` staggered 启动（为并发岔开四路请求而设）随并发一并退役。
+        let mut round_peers: Vec<(String, String)> = Vec::new();
+        for role in roles.iter() {
+            checkpoint()?;
+            let result = execute_review(
+                &app, *role, &current_plan, &round_peers, &prev_revisions,
+                &next_tasks, &request, &budget, &run_id,
+            )
+            .await?;
             if result.degraded {
-                // 不可信输出不进 round_changes（无可整合内容）、不阻断收敛，但必须留下警示
+                // 不可信输出不进 round_changes（无可整合内容）、不阻断收敛，但必须留下警示。
+                // 降级意见**不进 round_peers**：同轮可见性只传可信修订，防污染后续角色的判断。
                 revisions_log.push((role.name().to_string(), humanize_review(*role, &result)));
             } else if !result.agree {
                 // 异议必达——有 changes 带着改，没 changes 带着 reason 也要让主持人看到
                 all_agree = false;
                 round_changes.push((*role, result.changes.clone(), result.reason.clone()));
-                revisions_log.push((role.name().to_string(), humanize_review(*role, &result)));
+                let summary = humanize_review(*role, &result);
+                round_peers.push((role.name().to_string(), summary.clone()));
+                revisions_log.push((role.name().to_string(), summary));
             }
         }
         // ② 校验员审查（当前方案 + 本轮修订 + 上轮修订 + 任务分发核验 → 观点返回主持人）
@@ -2164,6 +2324,11 @@ pub async fn interject_feedback(run_id: Option<String>, note: String) -> Result<
 mod tests {
     use super::*;
 
+    /// 测试用嵌入式知识库（宿主/角色注入测试共用，避免逐处 unwrap 噪音）
+    fn test_kb() -> KnowledgeBase {
+        KnowledgeBase::load_embedded().unwrap()
+    }
+
     // ---- D-责任分离：issue 责任分类（口径与 validator 文案逐字对齐） ----
 
     const EMPTY_PLAN: &str = "";
@@ -2190,7 +2355,13 @@ mod tests {
     fn classify_plan_content_issues_go_to_host() {
         assert_eq!(classify_issue_owner("最弱段配器 2 件（要求 >= 3 件）", EMPTY_PLAN), IssueOwner::Plan);
         assert_eq!(classify_issue_owner("Hook 出现 0 次（要求 >= 2）", EMPTY_PLAN), IssueOwner::Plan);
-        assert_eq!(classify_issue_owner("说明行超 80 字符（99 字符）: [x]", EMPTY_PLAN), IssueOwner::Plan);
+        assert_eq!(
+            classify_issue_owner(
+                &format!("说明行超 {} 字符（{} 字符）: [x]", crate::rules::DESC_LINE_MAX_CHARS, crate::rules::DESC_LINE_MAX_CHARS + 10),
+                EMPTY_PLAN
+            ),
+            IssueOwner::Plan
+        );
         assert_eq!(classify_issue_owner("缺少骤停标记（结尾应一刀切）", EMPTY_PLAN), IssueOwner::Plan);
         assert_eq!(classify_issue_owner("共 2 行字数不符", EMPTY_PLAN), IssueOwner::Plan);
         assert_eq!(classify_issue_owner("Style Prompt 长度 380 超限（> 350）", EMPTY_PLAN), IssueOwner::Plan);
@@ -2685,6 +2856,24 @@ mod tests {
         assert!(!issues_ok.iter().any(|i| i.contains("过短")), "正文充足不应报过短: {:?}", issues_ok);
     }
 
+    /// 第三批锁：Style Prompt ≤350 上限门必须在接线点对 C/D 生效——
+    /// 此前 C/D 上游（CHECKLIST_C/D、mode_d prompt）承诺了上限，下游零执行者。
+    #[test]
+    fn style_prompt_max_gate_wired_for_c_and_d() {
+        let long = format!("**Style Prompt**: {}", "a,".repeat(200));
+        // D 模式（validate_douyin 路径）
+        let text_d = format!(
+            "{}\n[Hook]\n[suona, 808]\n我 真的 会谢\n[Hook]\n我 真的 会谢\n[all instruments cut abruptly]\n参数: Weirdness=15 | Style Influence=90 | Audio Influence=0",
+            long
+        );
+        let issues_d = collect_hard_issues(&Mode::ModeD, &text_d, None);
+        assert!(issues_d.iter().any(|i| i.contains("350")), "D 上限门未接线: {:?}", issues_d);
+        // C 模式（validate_lyric_fill 路径）
+        let text_c = format!("{}\n[Verse]\n我们 很早前 就 谋过面", long);
+        let issues_c = collect_hard_issues(&Mode::ModeC, &text_c, Some("我们 很早前 就 谋过面"));
+        assert!(issues_c.iter().any(|i| i.contains("350")), "C 上限门未接线: {:?}", issues_c);
+    }
+
     /// 旧语义保留：`风格:` 前缀行同样能提取正文（原 extract_style_prompt_line 认得它）
     #[test]
     fn style_prompt_supports_legacy_grey_prefix() {
@@ -2789,6 +2978,53 @@ mod tests {
         assert!(none.is_empty());
     }
 
+    /// 第六批（#22）修复锁：关键词表检索契约单源——
+    /// ① 长度门取自 `rules::KEYWORD_MIN_CHARS` 且确实生效（单字候选被丢弃，防"深夜"误命中"夜"）；
+    /// ② 四张设计内关键词表全部登记进 `rules::KEYWORD_TABLES`，检索键列真实存在（列名写错=整表死行）；
+    /// ③ 单表条数上限别名 == rules 单源（禁止两处各写一个常量）。
+    #[test]
+    fn keyword_min_chars_gate_is_single_sourced() {
+        use crate::rules::{
+            keyword_table, KEYWORD_MAX_ROWS, KEYWORD_MIN_CHARS, KEYWORD_TABLES,
+            STYLE_GENRE_MAX_ROWS,
+        };
+        let kb = crate::knowledge::KnowledgeBase::load_embedded().unwrap();
+        // ② 登记表自洽：检索键列必须真实存在、上限为正、可反查
+        for spec in KEYWORD_TABLES {
+            let t = kb
+                .table(spec.table)
+                .unwrap_or_else(|e| panic!("登记表 {} 加载失败: {}", spec.table, e));
+            assert!(
+                t.header_index(spec.key_col).is_some(),
+                "{} 的检索键列 {} 不存在（列名写错即整表死行）",
+                spec.table,
+                spec.key_col
+            );
+            assert!(spec.max_rows > 0, "{} 条数上限必须为正", spec.table);
+            assert!(keyword_table(spec.table).is_some(), "{} 无法在单源反查", spec.table);
+        }
+        // emotions/cliches/hooks/style_genre 必须全部登记（漏登记会静默退回全量注入）
+        for name in ["emotions", "cliches", "hooks", "style_genre"] {
+            assert!(keyword_table(name).is_some(), "关键词表 {} 未登记进 KEYWORD_TABLES", name);
+        }
+        // ③ 别名与单源一致
+        assert_eq!(INJECT_MAX_KEYWORD_ROWS, KEYWORD_MAX_ROWS);
+        assert_eq!(INJECT_MAX_STYLE_GENRE_ROWS, STYLE_GENRE_MAX_ROWS);
+        // ④ 长度门生效（按单源常量取边界值）
+        assert!(KEYWORD_MIN_CHARS >= 2, "长度门 <2 会让单字候选误命中（如'深夜'命中'夜'）");
+        let below = "夜".repeat(KEYWORD_MIN_CHARS - 1);
+        assert!(
+            matching_keywords(&format!("深夜的{}景", below), &[below.clone()]).is_empty(),
+            "短于 KEYWORD_MIN_CHARS 的候选必须被丢弃"
+        );
+        let at_gate = "孤独".repeat(KEYWORD_MIN_CHARS / 2 + 1);
+        assert_eq!(
+            matching_keywords(&format!("这里提到{}", at_gate), &[at_gate.clone()]),
+            vec![at_gate.clone()],
+            "达到长度门的候选必须命中"
+        );
+    }
+
     #[test]
     fn plan_energy_range_extracts() {
         assert_eq!(plan_energy_range("能量:3 到 能量:8"), Some((3, 8)));
@@ -2799,16 +3035,194 @@ mod tests {
     fn inject_knowledge_filters_by_keywords() {
         let kb = crate::knowledge::KnowledgeBase::load_embedded().unwrap();
         // 制作人绑定表注入：方案含流派与能量 → style_genre 命中、instruments 按能量
-        let out = inject_knowledge(&kb, &[("style_genre", &[], &[]), ("instruments", &[], &[]), ("suno_rules", &[], &[])], "深夜室内民谣 能量:3 Chorus 能量:8");
+        let out = inject_knowledge(&kb, &[("style_genre", &[], &[]), ("instruments", &[], &[]), ("suno_rules", &[], &[])], &[], "深夜室内民谣 能量:3 Chorus 能量:8", "mode_a", None);
         assert!(out.contains("按需命中"), "style_genre 应命中: {}", &out[..out.len().min(200)]);
         assert!(out.contains("suno_rules 知识库"), "suno_rules 应全量注入");
         // 情感分析师注入：方案无情绪词 → M18 无示例标注（调用方走确定性默认）
-        let out2 = inject_knowledge(&kb, &[("emotions", &[], &[])], "纯粹描述画面没有情绪词");
+        let out2 = inject_knowledge(&kb, &[("emotions", &[], &[])], &[], "纯粹描述画面没有情绪词", "mode_a", None);
         assert!(out2.contains("未命中关键词"), "emotions 应标注无命中: {}", &out2[..out2.len().min(200)]);
         assert!(out2.contains("无示例"), "emotions 无命中应明确无示例: {}", &out2[..out2.len().min(200)]);
         // 方案含情绪词 → 命中
-        let out3 = inject_knowledge(&kb, &[("emotions", &[], &[])], "这首歌的情绪是孤独与自嘲");
+        let out3 = inject_knowledge(&kb, &[("emotions", &[], &[])], &[], "这首歌的情绪是孤独与自嘲", "mode_a", None);
         assert!(out3.contains("按需命中"), "emotions 应命中: {}", &out3[..out3.len().min(200)]);
+    }
+
+    /// #16 修复锁（端到端）：无论方案内容如何，角色 prompt 点名"逐项核查"的编号都必须在注入文本里。
+    /// 旧行为下这些编号只有落在 CSV 前 8 行内才可见（LC-15/LC-26/CC-17… 全部悬空引用）。
+    /// #29 起口径升级：遍历**真实运行上下文**（`steps_for_mode` 的 模式 × 角色 组合），
+    /// 而不是"角色不带模式"的伪上下文——否则 #29 的条件限定（LC-10 仅抖音模式可达）会被掩盖。
+    #[test]
+    fn craft_referenced_ids_always_injected_for_every_role() {
+        let kb = crate::knowledge::KnowledgeBase::load_embedded().unwrap();
+        // 极端方案（无候选词/无能量标注）：相关性打分接近全 0，引用必达仍须成立
+        let plan = "（未填写的方案占位）";
+        for m in [Mode::ModeA, Mode::ModeB, Mode::ModeC, Mode::ModeD] {
+            for step in steps_for_mode(&m) {
+                let role = step.role;
+                let r = roles::role_for(role);
+                if r.craft_refs.is_empty() {
+                    continue;
+                }
+                let out = inject_knowledge(
+                    &kb,
+                    r.knowledge_tables,
+                    r.craft_refs,
+                    plan,
+                    m.to_str_name(),
+                    Some(role.storage_key()),
+                );
+                for id in r.craft_refs {
+                    assert!(
+                        out.contains(&format!("| {} |", id)),
+                        "{} 在 {} 注入缺引用必达行 {}：{}",
+                        r.name,
+                        m.to_str_name(),
+                        id,
+                        &out[..out.len().min(300)]
+                    );
+                }
+                assert!(out.contains("含引用必达"), "{} 注入头未标注必达数", r.name);
+            }
+        }
+    }
+
+    /// #23/#29 修复锁（装配层端到端）：**真实运行上下文**遍历——判定走渲染层
+    /// `render_craft_table`（运行期同一入口），不用测试自造的判定，故"测试口径 == 运行口径"。
+    /// ① 死行审计：任何 CSV 行（`CRAFT_RESERVED_ROWS` 登记的预留位除外）都必须在至少一个
+    ///    真实上下文里被渲染出来——旧实现的"阶段0"标签零消费者，LC-12/LC-01/CC-24 在 C/D
+    ///    模式彻底不可达，本断言即红；
+    /// ② 条件域**限定**：标"抖音"的行只能出现在 mode_d 上下文、标"制作"的只能进 producer、
+    ///    标 A/B/C 的不得出现在 mode_d——旧实现条件标签零执行门（LC-31 在 D 也注入、
+    ///    CC-22 进所有 craft 角色），本断言即红；
+    /// ③ 阶段隔离：标"阶段0"的行必须命中至少一个主持人上下文；纯"审改"行不得混进主持人上下文。
+    #[test]
+    fn craft_rows_reachable_in_every_real_context() {
+        let kb = test_kb();
+        let rev_c = crate::rules::stage_consumer(crate::rules::CRAFT_STAGE_CONSUMER_REVIEWER).unwrap();
+        // 真实上下文 = 主持人阶段0（4 模式，无角色身份）+ 审改（4 模式 × steps_for_mode 角色）
+        let mut ctxs: Vec<(Mode, Option<&'static str>, bool)> = Vec::new();
+        for m in [Mode::ModeA, Mode::ModeB, Mode::ModeC, Mode::ModeD] {
+            ctxs.push((m.clone(), None, true));
+            for s in steps_for_mode(&m) {
+                ctxs.push((m.clone(), Some(s.role.storage_key()), false));
+            }
+        }
+        const PLAN: &str = "（空方案占位）";
+        let rendered: Vec<String> = ctxs
+            .iter()
+            .map(|(mode, role, is_host)| {
+                // 主持人上下文走**真实装配入口**（`host_initial_system`）——否则"渲染层可达
+                // 但主持装配没接线"这类 #23 缺陷会被漏掉；审改上下文走渲染层（运行期条数上限
+                // 8 会合法地隐藏未被引用的行，用它做可达审计会误报）
+                if *is_host {
+                    return host_initial_system(mode, &kb, PLAN);
+                }
+                let (consumer, stage_tags) = (rev_c.name, rev_c.stage_tags);
+                let ctx =
+                    crate::knowledge::CraftInjectCtx { consumer, stage_tags, mode: mode.to_str_name(), role: *role };
+                let mut block = String::new();
+                for t in ["lyric_craft", "compose_craft"] {
+                    block.push_str(
+                        &kb.render_craft_table(t, &ctx, None, PLAN, None, &[])
+                            .unwrap_or_else(|e| panic!("{} × {:?} 渲染失败: {}", t, role, e)),
+                    );
+                }
+                block
+            })
+            .collect();
+        for name in ["lyric_craft", "compose_craft"] {
+            let t = kb.table(name).unwrap();
+            let id_idx = t.header_index("id").unwrap();
+            let trg_idx = t.header_index("trigger").unwrap();
+            for row in &t.rows {
+                let id = &row[id_idx];
+                let trigger = &row[trg_idx];
+                if crate::rules::CRAFT_RESERVED_ROWS.iter().any(|(rid, _)| rid == id) {
+                    continue; // 预留位：登记即不参与注入（#18 另有登记一致性守护）
+                }
+                let tags: Vec<&str> = trigger
+                    .split(crate::rules::CRAFT_TRIGGER_TAG_SEP)
+                    .map(str::trim)
+                    .collect();
+                let marker = format!("| {} |", id);
+                let hits: Vec<usize> =
+                    (0..ctxs.len()).filter(|&i| rendered[i].contains(&marker)).collect();
+                assert!(
+                    !hits.is_empty(),
+                    "{} trigger={:?} 在全部真实上下文都不可注入（死行，#23/#29 回归）",
+                    id,
+                    trigger
+                );
+                if tags.contains(&"抖音") {
+                    assert!(
+                        hits.iter().all(|&i| ctxs[i].0.to_str_name() == "mode_d"),
+                        "{} 标「抖音」却在非 mode_d 上下文注入（条件域限定失效，#29 回归）",
+                        id
+                    );
+                }
+                if tags.contains(&"制作") {
+                    assert!(
+                        hits.iter().all(|&i| ctxs[i].1 == Some("producer")),
+                        "{} 标「制作」却在非制作人上下文注入（条件域限定失效，#29 回归）",
+                        id
+                    );
+                }
+                if tags.iter().any(|t| ["A", "B", "C"].contains(t)) {
+                    assert!(
+                        hits.iter().all(|&i| ctxs[i].0.to_str_name() != "mode_d"),
+                        "{} 标 A/B/C 却在 mode_d 注入（条件域限定失效，#29 回归）",
+                        id
+                    );
+                }
+                if tags.contains(&"阶段0") {
+                    assert!(
+                        hits.iter().any(|&i| ctxs[i].2),
+                        "{} 标「阶段0」却没有任何主持人上下文注入（#23 回归）",
+                        id
+                    );
+                }
+                if tags.contains(&"审改") && !tags.contains(&"阶段0") {
+                    assert!(
+                        hits.iter().all(|&i| !ctxs[i].2),
+                        "{} 纯「审改」行混进主持人上下文（阶段隔离失效）",
+                        id
+                    );
+                }
+            }
+        }
+    }
+
+    /// #23 修复锁：主持人**两阶段**都必须真消费者式注入"阶段0"思维资产，且不得混入
+    /// 审改/条件域行。旧实现"阶段0"零消费者（primer 是静态手写文本、不读 CSV）——
+    /// LC-12/LC-01/CC-24 在 C/D 模式彻底不可达、在 A/B 只是与 primer 双载体，本断言即红。
+    #[test]
+    fn host_stage0_injects_only_stage0_rows() {
+        let kb = test_kb();
+        for m in [Mode::ModeA, Mode::ModeB, Mode::ModeC, Mode::ModeD] {
+            for (stage, s) in [
+                ("阶段0", host_initial_system(&m, &kb, "")),
+                ("汇总", host_summarize_system(&m, &kb, "")),
+            ] {
+                for id in ["LC-01", "LC-12", "CC-24"] {
+                    assert!(
+                        s.contains(&format!("| {} |", id)),
+                        "{} 主持人{} system 缺阶段0 思维资产 {}（#23 回归）",
+                        m.to_str_name(),
+                        stage,
+                        id
+                    );
+                }
+                for id in ["LC-02", "LC-10", "LC-31", "CC-22", "CC-23", "CC-28"] {
+                    assert!(
+                        !s.contains(&format!("| {} |", id)),
+                        "{} 主持人{} system 混入非阶段0 行 {}（阶段隔离失效）",
+                        m.to_str_name(),
+                        stage,
+                        id
+                    );
+                }
+            }
+        }
     }
 
     /// 微观②：少而准——愤怒（高能量）只注入高能乐器，悲伤（低能量）只注入低能乐器，且 ≤15 件
@@ -2816,13 +3230,13 @@ mod tests {
     fn instruments_injected_selectively_by_energy() {
         let kb = crate::knowledge::KnowledgeBase::load_embedded().unwrap();
         // 愤怒主题（能量 7-10）：命中摇滚/金属类高能乐器
-        let out = inject_knowledge(&kb, &[("instruments", &[], &[])], "愤怒爆发 能量:7 到 能量:10");
+        let out = inject_knowledge(&kb, &[("instruments", &[], &[])], &[], "愤怒爆发 能量:7 到 能量:10", "mode_a", None);
         assert!(out.contains("按能量区间 7~10 命中"), "got: {}", &out[..out.len().min(150)]);
         assert!(out.contains("distorted guitar"), "愤怒应含失真吉他");
         assert!(out.contains("electric guitar"), "愤怒应含电吉他");
         assert!(!out.contains("felt piano"), "愤怒不应含低能钢琴（或超出 15 件上限被截断）");
         // 悲伤主题（能量 1-4）：命中民谣/抒情低能乐器
-        let out2 = inject_knowledge(&kb, &[("instruments", &[], &[])], "悲伤低回 能量:1 到 能量:4");
+        let out2 = inject_knowledge(&kb, &[("instruments", &[], &[])], &[], "悲伤低回 能量:1 到 能量:4", "mode_a", None);
         assert!(out2.contains("按能量区间 1~4 命中"), "got: {}", &out2[..out2.len().min(150)]);
         assert!(out2.contains("felt piano"), "悲伤应含 felt piano");
         assert!(out2.contains("fingerpicked"), "悲伤应含指弹吉他");
@@ -2864,21 +3278,25 @@ mod tests {
 
     /// 注入量规范：每个角色用"最坏情况方案"（命中所有关键词表 + 全能量区间）注入，
     /// 断言单表条数 ≤ 上限、单角色总字数 ≤ 封顶。常量 INJECT_MAX_* 的测试锁。
+    /// #29 起口径升级：**逐模式**遍历（思维资产条件标签随模式增删行——
+    /// LC-10/LC-24 仅 mode_d 可达、LC-31 在 mode_d 被排除），单模式口径会漏掉真实最坏情况。
     #[test]
     fn role_injection_budget_under_limits() {
         let kb = crate::knowledge::KnowledgeBase::load_embedded().unwrap();
         // 最坏情况方案：同时命中情绪/套话/钩子/流派全部候选 + 全能量区间 0-10
         let plan = "愤怒 孤独 温柔 遗憾 梦想 星空 自嘲 魔性循环 反差金句 空耳式 深夜室内民谣 抒情流行 爵士 重金属 能量:0 到 能量:10";
         let roles = [
-            roles::role_for(PipelineRole::Emotion),
-            roles::role_for(PipelineRole::Lyricist),
-            roles::role_for(PipelineRole::Reviser),
-            roles::role_for(PipelineRole::Producer),
-            roles::role_for(PipelineRole::StyleAnalyst),
-            roles::role_for(PipelineRole::Auditor),
+            PipelineRole::Emotion,
+            PipelineRole::Lyricist,
+            PipelineRole::Reviser,
+            PipelineRole::Producer,
+            PipelineRole::StyleAnalyst,
+            PipelineRole::Auditor,
         ];
-        for r in roles {
-            let out = inject_knowledge(&kb, r.knowledge_tables, plan);
+        for m in [Mode::ModeA, Mode::ModeB, Mode::ModeC, Mode::ModeD] {
+            for rp in roles {
+            let r = roles::role_for(rp);
+            let out = inject_knowledge(&kb, r.knowledge_tables, r.craft_refs, plan, m.to_str_name(), Some(rp.storage_key()));
             let chars = out.chars().count();
             // 按 "## 表名 知识库" 切段，每段独立统计数据行（| 开头且不是表头/分隔）
             for (table_name, _, _) in r.knowledge_tables {
@@ -2905,6 +3323,7 @@ mod tests {
                     "style_genre" => INJECT_MAX_STYLE_GENRE_ROWS + 2,
                     "instruments" => INJECT_MAX_INSTRUMENTS_ROWS + 2,
                     "suno_rules" => INJECT_MAX_FULL_ROWS + 2,
+                    "lyric_craft" | "compose_craft" => INJECT_MAX_CRAFT_ROWS + 2,
                     _ => INJECT_MAX_KEYWORD_ROWS + 2,
                 };
                 assert!(
@@ -2919,11 +3338,13 @@ mod tests {
             tracing::warn!(role = %r.name, chars = chars, cap = INJECT_MAX_TOTAL_CHARS, "注入总量超封顶");
             assert!(
                 chars <= INJECT_MAX_TOTAL_CHARS,
-                "{} 注入 {} 字超过封顶 {}",
+                "{} 在 {} 注入 {} 字超过封顶 {}",
                 r.name,
+                m.to_str_name(),
                 chars,
                 INJECT_MAX_TOTAL_CHARS
             );
+            }
         }
     }
 
@@ -2981,29 +3402,64 @@ mod tests {
         assert!(auditor.knowledge_tables.iter().any(|(t, _, _)| *t == "suno_rules"));
     }
 
-    /// 同轮角色并发语义——join_all 按输入顺序返回（revisions_log 确定性），
-    /// 任一角色 Err 时整轮中断（与串行语义一致）
-    #[tokio::test]
-    async fn concurrent_reviews_preserve_order_and_fail_fast() {
-        // 保序：慢任务排前面，完成顺序仍按输入序（显式标注输出类型统一 future 类型）
-        let futs: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = &'static str>>>> = vec![
-            Box::pin(async {
-                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-                "slow"
-            }),
-            Box::pin(async { "fast" }),
-        ];
-        let out = futures_util::future::join_all(futs).await;
-        assert_eq!(out, vec!["slow", "fast"]);
-        // 失败中断：任一 Err → 整轮 ? 传播（模拟 zip 后 ? 语义）
-        let futs: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = Result<&'static str, AppError>>>>> =
-            vec![
-                Box::pin(async { Ok::<_, AppError>("ok") }),
-                Box::pin(async { Err::<_, AppError>(AppError::cancelled()) }),
-            ];
-        let res: Result<Vec<&str>, AppError> =
-            futures_util::future::join_all(futs).await.into_iter().collect::<Result<Vec<_>, _>>();
-        assert!(matches!(res, Err(e) if e.kind == crate::errors::ErrorKind::Cancelled));
+    /// #14 同轮可见性（内容层）：讨论轮改串行后，第 k 个角色的 user prompt 必须出现
+    /// 「本轮同轮其他角色已提修订」块，且与「往轮已提修订」块严格分工（互不混淆）。
+    #[test]
+    fn role_review_prompt_exposes_same_round_peers_distinct_from_history() {
+        let req = make_request(None);
+        // 无同轮修订：不得凭空出现"本轮"块（否则是假叙事）
+        let p0 = build_role_review_user_prompt("方案", &[], &[], "", &req);
+        assert!(!p0.contains("本轮同轮其他角色已提修订"), "无同轮修订时不得出现本轮块");
+        assert!(!p0.contains("往轮已提修订"), "无往轮日志时不得出现往轮块");
+        // 同轮修订 + 往轮日志：两块并存，各自成段，条目可读
+        let peers = vec![("情感分析师".to_string(), "把 Verse 能量压到 3".to_string())];
+        let hist = vec![("作词人".to_string(), "Hook 改疑问句".to_string())];
+        let p1 = build_role_review_user_prompt("方案", &peers, &hist, "重点解决参数越界", &req);
+        assert!(p1.contains("【本轮同轮其他角色已提修订"), "缺同轮块：\n{}", p1);
+        assert!(p1.contains("- 情感分析师：把 Verse 能量压到 3"));
+        assert!(p1.contains("【往轮已提修订"), "缺往轮块：\n{}", p1);
+        assert!(p1.contains("- 作词人：Hook 改疑问句"));
+        assert!(p1.contains("禁止重复提同一问题"), "同轮块必须带协作纪律约束");
+        // 本轮块先于往轮块（先看到最新分歧，再参考历史）
+        let ip = p1.find("【本轮同轮其他角色已提修订").unwrap();
+        let ih = p1.find("【往轮已提修订").unwrap();
+        assert!(ip < ih, "同轮块应先于往轮块出现：\n{}", p1);
+    }
+
+    /// #14 串行语义守护（源码形状，红灯先行）：讨论轮动态角色审改区必须是**阵容序串行**
+    /// ——含 `for role in roles.iter()`（阵容序权威单源）与 `round_peers.push(`（同轮可见性
+    /// 回填），且不得再出现已退役的并发机制 `join_all`/`review_futs`。
+    /// 红线：并发回归即"同轮互盲"复发（第 k 个角色看不到同轮兄弟刚提的修订 → 冲突拖到
+    /// 汇总阶段、无人裁决）。注释中被文档化的旧标识符不计入（去注释后再扫）。
+    #[test]
+    fn discussion_round_review_is_serial_with_same_round_visibility() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/commands/orchestrator.rs");
+        let src = std::fs::read_to_string(&path).unwrap();
+        let start = src.find("① 动态角色").expect("找不到讨论轮审改区起点标记");
+        let end = src.find("② 校验员审查").expect("找不到讨论轮审改区终点标记");
+        assert!(start < end, "讨论轮审改区标记顺序异常");
+        // 去行注释后扫描：退役机制的说明性注释含旧标识符，不算代码
+        let strip = |s: &str| -> String {
+            s.lines().map(|l| l.split("//").next().unwrap_or("")).collect::<Vec<_>>().join("\n")
+        };
+        let region = strip(&src[start..end]);
+        for want in ["for role in roles.iter()", "round_peers.push(", "&round_peers"] {
+            assert!(region.contains(want), "讨论轮审改区缺串行语义要素 `{}`：\n{}", want, region);
+        }
+        for gone in ["join_all", "review_futs"] {
+            assert!(
+                !region.contains(gone),
+                "讨论轮审改区残留已退役的并发机制 `{}`（#14 回退：同轮互盲复发）",
+                gone
+            );
+        }
+        // 生产代码（测试模块之前）整体不得再有 join_all——旧并发测试已随机制退役
+        let prod = &src[..src.find("mod tests").expect("找不到测试模块标记")];
+        assert!(
+            !strip(prod).contains("join_all"),
+            "orchestrator.rs 生产代码仍含 join_all——并发机制应已彻底退役"
+        );
     }
 
     // ---- 超时守卫（spawn_guarded）----
@@ -3065,15 +3521,90 @@ mod tests {
     /// C3/D3：阶段 0 主持人必须与审改员/校验员同清单注入（加载一致——数字口径同源）
     #[test]
     fn host_initial_system_includes_checklist() {
+        let kb = test_kb();
         for m in [Mode::ModeA, Mode::ModeB, Mode::ModeC, Mode::ModeD] {
-            let s = host_initial_system(&m);
+            let s = host_initial_system(&m, &kb, "");
             assert!(s.contains("【校验清单"), "{} stage-0 缺校验清单注入", m.to_str_name());
         }
         // mode_d 清单含抖音参数区间（渲染值来自常量，非手写）
-        let d = host_initial_system(&Mode::ModeD);
+        let d = host_initial_system(&Mode::ModeD, &kb, "");
         assert!(
             d.contains(&format!("{}-{}", crate::rules::DOUYIN_WEIRD_MIN, crate::rules::DOUYIN_WEIRD_MAX)),
             "stage-0 清单缺抖音参数区间"
+        );
+    }
+
+    /// R2 锁（2026-09-17）：汇总/回炉阶段主持人 system 必须与阶段 0 同源——
+    /// primer + 校验清单 + 信封契约一个不缺，且清单里的说明行上限必须是单源常量值。
+    /// 旧实现（只有 host 人设 + 信封）会让本测试在"缺校验清单"处直接失败，防复发。
+    #[test]
+    fn host_summarize_system_same_single_source_as_initial() {
+        let kb = test_kb();
+        for m in [Mode::ModeA, Mode::ModeB, Mode::ModeC, Mode::ModeD] {
+            let name = m.to_str_name();
+            let stage0 = host_initial_system(&m, &kb, "（阶段0 无方案文本）");
+            let summarize = host_summarize_system(&m, &kb, "（当前方案占位）");
+            let checklist = crate::rules::checklist(name);
+            assert!(summarize.contains(&checklist), "{} 汇总缺校验清单", name);
+            assert!(stage0.contains(&checklist), "{} 阶段 0 缺校验清单", name);
+            if let Some(primer) = crate::rules::host_primer(name) {
+                let primer = crate::rules::interpolate(primer);
+                assert!(summarize.contains(&primer), "{} 汇总缺地基 primer", name);
+                assert!(stage0.contains(&primer), "{} 阶段 0 缺地基 primer", name);
+            }
+            if crate::rules::plan_envelope_enabled() {
+                let spec = crate::rules::envelope_spec();
+                assert!(summarize.contains(&spec), "{} 汇总缺信封契约", name);
+                assert!(stage0.contains(&spec), "{} 阶段 0 缺信封契约", name);
+            }
+            // 数字口径单源：汇总侧与阶段 0 侧写的是同一个上限值（不自持一份）
+            assert!(
+                summarize.contains(&crate::rules::DESC_LINE_MAX_CHARS.to_string()),
+                "{} 汇总缺单源说明行上限 {}", name, crate::rules::DESC_LINE_MAX_CHARS
+            );
+            // 人设底座不同（阶段 0 = 模式指令；汇总 = host 统领），但约束段必须完全一致
+            assert_ne!(stage0, summarize, "{} 两阶段 system 不应完全相同", name);
+        }
+    }
+
+    /// 审计 #20 剩余（第二批·问题②）：**下游独有的格式契约必须上移到主持人可见的单源**。
+    /// 根因：格式契约（乐器主次排列/人声映射到 Style Prompt/禁 full band/断句用单空格/能量标注格式）
+    /// 原先只写在终稿端口（校验员人设）与 prompts 里，主持人汇总/回炉时手里没有——整合出的方案
+    /// 天然不合终稿格式，终稿硬门再打回 = 又一轮降级。现契约真源在 `rules::desc_line_contract()`
+    /// （经 `host_system_with` 无条件注入，不随信封开关消失），本测试锁定"人设说的 = 主持人看到的"。
+    #[test]
+    fn terminal_format_contract_visible_to_host() {
+        let kb = test_kb();
+        let mirrors = ["主奏在前", "禁 full band", "映射到 Style Prompt", "断句单空格"];
+        for m in [Mode::ModeA, Mode::ModeB, Mode::ModeC, Mode::ModeD] {
+            let name = m.to_str_name();
+            for (stage, sys) in [
+                ("阶段0", host_initial_system(&m, &kb, "")),
+                ("汇总", host_summarize_system(&m, &kb, "")),
+            ] {
+                for k in mirrors {
+                    assert!(sys.contains(k), "{} 主持人{} system 缺终稿格式契约「{}」", name, stage, k);
+                }
+            }
+        }
+        // 能量标注：A/B 硬门必带，D 可省略——按模式分档断言，不做"全模式一刀切"
+        for m in [Mode::ModeA, Mode::ModeB] {
+            let name = m.to_str_name();
+            for (stage, sys) in [
+                ("阶段0", host_initial_system(&m, &kb, "")),
+                ("汇总", host_summarize_system(&m, &kb, "")),
+            ] {
+                assert!(sys.contains("能量:X"), "{} 主持人{} system 缺能量标注契约", name, stage);
+            }
+        }
+        // 契约真源确在 rules 单源（下游端口与人设同读一份，不是各自手写）
+        let contract = crate::rules::desc_line_contract();
+        assert!(contract.contains("主奏在前"), "说明行契约缺乐器主次");
+        assert!(contract.contains("映射到 Style Prompt"), "说明行契约缺人声映射");
+        assert!(
+            crate::commands::roles::auditor().system_prompt.contains("主奏在前")
+                && crate::commands::roles::auditor_format_prompt_mode_c().contains("主奏在前"),
+            "终稿端口人设须与契约同源"
         );
     }
 
@@ -3110,7 +3641,8 @@ mod tests {
     #[test]
     #[ignore]
     fn dump_host_system_d() {
-        let sys = host_initial_system(&Mode::ModeD);
+        let kb = test_kb();
+        let sys = host_initial_system(&Mode::ModeD, &kb, "");
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/large-test");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("host_system_d.txt"), sys).unwrap();
@@ -3143,22 +3675,43 @@ mod tests {
         w("schema_wide", roles::REVIEW_SCHEMA_WIDE);
         w("schema_lyric", roles::REVIEW_SCHEMA_LYRIC);
 
+        // 1b) 思维资产注入实况（#15/#16 可目检证据）：同一方案文本逐角色注入，
+        //     可直接看到"引用必达行 + 相关性补足行"与截断说明。
+        //     #29：注入上下文取"该角色真实出场的模式"（style_analyst 仅 mode_d 出场，
+        //     否则 LC-10/LC-24 的抖音限定行会被条件门挡掉，目检证据失真）。
+        let kb = crate::knowledge::KnowledgeBase::load_embedded().unwrap();
+        let sample_plan = "Style Prompt: 深夜室内民谣 能量:2\n[Verse 1]\n[felt piano, 能量:2]\n凌晨的灯还亮着\n[Chorus]\n[full band, 能量:8]\n我想你了\n参数: Weirdness=24 | Style Influence=80 | Audio Influence=0";
+        for (key, rp) in [
+            ("emotion", PipelineRole::Emotion),
+            ("lyricist", PipelineRole::Lyricist),
+            ("reviser", PipelineRole::Reviser),
+            ("producer", PipelineRole::Producer),
+            ("style_analyst", PipelineRole::StyleAnalyst),
+        ] {
+            let r = roles::role_for(rp);
+            let mode = [Mode::ModeA, Mode::ModeB, Mode::ModeC, Mode::ModeD]
+                .into_iter()
+                .find(|m| steps_for_mode(m).iter().any(|s| s.role == rp))
+                .unwrap_or(Mode::ModeA);
+            w(
+                &format!("role_{}_injection", key),
+                &inject_knowledge(&kb, r.knowledge_tables, r.craft_refs, sample_plan, mode.to_str_name(), Some(rp.storage_key())),
+            );
+        }
+
         // 2) 逐模式装配体（stage0/汇总/校验员格式/清单/primer）
         for m in [Mode::ModeA, Mode::ModeB, Mode::ModeC, Mode::ModeD] {
             let name = m.to_str_name();
-            w(&format!("{}_host_initial_system", name), &host_initial_system(&m));
-            w(&format!("{}_checklist", name), crate::rules::checklist(name));
+            w(&format!("{}_host_initial_system", name), &host_initial_system(&m, &kb, "（样例方案占位）"));
+            w(&format!("{}_checklist", name), &crate::rules::checklist(name));
             if let Some(p) = crate::rules::host_primer(name) {
                 w(&format!("{}_primer", name), &crate::rules::interpolate(p));
             }
             // 汇总 system + user（样例修订：触发冲突预检路径的真实输入形态）
-            let host = roles::host();
-            let mut sys = crate::rules::interpolate(host.system_prompt);
-            if crate::rules::plan_envelope_enabled() {
-                sys.push_str("\n\n");
-                sys.push_str(crate::rules::ENVELOPE_SPEC);
-            }
-            w(&format!("{}_summarize_system", name), &sys);
+            w(
+                &format!("{}_summarize_system", name),
+                &host_summarize_system(&m, &kb, "（样例方案占位）"),
+            );
             let changes = vec![
                 (PipelineRole::Lyricist, vec![ReviewChange {
                     target: "lyrics".into(),

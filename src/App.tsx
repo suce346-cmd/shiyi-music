@@ -385,8 +385,8 @@ export default function App() {
           // 阶段0流式结束后清空中间态流式文本（首个专家发言时），避免统领全文重复显示
           if (speechLogRef.current.length === 0) setStreamText("");
           speechLogRef.current.push(speech);
-          // D-1（#13）：并发到达的专家发言按模式阵容序稳定归位；作用域仅本轮
-          // （末尾连续 expert 段），上一轮 turns 不动——旧全局归位会跨轮重排
+          // D-1（#13）：专家发言按模式阵容序稳定归位（#14 后端改串行后为幂等兜底）；
+          // 作用域仅本轮（末尾连续 expert 段），上一轮 turns 不动——旧全局归位会跨轮重排
           setConversation((prev) => orderRoundSpeech([...prev, speech], rosterRef.current));
         },
       });

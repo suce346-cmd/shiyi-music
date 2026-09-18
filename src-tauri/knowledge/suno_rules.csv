@@ -25,7 +25,7 @@ style_arc_singlepeak,单峰,75,85,,单峰型引导度：一次大起落峰后即
 style_arc_loop,回环,78,85,,回环型引导度：首尾呼应回到原点，中高档保持动机统一
 hook_first,抖音,1,,,前 3 秒必须出现 Hook 或强钩子：抖音 3 秒完播率生死线
 stop_mark,抖音,1,,次,结尾骤停标记（骤停/all instruments cut）：抖音结尾留白制造循环播放冲动
-desc_line_max,抖音,0,80,字符,说明行不超过 80 字符：括号说明行超长会喧宾夺主
+desc_line_max,全模式,0,200,字符,说明行整行（含方括号）不超过 200 字符：上限宽松但必须保乐器+行为动词，不得为缩短删乐器；超限会被方案侧信封门与终稿硬校验拦下
 no_full_band,all,0,,,禁 full band/all instruments 笼统写法：Suno 无法理解必须具体列乐器
 tag_list,all,1,,,结构标签用英文方括号（Verse/Chorus/Hook/Drop）：Suno 按标签识别段落结构
 line_break_rule,all,1,,,单空格等于弱停顿 换行等于强停顿：控制演唱呼吸点

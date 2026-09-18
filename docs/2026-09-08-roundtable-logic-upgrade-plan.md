@@ -23,6 +23,7 @@
 | P2 | **"单源清单"只注入讨论轮**：阶段 0 主持人初稿用 `prompt_for_mode`（orchestrator.rs:712-741）+primer，不拼 `rules::checklist`；同一规则现存 5 处表述（模式指令/角色 prompt/checklist/校验器/CSV），"350 字符"在 prompts.rs 出现 8 次、roles.rs 5 次 | orchestrator.rs:491/653 有 checklist，:712-741 无 |
 | P2 | **orchestrator.rs 2319 行 9 种职责**（调度/事件/汇总/校验门/预算/检查点/取消/插话/usage） | 文件规模 + 方法清单 |
 | P2 | **多角色同 target 修订无确定性冲突消解**：`build_summarize_user_prompt`（orchestrator.rs:807-833）把全部修订交 LLM 自由整合；D 实测第 1 轮作词/流行/校验三方同时改 lyrics | GUI 运行 s-61 事件流 |
+| — | ⚠️ 2026-09-18 更正注记（第八批）：本行诊断当时**只对了一半**。D4（§3.4）确已落地冲突预检（`detect_revision_conflicts`）并把裁决指引注入汇总 **user** prompt，但主持人 **system 人设**仍写"不自己改细节，只做整合"——**同一职责两个对立口径**，user 侧指引被 system 抵消，冲突实际仍无人裁决。且并发的物理前提未除：`execute_review` 走 `join_all`，同轮角色只拿得到**轮前**修订快照（同轮互盲），兄弟修订在产生时不可见。第八批两腿齐下：讨论轮改**阵容序串行**（`round_peers` 同轮可见性，物理消除互盲）+ 裁决口径**单源锚点锁**（人设与注入同读 `rules::territory_rules_text()`，`ADJUDICATION_KEYS` 双载体锁定）。 | 见 §3.4 更正注记 |
 
 ### 1.2 与任务书的设计差距（用户"自相矛盾"感受的结构根源）
 
@@ -30,6 +31,7 @@
 |-----------|---------|---------|
 | §5.4 三重停止判据（硬上限+LLM 裁判+独立复核） | 有硬上限（3 轮+打回 2 次+预算熔断）✅、有 LLM 裁判（agree 结构化✅），独立复核只覆盖格式不覆盖内容承诺 | 缺一条腿 |
 | 单活跃发言者（冲突物理消除） | 多角色并行修订同一 target，靠 LLM 事后整合 | 冲突被推迟而非消除 |
+| — | ⚠️ 2026-09-18 更正（第八批）：**已达成**。讨论轮由 `join_all` 并发改为**阵容序串行**（`roles` = `steps_for_mode` 权威单源），同一时刻至多一个角色审改；且第 k 个角色的 prompt 携带前 k-1 个角色的**本轮**修订（`round_peers` 同轮可见性），冲突在产生时即被看见、可明确反对。前端"多专家并发"叙事（横幅 + i18n + 3 项用例）随机制退役——`RoundtablePanel` 座位角标语义由"抢话"变为"轮到的当前发言人"。残留分歧仍由汇总阶段的冲突预检 + 领地裁决兜底（两条腿缺一不可）。 | |
 | §5.4.1 收敛判定不得依赖自由文本语义判断 | agree=true 已是结构化 JSON（比任务书还早）✅ | 已达标，保持 |
 | §5.6.1 诚实降级 | 只有 AuditResult(pass=false) 显示，无 run 级 degraded 聚合 | 部分达标 |
 | 每条规则唯一执行者 | 参数类规则有承诺无执行者（上表 P1） | 核心差距 |
@@ -40,6 +42,8 @@
 - 全部角色方法论、模式指令、知识库 CSV、checklist 单源清单机制
 - 预算熔断/检查点续跑/run_id 事件过滤/取消/插话/usage 追踪
 - 四模式座位表、逐行字数对齐、K-3 Audio Influence=0 硬门、"80 字符说明行"闭环样板（CSV→常量→提示词→代码四环节）
+  - ⚠️ 2026-09-18 更正：**80 上限已废止**（与"最强段≥5件且每件带行为动词"数学冲突，5/5 run 全被拦）。闭环样板保留，数字改为单源 `rules::DESC_LINE_MAX_CHARS = 200`，全模式统一。
+  - 2026-09-18 闭环样板补强（第二批）：手写数字的**守护网**从手写枚举升级为「字面量网 + 常量派生『数值+单位』扫描网 + 阈值语境窗口门」（新增常量自动纳入）；未登记执行者的上游承诺同样视为降级源——`mode_d` 的配器/能量硬门文案已改写为设计方向（`validate_douyin` 不查这两项），并以 `mode_d_prompt_has_no_unenforced_instrument_or_energy_placeholders` 锁定。**规则闭环 = 数字单源 + 上游告知 + 下游执行者三者同域**。
 
 ---
 
@@ -106,9 +110,38 @@ pub struct RuleSpec {
 pub const RULE_REGISTRY: &[RuleSpec] = &[ /* 每条参数/格式规则一行 */ ];
 ```
 
-**两类守护测试**（防复发的关键）：
-1. **死常量守护**：遍历 RULE_REGISTRY 中引用的每个常量名，grep 生成物断言其在 src 下有非 rules.rs 的引用（执行点或 format! 生成点）——死常量在 CI 即失败
+**五类守护测试**（防复发的关键）：
+1. **死常量守护**：遍历 RULE_REGISTRY 中引用的每个常量名，断言其在 src 下有非 rules.rs 的引用（消费点）——死常量在 CI 即失败。
+   - ⚠️ 2026-09-18 第三批升级：消费点检查**不足以**证明执行者真的被执行——旧实现用 `src.contains(executor)` 文件全文文本匹配，函数"存在但无人调用"照样过关（实测 `douyin_bpm_min` 错挂到 `check_style_prompt_blocks`）。现改为**调用点存在性**校验：`has_call_site` 匹配 `executor(` 调用表达式，排除 `fn executor(` 定义与注释行；符号消费检查保留。自检用例 `has_call_site_distinguishes_definition_from_invocation`。
+   - 残留边界：调用点校验能发现"无调用/只定义"，但**不能**发现"执行者调用点存在却不消费本规则常量"的语义错挂。同类错挂须靠"每条规则唯一执行者 + 模式域单源常量"人工评审兜底（如 `style_prompt_max/min` 的模式域由 `rules::STYLE_PROMPT_*_MODES` 单源锁定）。
 2. **表述生成**：prompts.rs/roles.rs 中的数值段改为 `format!("...{}...", rules::X)` 后，源码中不再允许出现手写的关键数字字面量（`"12-20"`、`"20-35"`、`"75-85"`、`"85-95"`、`"≤80"` 等 grep 断言，白名单：注释与测试）
+   - ⚠️ 2026-09-18 第八批升级（扫描面单源化）：旧网只扫 `prompts.rs`/`roles.rs` **两个源文件**，而同类上游告知载体 `CHECKLIST_A–D`/`PRIMER_AB/C/D` 就在 `rules.rs` 内，**漏在网外**——`CHECKLIST_D` 抖音区间、`PRIMER_D` 的 Hook/Verse/字数/BPM 四阈值、`PRIMER_AB` 的弱强差/配器差/全曲上限全是**无锁项**，改常量即静默漂移。
+   - **修法**：四清单与三 primer **全文占位符化**（`${STYLE_PROMPT_MAX}`/`${MIN_ENERGY_GAP}`/`${HOOK_MIN}次`/`${DOUYIN_BPM_MIN}`/`${ARC_INLINE}` 等），`checklist()` 出口统一 `interpolate`（返回 `String`）；扫描面由 `ProseCarrier`/`PROSE_CARRIERS` **声明式**给出（**新增载体必须登记**，否则守护测试 `no_handwritten_rule_numbers_in_prose_carriers` 无从覆盖）；数值权威在 CSV、无常量可派的行（`PRIMER_AB` 的"≥5 件具体物"，权威在 `lyric_craft::LC-01`）走 `csv_locked` 豁免并**必须写明锁定测试名**——且豁免做**双向**校验：未登记字面量即红、登记了却无实际命中即红（防无主豁免随时间腐化）。
+   - **分工**：`no_handwritten_rule_numbers_in_prompt_sources`（两个源文件）+ `no_handwritten_rule_numbers_in_prose_carriers`（`PROSE_CARRIERS`）**合起来才是完整守护网**；红灯先行自检 `prose_carrier_guard_catches_handwritten_restore`（把占位符还原为手写字面量必须被网住）。
+3. **知识注入域守护**（2026-09-18 第四批新增）：注入层与 prompt 要求层必须同源，防"角色被要求核查内容不在上下文里的规则"（#16 悬空引用）与"打分恒 0 致排序退化为文件行序"（#15）复发。
+   - **单源**：`rules::CRAFT_REFS_*`（角色 prompt 点名要求核查的 LC-/CC- 编号 = 注入必须强制投递的编号）；`orchestrator::INJECT_MAX_CRAFT_ROWS`（注入条数上限）。
+   - **三向锁**：`roles::craft_refs_match_prompt_and_single_source`——① `Role.craft_refs` 集合 == prompt 文本中出现的 LC-/CC- 编号集合；② 绑定 `lyric_craft`/`compose_craft` 表 ⇔ 声明了非空引用契约（无表不得声明、有表必须声明）；③ 每个编号在对应 CSV 中真实存在，且 trigger 通过**唯一注入门** `knowledge::craft_inject_gate`（2026-09-18 第七批起：阶段域 + 条件域**双域**判定，与渲染层同一函数；角色**真实出场的全部模式**（名册取自 `steps_for_mode` 权威单源）都要能命中该编号）；④ `craft_refs.len() <= INJECT_MAX_CRAFT_ROWS`（否则必达行本身撑爆上限）。
+   - **端到端锁**：`orchestrator::craft_referenced_ids_always_injected_for_every_role`——5 个 craft 角色在最坏输入（plan 为占位符、相关性全 0）下，每个点名编号的表格行仍必须出现在注入文本内；`knowledge::craft_required_rows_force_injected_beyond_cap`（上限小于必达数时必达行不被截断 + 头部计数）、`knowledge::craft_rows_ranked_by_plan_overlap_not_csv_order`（相关性可令尾部行上浮挤出首行，证明不再是文件行序）。
+   - **残留边界**：相关性评分是"行语义列 ↔ 方案"的 CJK 二字组字面重合度启发式——对同义改写（方案说"押韵"、规则写"韵脚"）可能低分，但**被点名行不受影响**（必达优先），且条数上限之外的漏召回属可接受降级（有 `tracing::warn!` 与注入头计数可见）。
+4. **注入门双域守护**（2026-09-18 第五批新增，**第七批升级为双域模型**）：trigger 是"/"分隔的多标签列，注入门必须按**标签**判定（子串匹配会漏标签、也会误命中），且**"声明适用范围"必须就是"实际注入范围"**——根治三族静默不可达："标签语义无单源、无守护"（#17/#18）、"条件修饰标签只登记不执行"（#29）、"阶段标签零消费者"（#23）。
+   - **单源（双域）**：**阶段域**（析取适用）`rules::CRAFT_TRIGGER_ACTIVE`（审改·全程）、`CRAFT_TRIGGER_HOST_ONLY`（阶段0）、`CRAFT_TRIGGER_RESERVED`（扩展位，非注入）+ `CRAFT_RESERVED_ROWS`（预留位 id+理由登记）；**条件域**（**限定**，叠加在阶段域之上，行内条件析取）`rules::CRAFT_CONDITIONAL_TAGS`（抖音→mode_d / A→mode_a / B→mode_b / C→mode_c / 制作→producer）+ `CraftConditionalScope`；模式域取值单源 `ALL_MODES`。旧常量 `CRAFT_TRIGGER_CONDITIONAL` 第七批已删除（grep 零残留）。
+   - **消费者登记**：`rules::CRAFT_STAGE_CONSUMERS`（`host_stage0` = 阶段0 / `reviewer` = 审改·全程）+ `stage_consumer(name)`——**登记即被运行期消费**：`orchestrator::host_craft_injection`（唯一调用点 `host_system_with`，阶段0 初稿与阶段1 汇总/回炉共享）与 `inject_knowledge` 都从登记取上下文，调用点不得自造标签集合（#23 的解药）。
+   - **唯一门共用**：`knowledge::craft_inject_gate(trigger, &CraftInjectCtx { consumer, stage_tags, mode, role })` 同时被渲染层、守护测试、角色引用契约调用——**测试口径 == 运行口径**；渲染入口 `render_craft_table` **缺上下文直接 Err**（craft 表无法绕过门）；`trigger_tags_intersect` 降级为"阶段域子判定"，仅供预留位登记检查与守护测试。
+   - **词表锁**：`knowledge::craft_trigger_vocabulary_has_consumers_and_real_scope`（第七批更名自 `craft_trigger_tags_are_registered_vocabulary`）——① CSV 标签 ⊆ 词表；② 每个阶段标签至少有一个消费者上下文、且消费者只能消费阶段域标签（防"词表可见、执行零消费者"）；③ 每个条件标签的判定域取值真实且该标签确被 CSV 使用（防"登记即死条目"）。
+   - **精确匹配锁**：`knowledge::craft_trigger_gate_is_tag_exact_not_substring`（纯函数六态）；`knowledge::craft_full_process_rows_are_injectable`（"全程"行 CC-23/CC-28 必须出现在渲染文本；第五批红灯先行实测：把 `CRAFT_TRIGGER_ACTIVE` 收窄回 `["审改"]` 三项测试即红）。
+   - **限定锁（红灯先行）**：`knowledge::craft_conditional_gate_is_restrictive_gate`——抖音行只进 mode_d、制作行只进 producer、A/B/C 行不进 mode_d、`role=None` 遇角色域条件 fail-closed；**第七批实测**：把门末行改 `true`（模拟条件域零门）→ 本测试 + 死行审计双红，复现 #29。
+   - **死行审计**：`orchestrator::craft_rows_reachable_in_every_real_context`——每条非预留 CSV 行必须在至少一个**真实上下文**被渲染（4 模式主持人阶段0 × **真实装配入口** `host_initial_system`；4 模式 × `steps_for_mode` 角色），并同时校验条件域限定与阶段隔离；**第七批实测**：把 `host_craft_injection` 短路成空 → 本测试 + `host_stage0_injects_only_stage0_rows` 双红，复现 #23（该演练暴露了"只走渲染层会漏检装配未接线"的盲点，已改为走真实装配入口）。
+   - **阶段0 锁**：`orchestrator::host_stage0_injects_only_stage0_rows`——四模式 × 两阶段（初稿/汇总）必须含 LC-01/LC-12/CC-24，且不得混入纯审改/条件域行。
+   - **双载体同源锁**：`rules::primer_ab_stage0_threshold_matches_lyric_craft_row`——primer 与知识库是阶段0 的两个载体，primer 重申的数值必须等于 CSV（LC-01 物件清单下限），防"改 CSV 不联动 primer"。
+   - **预留位锁 / 运行期通道**：`knowledge::craft_reserved_rows_match_registry`——CSV 中"扩展位"行集合必须 == `CRAFT_RESERVED_ROWS` 登记集合，且每条登记必须有理由；新增预留行未登记即红（把"预留"从隐式约定变成显式决策）。`knowledge::warn_reserved_rows_once`——命中"扩展位"即告警（每 (表,行集合) 每进程一次），覆盖用户**覆盖目录**新增预留行这一编译期测试覆盖不到的场景。
+   - **扩展约定**：新增条件标签必须同时登记域取值（否则词表锁 ③ 即红）；新增阶段标签必须同时登记消费者（否则词表锁 ② 即红）——两者都是"登记即被校验"的闭环。
+5. **知识可达性守护**（2026-09-18 第六批新增）：知识行的**归属与检索**必须有单源、有登记、有审计——根治"规则只绑给输出角色、审查角色 0 条"（#19）与"检索键被长度门静默丢弃致整行永久休眠"（#22）。
+   - **规则职责单源**：`rules::SUNO_RULES_FOR_{EMOTION,LYRICIST,REVISER,PRODUCER,STYLE_ANALYST}` + `SUNO_RULE_OWNERS`（规则名→职责角色，40 条全覆盖；校验员保持全量不入 owner 表）。
+   - **三向锁**：`roles::suno_rules_bindings_match_role_ownership`——① CSV 每条规则必须登记职责、登记不得悬空；② 角色常量集合 == 注册表中归属该角色的集合；③ 角色**实际绑定的行子集** == 对应常量（防止 roles.rs 引用漂移）；④ 端口干道断言（校验员全量、主持人零表）。
+   - **检索契约单源**：`rules::KEYWORD_TABLES`（`KeywordTableReachability`：表名+检索键列+条数上限）+ `KEYWORD_MIN_CHARS` + `ENERGY_GATE_COLUMNS`；`orchestrator::inject_knowledge` 的 `_` 分支查单源路由（**新增关键词表只改单源**），`INJECT_MAX_KEYWORD_ROWS`/`INJECT_MAX_STYLE_GENRE_ROWS` 为单源别名。
+   - **可达性审计**：`knowledge::reachability_violations()`——空/短于 `KEYWORD_MIN_CHARS` 的检索键行 + instruments 能量区间非数值 / min>max / 列缺失；`keyword_tables_have_no_structurally_unreachable_rows` 断言真实 CSV 审计为空；红灯先行 `reachability_audit_detects_single_char_key_and_bad_energy` 证明审计真能抓死行。
+   - **运行期通道**：`knowledge::warn_reachability_violations()`（每表每进程一次）+ `orchestrator::warn_keyword_table_all_dormant_once`（整表零命中告警，含行数）——覆盖用户**覆盖目录**场景。
+   - **预算重标定**：`orchestrator::role_injection_budget_under_limits` 为注入总量封顶的实测锁（第六批扩绑后制作人 4969 字 → `INJECT_MAX_TOTAL_CHARS` 5200→5400）；**任何扩大注入面的批次都必须重跑并复核该封顶与注释**。
 
 **例外条款退役**：roles.rs 四处手写的"叙事型可回落 A/B 弧线区间，须说明理由"改为一句"叙事型回落规则由代码执行（DOUYIN_WEIRD/STYLE 区间外需满足叙事型结构判定）"——删除与代码行为不一致的旧表述。
 
@@ -116,6 +149,7 @@ pub const RULE_REGISTRY: &[RuleSpec] = &[ /* 每条参数/格式规则一行 */ 
 
 - orchestrator.rs `run_host_initial`（:712-741）：`system.push_str(crate::rules::checklist(req.mode.to_str_name()))` —— 与审改员/校验员同口径（一行）
 - prompts.rs 四个模式指令中的数值段（350 字符/12-20/85-95/配器 3-7 件/能量差≥3/说明行 80 等）改为 `format!` 运行时拼装引用 rules 常量——手写数字从源头消灭（守护测试见 3.2）
+  - ⚠️ 2026-09-18 更正：上句"说明行 80"已过时，现行单源 `rules::DESC_LINE_MAX_CHARS = 200`（经 `${DESC_LINE_MAX}` 占位符插值，四模式同门）；其余数值段结论不变。
 - 注意：`prompt_for_mode` 返回 `&'static str` 改为 `String`——调用方（:712）同步调整；知识库覆盖机制（`set_prompt_override_dir`）的 override 文件语义不变（仍整段替换）
 
 ### 3.4 D4：冲突预检标注
@@ -129,6 +163,13 @@ pub const RULE_REGISTRY: &[RuleSpec] = &[ /* 每条参数/格式规则一行 */ 
   R-3：人声终裁归制作人/参数弧线终裁归情感分析师），并在方案后注明取舍理由。
   ```
 - 领地声明表（TERRITORY 表，rules.rs 新增常量）：`(target, 角色) → 终裁者` 的静态映射，与 roles.rs 的领地声明文字同源（用测试锁定二者一致）
+
+> ⚠️ 2026-09-18 第八批更正注记（D4 的落地缺口与补法）
+> **缺口**：D4 只做了"user 侧注入裁决指引"这一半——`territory_adjudication_text` 要求主持人"按领地声明裁决、注明取舍理由"，而主持人 **system 人设** 仍写"**只做整合，不自己改细节**"。同一职责两个对立口径，裁决指引被 system 抵消 → 冲突实际仍无人裁决；且无任何守护测试。
+> **补法（两腿缺一不可）**：
+> 1. **口径单源**：`rules::territory_rules_text()`（`TERRITORY_RULES` 的唯一 prose 形态）→ `${TERRITORY_RULES}` 占位符 → 主持人人设；`territory_adjudication_text` 同读这一份。人设 item 2 改写为"**不自己发明细节**（细节仍归专业角色）+ **冲突必须裁决**（按领地声明判定归属、采用终裁者写法、NOTES 注明取舍理由）"。
+> 2. **双载体锚点锁**：`rules::ADJUDICATION_KEYS = ["领地声明","裁决","取舍理由"]`，测试 `adjudication_language_single_sourced_across_host_persona_and_injection` 断言**主持人人设（interpolate 后）与冲突注入**两个载体都必须命中三锚点，并反查旧口径"只做整合/不自己改细节"零残留、人设领地声明与 `territory_rules_text()` 逐字同源。
+> 3. **前提修复**：并发的 `join_all` 使同轮修订互不可见——讨论轮改**阵容序串行** + `round_peers` 同轮可见块（`build_role_review_user_prompt` 纯函数，三段分工：当前方案 / 本轮同轮修订 / 往轮修订），冲突在**产生时**即可被看到与反对；`discussion_round_review_is_serial_with_same_round_visibility` 以源码形状锁"阵容序串行要素齐备、`join_all`/`review_futs` 零残留"。
 
 ### 3.5 D5：诚实降级聚合
 
@@ -154,6 +195,8 @@ pub const RULE_REGISTRY: &[RuleSpec] = &[ /* 每条参数/格式规则一行 */ 
 | localStorage 设置 | 不动 | 无新字段 |
 | 知识库 CSV | 不动 | override 机制不变 |
 | 提示词手写数值 | **退役**（format! 化） | 生成结果与原文逐字节一致（快照测试锁定） |
+| 讨论轮并发（`join_all` + `index*2s` 错峰） | **退役**（第八批，改阵容序串行） | 旧并发测试 `concurrent_reviews_preserve_order_and_fail_fast` 删除，替换为串行语义 + 同轮可见性守护；前端并发叙事（横幅 / `round.parallel.hint` / 3 项用例）同批收回 |
+| 冲突"事后整合"口径 | **退役**（第八批，改"必须裁决 + 注明取舍理由"） | 主持人人设与 `territory_adjudication_text` 同读 `territory_rules_text()`，`ADJUDICATION_KEYS` 双载体锁定；旧口径"只做整合/不自己改细节"零残留断言 |
 | 叙事型例外条款 | **改写**（引用代码行为） | 语义不变，表述对齐执行 |
 | extra 旧协议兼容层 | **保留** | 老前端兼容契约仍有效 |
 | 功能开关 | 新增 `features: {strict_param_gate, transcription_fidelity}`，默认 true | Settings 透传，出问题可不发版关闭（后端读默认值） |
@@ -199,7 +242,7 @@ Phase 4：
 |------|------|
 | 参数门-B | Weirdness=50 → fail"区间"；20/75 边界值 → pass |
 | 参数门-抖音 | Weirdness=15/Style=88 → pass；50/50 → 结构非叙事型 → fail；50/50+叙事型结构+归类说明 → pass |
-| 死常量守护 | 每个 RULE_REGISTRY 常量在 src 有非测试消费者（grep 生成断言）——删掉执行点 CI 即红 |
+| 死常量守护 | 每个 RULE_REGISTRY 常量在 src 有非测试消费者；执行者须有**调用点**（`has_call_site`，排除定义/注释）——删掉执行点或不接线 CI 即红（2026-09-18 第三批由文本匹配升级为调用点校验） |
 | 手写数字归零 | grep 断言 prompts.rs/roles.rs 无白名单外数字字面量 |
 | 保真校验 | 字数篡改（7→8）/加行/删行/纯格式化（应 pass）四用例；issue 含精确行号 |
 | 定点重写 | 违规段替换后其余段落逐字节不变 |

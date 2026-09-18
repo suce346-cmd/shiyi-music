@@ -2,8 +2,9 @@ import { describe, it, expect } from "vitest";
 import { orderRoundSpeech, rosterOrder, assembleFinalTurns } from "./speechOrder";
 import type { ChatTurn } from "../types";
 
-/** 修复包 D-1（#13 界面层）：并发审改时专家发言按事件到达序插入，与后端汇总
- * 顺序（阵容序）不一致 → "发言打架"观感。
+/** 修复包 D-1（#13 界面层）：专家发言按**阵容序**归位（与后端汇总顺序一致）→
+ * 消除到达序 ≠ 阵容序造成的"发言打架"观感。
+ * #14：后端已改阵容序串行（到达序 == 阵容序），本模块成幂等兜底，断言不变。
  * 规则边界：排序作用域是**本轮**（末尾连续 expert 段），跨轮永不重排。 */
 
 const sp = (id: string, seq: number): ChatTurn => ({
