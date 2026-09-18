@@ -2464,7 +2464,9 @@ mod tests {
     #[test]
     fn interject_feedback_does_not_fabricate_request() {
         let src = include_str!("orchestrator.rs");
-        let prod = src.split("#[cfg(test)]").next().expect("生产段缺失");
+        // 生产段提取共用单源工具（rules::production_segment）——旧写法"取第一个 #[cfg(test)] 之前"
+        // 在"测试模块位于文件中段"的文件上会把生产代码一起剔掉，断言静默空转（第十三批 D5 实测）。
+        let prod = crate::rules::production_segment(src);
         let phantom_host = format!("placeholder{}", ".invalid");
         let credential_assign = format!("api_key{} \"", ":");
         assert!(

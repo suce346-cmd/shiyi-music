@@ -744,8 +744,9 @@ fn is_forbidden_ip(ip: std::net::IpAddr) -> bool {
     }
 }
 
-/// 字符数超限报错（准入限额的唯一报错出口）
-fn too_long(field: &str, len: usize, max: usize) -> AppError {
+/// 字符数超限报错（准入限额在**全部入口**的唯一报错出口：整请求准入与中途插话
+/// 共用同一文案形状——同一条规则无论被哪道闸拦下，用户看到的说法必须一致）。
+pub(crate) fn too_long(field: &str, len: usize, max: usize) -> AppError {
     AppError::new(
         ErrorKind::Validation,
         format!("{}过长（{} 字符，上限 {}），请精简后重试", field, len, max),

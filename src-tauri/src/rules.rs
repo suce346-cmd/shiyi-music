@@ -125,9 +125,26 @@ pub const STYLE_PROMPT_MIN_MODES: &[&str] = &["mode_a", "mode_b", "mode_d"];
 /// 取值必须与 `models::Mode::to_str_name()` 逐一对应（守护测试锁定）。
 pub const ALL_MODES: &[&str] = &["mode_a", "mode_b", "mode_c", "mode_d"];
 
+/// 规则执行者所在文件的**声明式扫描面**——守护测试 `rule_registry_symbols_have_executors` 消费。
+///
+/// 为什么是生产侧常量、而不是测试内的字面量数组：扫描路径硬编码在测试里时，新增执行者
+/// 所在文件不会自动进网（第十三批 D1 实测：准入限额的执行者在 `models`/`interject`，
+/// 而扫描面只有 `validator`/`orchestrator`——三条规则注册进表也照旧"绿灯裸奔"）。
+/// 登记即入网；未登记的新文件不会静默漏网，而是**直接报红**（"执行器无调用点"），
+/// 因为该执行者在扫描面内找不到任何调用点。
+pub const RULE_EXECUTOR_FILES: &[&str] = &[
+    // 产出硬门执行者
+    "commands/validator.rs",
+    "commands/orchestrator.rs",
+    // 准入硬门执行者（#26 新增三条规则所在处）
+    "models/mod.rs",
+    "commands/interject.rs",
+];
+
 /// C1/ADR-2：规则注册表——每条硬门规则一个条目，"每条规则唯一执行者"的机读清单。
-/// 守护测试 `rule_registry_constants_have_executors` 保证：constants 列出的每个常量
-/// 必须在执行文件中有真实消费者（死常量在 CI 即失败）。
+/// 守护测试 `rule_registry_symbols_have_executors` 保证两件事：
+/// ① `symbols` 列出的每个符号在 `RULE_EXECUTOR_FILES` 内有真实消费者（死常量在 CI 即失败）；
+/// ② `executor` 在 `RULE_EXECUTOR_FILES` 内有**真实调用点**（只定义不接线同样在 CI 即失败）。
 pub struct RuleSpec {
     pub id: &'static str,
     pub modes: &'static [&'static str],
@@ -161,6 +178,17 @@ pub const RULE_REGISTRY: &[RuleSpec] = &[
     RuleSpec { id: "lyric_fill_tail_allow", modes: &["mode_c"], symbols: &["LYRIC_FILL_TAIL_ALLOW"], executor: "validate_lyric_fill" },
     // D-Envelope：方案信封契约——解析器是"方案是否符合结构"的唯一执行者（2026-09-09）
     RuleSpec { id: "plan_envelope_contract", modes: &["mode_a", "mode_b", "mode_c", "mode_d"], symbols: &["parse_plan_sections", "envelope_spec"], executor: "enforce_envelope" },
+    // -----------------------------------------------------------------------
+    // 准入限额族（第十三批 D1 补登记）：与上面 16 条"产出硬门"不同，这三条是**请求准入硬门**
+    // （§6.4 验收口径是"每条参数/格式规则恰有一个执行点"，未按产出/准入分类豁免）。
+    // 不登记 = 规则表里没有它们，删掉执行点/换掉常量都不会有守护测试报红。
+    // 执行者在 `models`/`commands::interject`（非 validator），故 `RULE_EXECUTOR_FILES` 已扩至这两个文件。
+    // modes 取全模式：准入限额与模式无关（任何模式的请求都过同一道闸）。
+    // 注意 `interject_max_per_run` 的执行者写作限定路径：`push` 是 `Vec::push` 同名的常见名，
+    // 裸名会命中任意容器的 `push(`，守护变成假绿。
+    RuleSpec { id: "input_max_chars", modes: ALL_MODES, symbols: &["INPUT_MAX_CHARS"], executor: "validate_request" },
+    RuleSpec { id: "feedback_max_chars", modes: ALL_MODES, symbols: &["FEEDBACK_MAX_CHARS"], executor: "validate_feedback" },
+    RuleSpec { id: "interject_max_per_run", modes: ALL_MODES, symbols: &["INTERJECT_MAX_PER_RUN"], executor: "interject::push" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -676,6 +704,41 @@ pub fn territory_adjudication_text(role_a: &str, role_b: &str, target: &str) -> 
 /// 载体：`roles::host().system_prompt`（经 interpolate）与 `territory_adjudication_text`。
 pub const ADJUDICATION_KEYS: &[&str] = &["领地声明", "裁决", "取舍理由"];
 
+/// 生产段提取（**测试专用**共享工具：本文件与 `commands/orchestrator.rs` 的文本级守护共用）。
+///
+/// 语义：删掉每个 `#[cfg(test)]` 属性行及其后到**列 0 的收尾 `}`** 为止的测试条目，返回真正的生产代码。
+///
+/// 为什么不能用"取第一个 `#[cfg(test)]` 之前"（第十三批 D5 实测缺陷，属"绿灯空转"）：
+/// `models/mod.rs` 的测试模块位于文件**中段**（L68），其后的 `too_long`/`validate_feedback`/
+/// `validate_request` 全在测试模块**之后**——旧写法下 models 的"生产段"只剩前 67 行，
+/// 于是"不得复述限额数值""不得出现凭据形状字面量"两条断言对 models **完全空转**
+/// （实测：往 `too_long` 上加一行"上限 2000"注释，断言照旧绿灯）。
+/// 判据用 rustfmt 的固定形态：`#[cfg(test)]` 行与顶层测试模块的收尾 `}` 都在列 0，
+/// 模块内嵌套项的收尾 `}` 一律带缩进——故"列 0 的 `}`"即模块结束。
+/// 提取正确性由 `production_segment_excludes_mid_file_test_module` 双向自证
+/// （必须含生产函数、必须不含测试函数）——提取逻辑一旦失效即报红，不会静默空转。
+#[cfg(test)]
+pub(crate) fn production_segment(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut skipping = false;
+    for line in src.split_inclusive('\n') {
+        let body = line.trim_end_matches('\n');
+        if skipping {
+            // 顶层测试模块的收尾：列 0 的 `}`
+            if body == "}" {
+                skipping = false;
+            }
+            continue;
+        }
+        if body.trim_start().starts_with("#[cfg(test)]") {
+            skipping = true;
+            continue;
+        }
+        out.push_str(line);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -965,27 +1028,59 @@ mod tests {
         false
     }
 
-    /// D2 守护：注册表每条规则的执行器必须在 validator/orchestrator 中**存在真实调用点**
-    /// （而非仅同名符号出现），且每个登记的消费符号在 rules.rs 之外有消费者——
+    /// 判定 `n` 的十进制写法在源码中作为**独立数字 token** 出现（前后紧邻字符都不是数字）。
+    ///
+    /// 旧实现直接 `src.contains(&n.to_string())`：`2000` 会命中 `12000` 的**子串**，
+    /// 把无关数字误报成"复述限额数值"。误报的代价不是安全，而是**守护网被改松**
+    /// （被误伤的人只会去删断言），故改为 token 级判定。
+    fn contains_standalone_number(src: &str, n: usize) -> bool {
+        let needle = n.to_string();
+        let bytes = src.as_bytes();
+        let mut from = 0usize;
+        while let Some(rel) = src[from..].find(needle.as_str()) {
+            let at = from + rel;
+            let end = at + needle.len();
+            let prev_is_digit = at > 0 && bytes[at - 1].is_ascii_digit();
+            let next_is_digit = end < bytes.len() && bytes[end].is_ascii_digit();
+            if !prev_is_digit && !next_is_digit {
+                return true;
+            }
+            from = end;
+        }
+        false
+    }
+
+    /// D2 守护：注册表每条规则的执行器必须在 `RULE_EXECUTOR_FILES` 中**存在真实调用点**
+    /// （而非仅同名符号出现），且每个登记的消费符号在同一扫描面内有消费者——
     /// 删掉执行点/只定义不接线即红，防止常量退化成"只有承诺没有执行"的死常量
     /// （诊断铁证：参数区间零执行；第三批铁证：style_prompt_max 在 C/D 无执行者、
     /// douyin_bpm_min 错挂不消费其常量的函数）。
+    ///
+    /// 第十三批 D1：扫描面由**测试内硬编码的两个文件**改为生产侧声明常量 `RULE_EXECUTOR_FILES`。
+    /// 旧写法下新增执行者所在文件不会自动入网，规则注册了也照旧绿灯（准入限额族实测）；
+    /// 现写法下"执行者不在扫描面"会直接报红，逼出登记动作——漏登记不再静默。
     #[test]
     fn rule_registry_symbols_have_executors() {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let validator = std::fs::read_to_string(src.join("commands/validator.rs")).expect("读 validator.rs 失败");
-        let orchestrator = std::fs::read_to_string(src.join("commands/orchestrator.rs")).expect("读 orchestrator.rs 失败");
+        let files: Vec<(&str, String)> = RULE_EXECUTOR_FILES
+            .iter()
+            .map(|rel| {
+                let body = std::fs::read_to_string(src.join(rel))
+                    .unwrap_or_else(|e| panic!("读扫描面文件 {} 失败（路径写错？）: {}", rel, e));
+                (*rel, body)
+            })
+            .collect();
         assert!(RULE_REGISTRY.len() >= 15, "注册表条目数异常: {}", RULE_REGISTRY.len());
         for rule in RULE_REGISTRY {
             assert!(
-                has_call_site(&validator, rule.executor) || has_call_site(&orchestrator, rule.executor),
-                "规则 {} 的执行器 {} 在 validator/orchestrator 中无调用点（只定义不接线）",
-                rule.id, rule.executor
+                files.iter().any(|(_, s)| has_call_site(s, rule.executor)),
+                "规则 {} 的执行器 {} 在扫描面 {:?} 中无调用点（只定义不接线；若执行者在新文件，请登记进 rules::RULE_EXECUTOR_FILES）",
+                rule.id, rule.executor, RULE_EXECUTOR_FILES
             );
             for sym in rule.symbols {
                 assert!(
-                    validator.contains(sym) || orchestrator.contains(sym),
-                    "死常量回归：{} 被规则 {} 注册但 rules.rs 之外无消费者",
+                    files.iter().any(|(_, s)| s.contains(sym)),
+                    "死常量回归：{} 被规则 {} 注册但扫描面内无消费者",
                     sym, rule.id
                 );
             }
@@ -1030,19 +1125,23 @@ mod tests {
         assert!(models.contains("FEEDBACK_MAX_CHARS + 1"), "反馈越界夹具须由常量派生");
         assert!(ij.contains("FEEDBACK_MAX_CHARS + 1"), "插话槽越界夹具须由常量派生");
         assert!(orch.contains("FEEDBACK_MAX_CHARS + 1"), "插话入口越界夹具须由常量派生");
-        // ④⑤ 生产段（`#[cfg(test)]` 之前）：不复述限额数值，且无凭据形状字面量。
+        // ④⑤ 生产段（剔除全部 `#[cfg(test)]` 条目）：不复述限额数值，且无凭据形状字面量。
         // 扫描针分片拼装——否则断言自己就成了新的"占位域名/凭据字段"字面量。
         let phantom_host = format!("placeholder{}", ".invalid");
         let credential_assign = format!("api_key{} \"", ":");
-        for (name, full) in [
-            ("models/mod.rs", &models),
-            ("commands/orchestrator.rs", &orch),
-            ("commands/interject.rs", &ij),
+        for (name, full, prod_fn, test_fn) in [
+            ("models/mod.rs", &models, "pub fn validate_request(", "fn validate_feedback_boundaries("),
+            ("commands/orchestrator.rs", &orch, "pub async fn interject_feedback", "fn interject_feedback_enforces_single_sourced_limit("),
+            ("commands/interject.rs", &ij, "pub(crate) fn push(", "fn interject_limits_error_instead_of_silent_drop("),
         ] {
-            let prod = full.split("#[cfg(test)]").next().expect("生产段缺失");
+            let prod = production_segment(full);
+            // 双向自证：提取逻辑一旦失效（如把中段测试模块之后的代码也剔掉），下面两条断言会**静默空转**
+            // ——D5 实测过这个失败模式，故先钉住提取正确性：必须含生产函数、必须不含测试函数。
+            assert!(prod.contains(prod_fn), "{} 生产段提取异常：缺生产函数 {}", name, prod_fn);
+            assert!(!prod.contains(test_fn), "{} 生产段提取异常：未剔除测试函数 {}", name, test_fn);
             for v in [INPUT_MAX_CHARS, FEEDBACK_MAX_CHARS] {
                 assert!(
-                    !prod.contains(&v.to_string()),
+                    !contains_standalone_number(&prod, v),
                     "{} 生产段复述了限额数值 {}——数值唯一真源在本文件，请引用常量",
                     name, v
                 );
@@ -1061,6 +1160,42 @@ mod tests {
         assert!(has_call_site("fn foo() {}\nlet x = foo(1);", "foo"), "真实调用应为 true");
         assert!(has_call_site("async fn bar() { baz(1).await; }", "baz"), "普通调用应为 true");
         assert!(has_call_site("validator::foo(&x)", "foo"), "限定路径调用应为 true");
+    }
+
+    /// 生产段提取自证（第十三批 D5 红灯先行）：中段测试模块之后的生产代码必须保留，
+    /// 测试代码必须剔除——否则文本级断言会静默空转（D5 实测的失败模式）。
+    #[test]
+    fn production_segment_excludes_mid_file_test_module() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let models = std::fs::read_to_string(src.join("models/mod.rs")).expect("读 models/mod.rs 失败");
+        let prod = production_segment(&models);
+        assert!(prod.contains("pub fn validate_request("), "中段测试模块之后的生产代码必须保留");
+        assert!(prod.contains("pub(crate) fn too_long("), "中段测试模块之后的生产代码必须保留");
+        assert!(!prod.contains("fn validate_feedback_boundaries("), "测试函数必须被剔除");
+        assert!(!prod.contains("#[cfg(test)]"), "测试属性行必须被剔除");
+        // 提取后不得塌成"只剩文件头"：生产段必须显著长于测试段之外的残片
+        assert!(prod.lines().count() > 200, "生产段长度异常（{} 行）——提取逻辑可能剔多了", prod.lines().count());
+    }
+
+    /// 独立数字 token 判定自检（第十三批 D3 红灯先行）：子串不得误报，真值必须命中。
+    #[test]
+    fn standalone_number_ignores_substrings() {
+        assert!(contains_standalone_number("上限 = 2000;", 2000), "独立 token 应命中");
+        assert!(contains_standalone_number("上限 = 20000;", 20000), "独立 token 应命中");
+        assert!(
+            !contains_standalone_number("上限 = 12000;", 2000),
+            "12000 里的 2000 是子串，不得误报"
+        );
+        assert!(
+            !contains_standalone_number("上限 = 20000;", 2000),
+            "20000 里的 2000 是子串，不得误报（两个限额常量互不误伤）"
+        );
+        assert!(
+            !contains_standalone_number("上限 = 20001;", 20000),
+            "20001 里的 20000 是子串，不得误报"
+        );
+        assert!(!contains_standalone_number("上限 = 200;", 2000), "短数字不得命中");
+        assert!(!contains_standalone_number("无数字", 2000), "无命中应为 false");
     }
 
     #[test]

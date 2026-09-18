@@ -27,14 +27,9 @@ static SLOTS: std::sync::LazyLock<Mutex<HashMap<String, Vec<String>>>> =
 pub(crate) fn push(run_id: &str, text: String) -> Result<(), AppError> {
     let n = text.chars().count();
     if n > crate::rules::FEEDBACK_MAX_CHARS {
-        return Err(AppError::new(
-            ErrorKind::Validation,
-            format!(
-                "插话过长（{} 字符，上限 {}），请精简后重试",
-                n,
-                crate::rules::FEEDBACK_MAX_CHARS
-            ),
-        ));
+        // 报错文案同源：与整请求准入共用 `models::too_long` 这一唯一出口，
+        // 同一条规则被哪道闸拦下都给出同一种说法（旧写法在此手抄了一份格式串）。
+        return Err(crate::models::too_long("插话", n, crate::rules::FEEDBACK_MAX_CHARS));
     }
     let mut slots = SLOTS.lock().unwrap_or_else(|e| e.into_inner());
     let slot = slots.entry(run_id.to_string()).or_default();

@@ -13,6 +13,10 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
+/** 与 `useSettings.ts` 的同名常量逐字一致（沿用 sanitizeStored.test / persistNonSecrets.test 的既有约定） */
+const STORAGE_KEY = "suno-prompt-settings";
+const MIGRATED_KEY = "suno-prompt-keychain-migrated";
+
 const calls = (cmd: string) => invokeMock.mock.calls.filter((c) => c[0] === cmd);
 
 beforeEach(() => {
@@ -91,5 +95,35 @@ describe("useSettingsWithSecrets 密钥同步语义", () => {
     const sets = calls("keychain_set");
     expect(sets).toHaveLength(1);
     expect(sets[0][1]).toMatchObject({ account: "global", secret: "ak-abc" });
+  });
+});
+
+/** #7（U-2 迁移标记行为锁）：明文迁移标记只在**全部写入成功**后置位。
+ * 旧规则失败也置位——标记一置，明文迁移路径再也不会重试，明文静默留在 localStorage。
+ * 本组锁死两条：失败不置位且明文保留（下次启动可重试）/ 成功才置位。 */
+describe("U-2 迁移标记行为锁", () => {
+  it("迁移写入失败：不置标记，明文保留待下次启动重试", async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ apiKey: "ak-plain-legacy" }));
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "keychain_set") throw new Error("keychain locked");
+      return null; // keychain_get 一律 null：回填不改内存 → 不触发 persistNonSecrets 清洗
+    });
+
+    await renderReady();
+
+    expect(localStorage.getItem(MIGRATED_KEY)).toBeNull();
+    expect(localStorage.getItem(STORAGE_KEY)).toContain("ak-plain-legacy");
+  });
+
+  it("迁移写入成功：置标记（一次性迁移，不重复执行）", async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ apiKey: "ak-plain-legacy" }));
+
+    await renderReady();
+
+    expect(localStorage.getItem(MIGRATED_KEY)).toBe("1");
+    const sets = calls("keychain_set");
+    expect(
+      sets.some((c) => (c[1] as { secret?: string } | undefined)?.secret === "ak-plain-legacy"),
+    ).toBe(true);
   });
 });
