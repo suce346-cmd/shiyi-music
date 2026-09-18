@@ -1,2 +1,10 @@
-# P4 修复：Windows CI 快照测试因 checkout 换行符转换失败——fixture 强制 LF
+# 全仓强制 LF 检出（Windows CI 实证：autocrlf 的 CRLF 检出让源码解析类测试失灵，
+# 第二十五批后 CI windows 首次跑 --lib 即复现）。text=auto 对二进制自动豁免，
+# 图像格式显式标 binary 双保险。
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.icns binary
+
+# P4 修复的历史窄规（已被上方的全仓规则覆盖，保留作文档）
 tests/fixtures/prompts/*.txt eol=lf
