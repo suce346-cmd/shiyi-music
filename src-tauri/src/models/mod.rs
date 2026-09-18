@@ -107,8 +107,11 @@ mod tests {
         assert_eq!(v["detail"], "硬校验打回耗尽");
     }
 
-    /// #12 轮间确认门事件 wire format 锁——前端 union 依赖 type 与字段名，改名即红。
+    /// #12 轮间确认门事件 wire format 锁——**仅自证 Rust 侧**。
     /// 同时锁定 decision 取值与 `gate::GateDecision::as_str` 同源（协议单源）。
+    /// 第二十一批更正注记：原注称"前端 union 依赖 type 与字段名，改名即红"——**当时为假**：
+    /// 本测试把 Rust 字面量又抄一遍自证，前端零约束（实测改变体名后本测与前端全绿）。
+    /// 真正的**跨语言锁**是 `src/test/wireProtocol.test.ts`（前端 `?raw` 读本枚举逐位双向比对）。
     #[test]
     fn round_gate_events_wire_format() {
         let pending: Value = serde_json::to_value(PipelineEvent::RoundGatePending {
@@ -152,7 +155,9 @@ mod tests {
         assert_eq!(on.round_gate, Some(true));
     }
 
-    /// #27-c 退避事件 wire format 锁——前端 union 依赖 type 与字段名，改名即红。
+    /// #27-c 退避事件 wire format 锁——**仅自证 Rust 侧**（第二十一批更正注记：
+    /// 原注称"前端 union 依赖 type 与字段名，改名即红"，当时为假）。
+    /// 跨语言锁 = `src/test/wireProtocol.test.ts`。
     #[test]
     fn backoff_events_wire_format() {
         let start: Value = serde_json::to_value(PipelineEvent::Backoff {

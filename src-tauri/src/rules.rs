@@ -651,7 +651,7 @@ pub fn interpolate(text: &str) -> String {
 
 /// 占位符→值映射表（单源：全部由 rules 常量派生，无手写数字）。
 fn placeholder_pairs() -> Vec<(&'static str, String)> {
-    vec![
+    let mut pairs: Vec<(&'static str, String)> = vec![
         ("${STYLE_PROMPT_MAX}", STYLE_PROMPT_MAX_CHARS.to_string()),
         ("${STYLE_PROMPT_MIN}", STYLE_PROMPT_MIN_CHARS.to_string()),
         ("${DOUYIN_WEIRD_RANGE}", format!("{}-{}", DOUYIN_WEIRD_MIN, DOUYIN_WEIRD_MAX)),
@@ -677,7 +677,13 @@ fn placeholder_pairs() -> Vec<(&'static str, String)> {
         ("${ARC_TABLE}", arc_table_lines()),
         ("${ARC_INLINE}", arc_inline_list()),
         ("${TERRITORY_RULES}", territory_rules_text()),
-    ]
+    ];
+    // C4/D4：领地声明短语（单源 = TERRITORY_DECLARATIONS）——人设占位符展开为逐字相同文本，
+    // 短语只在 rules.rs 定义一次（旧实现三份手抄副本，改表不改人设不报红）。
+    for (_, _, placeholder, phrase) in TERRITORY_DECLARATIONS {
+        pairs.push((placeholder, (*phrase).to_string()));
+    }
+    pairs
 }
 
 /// 弧线参数表（从 ARC_PARAMS 运行时生成，供模式 prompt 的弧线十选一表插值）。
@@ -713,6 +719,30 @@ pub const TERRITORY_RULES: &[(&str, &str, &str)] = &[
     // 80 字上限 9/10-79% 违规率——收敛为制作人单一所有者，其他角色只提交素材；
     // 上限值不在本表复述（数字单源 see DESC_LINE_MAX_CHARS，本表只管归属）
     ("R-4", "说明行最终形态（限长合成）", "制作人"),
+];
+
+/// C4/D4：领地声明的**人设措辞单源**（依据, 领域, 人设占位符, 人设内短语）——按
+/// (rule_id, domain) 与 `TERRITORY_RULES` **逐行配对**。
+///
+/// 为什么必须单源（第二十一批·红灯先行实测）：旧测试把短语抄在 roles.rs 的 test-local
+/// `declarations` 里、按 **owner 名**查，而"制作人"同时拥有 R-3/R-4 两行 → 查到的永远是
+/// R-3 那条（`人声设计终裁权在你`），**R-4 的人设声明从未被校验**（空转）；且 test-local
+/// declarations + 4 条反向断言 + 人设原文构成同一短语的**三份手抄副本**——改表不改人设
+/// 不报红（实测把 R-4 领域改成探针串，测试仍全绿）。
+///
+/// 现口径：短语在此**定义一次**，人设经占位符展开为**逐字相同**文本（零文案变更）；
+/// 副本数 3 → 1。测试按 (rule_id, domain) 查配对并断言"人设引用了该占位符、插值后含该短语"。
+pub const TERRITORY_DECLARATIONS: &[(&str, &str, &str, &str)] = &[
+    ("R-2", "金句/Hook 文字形态", "${TERRITORY_DECL_R2_LYRICIST}", "金句/Hook 的文字形态与写法归你"),
+    (
+        "R-2",
+        "Hook 次数/位置/骤停/传播动态",
+        "${TERRITORY_DECL_R2_STYLE_ANALYST}",
+        "你只管次数、位置、骤停与传播动态",
+    ),
+    ("R-3", "人声设计", "${TERRITORY_DECL_R3_PRODUCER}", "人声设计终裁权在你"),
+    ("R-3", "参数与弧线匹配", "${TERRITORY_DECL_R3_EMOTION}", "参数与弧线匹配终裁权在你"),
+    ("R-4", "说明行最终形态（限长合成）", "${TERRITORY_DECL_R4_PRODUCER}", "说明行最终形态由你合成定稿"),
 ];
 
 /// C4/D4：领地声明文本（`TERRITORY_RULES` 的 prose 形态，单源）。
@@ -941,7 +971,10 @@ mod tests {
                     }
                     continue; // 测试区白名单
                 }
-                // `${...}` 占位符行天然合法：占位符名不含数字，无需排除
+                // `${...}` 占位符行天然合法，无需排除：本网只匹配显式阈值字面量（LITERALS）
+                // 与「数字+单位」紧邻对（如 `3件`/`80字符`）；占位符名里的规则编号
+                // （`${TERRITORY_DECL_R2_LYRICIST}` 的 `R2`，第二十一批起）既不在 LITERALS、
+                // 也不构成「数字+单位」，故不会被误报。
                 for hit in handwritten_rule_number_hits(raw) {
                     violations.push(format!("{}:{} \"{}\"", file, i + 1, hit));
                 }
@@ -1203,6 +1236,26 @@ mod tests {
             if p.is_dir() {
                 rust_sources_under(&p, out);
             } else if p.extension().map(|e| e == "rs").unwrap_or(false) {
+                out.push(p);
+            }
+        }
+    }
+
+    /// 前端 `src/` 树下全部 `.ts` / `.tsx` 文件（递归）——注释引用兜底网的**第二扫描面**。
+    ///
+    /// 第二十一批扩展：此前只扫 Rust `src/`，TS 注释里点名的 Rust 测试名**留在网外**
+    /// （现役：`types/index.ts` 的 round_gate / backoff 系列）。跨语言"声明的守护"
+    /// 与校验分处两域，是本项目反复出现的根因族，故与 Rust 面同法纳入。
+    fn frontend_sources_under(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("读前端源码目录失败") {
+            let p = entry.expect("目录项读取失败").path();
+            if p.is_dir() {
+                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if name == "node_modules" || name == "dist" {
+                    continue;
+                }
+                frontend_sources_under(&p, out);
+            } else if matches!(p.extension().and_then(|e| e.to_str()), Some("ts") | Some("tsx")) {
                 out.push(p);
             }
         }
@@ -1640,30 +1693,45 @@ mod tests {
     /// 该测试**不存在**（真名 `keyword_tables_have_no_structurally_unreachable_rows`）；
     /// 第十九批也查出过同类"声明的锁并不存在"。文档承诺的守护若无对应实现，
     /// 读者会以为已被覆盖——比没有守护更危险。
-    /// 判据：`src/` 下全部 `.rs` 中形如 `::tests::<名>` 的引用，必须能解析到某个 `fn <名>(`。
+    /// 判据：Rust `src/` 下全部 `.rs` + 前端 `../src` 下全部 `.ts`/`.tsx` 中形如
+    /// `::tests::<名>` 的引用，必须能解析到某个 `fn <名>(`（第二十一批扩展第二扫描面：
+    /// TS 注释里点名的 Rust 测试名此前留在网外）。
     #[test]
     fn comment_referenced_tests_exist() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut files: Vec<std::path::PathBuf> = Vec::new();
-        rust_sources_under(&root, &mut files);
+        let rust_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let fe_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src");
+        let mut rust_files: Vec<std::path::PathBuf> = Vec::new();
+        rust_sources_under(&rust_root, &mut rust_files);
+        let mut fe_files: Vec<std::path::PathBuf> = Vec::new();
+        frontend_sources_under(&fe_root, &mut fe_files);
+        // 第二扫描面自证：前端文件收不到（路径写错/目录不存在）时扩展静默失效
+        assert!(
+            fe_files.len() > 5,
+            "前端扫描面异常（{} 个 .ts/.tsx）——G1-b 的第二扫描面未生效",
+            fe_files.len()
+        );
         let defined = all_defined_fn_names();
         let mut missing: Vec<String> = Vec::new();
-        let mut seen = 0usize;
-        for f in &files {
-            let src = std::fs::read_to_string(f).unwrap_or_default();
-            for name in referenced_test_names(&src) {
-                seen += 1;
-                if !defined.contains(&name) {
-                    let rel = f.strip_prefix(&root).unwrap_or(f.as_path());
-                    missing.push(format!("{}: {}", rel.display(), name));
+        let mut seen_rust = 0usize;
+        let mut seen_fe = 0usize;
+        for (root, files, seen) in [
+            (&rust_root, &rust_files, &mut seen_rust),
+            (&fe_root, &fe_files, &mut seen_fe),
+        ] {
+            for f in files {
+                let src = std::fs::read_to_string(f).unwrap_or_default();
+                for name in referenced_test_names(&src) {
+                    *seen += 1;
+                    if !defined.contains(&name) {
+                        let rel = f.strip_prefix(root).unwrap_or(f.as_path());
+                        missing.push(format!("{}: {}", rel.display(), name));
+                    }
                 }
             }
         }
-        assert!(
-            seen >= 5,
-            "扫描面自证：全仓仅解析到 {} 处 `::tests::` 引用——本锁可能空转",
-            seen
-        );
+        // 两面各自自证：任一面为空/未接入时立刻报红（否则"扩展"可能只是空转）
+        assert!(seen_rust >= 5, "Rust 扫描面自证：仅 {} 处 `::tests::` 引用——本锁可能空转", seen_rust);
+        assert!(seen_fe >= 2, "前端扫描面自证：仅 {} 处 `::tests::` 引用——第二扫描面可能空转", seen_fe);
         assert!(missing.is_empty(), "注释点名的测试不存在（幽灵锁）：{:?}", missing);
     }
 

@@ -109,13 +109,16 @@ export interface RoleApiOverride {
 export type HostStage = "initial" | "summarize";
 
 /**
- * #12 轮间确认门决断（与 Rust `gate::GateDecision::as_str` 同源，wire format 由
- * `models::tests::round_gate_events_wire_format` 锁定）。
+ * #12 轮间确认门决断（与 Rust `gate::GateDecision::as_str` 同源）。
+ * 第二十一批更正注记：原注称"wire format 由 `models::tests::round_gate_events_wire_format` 锁定"
+ * ——**当时为假**，该测试只自证 Rust 侧字面量，对本联合零约束（实测改后端标签两侧全绿）。
+ * 真正的**跨语言锁**是 `src/test/wireProtocol.test.ts`（`?raw` 读 `gate.rs` 逐位比对）。
  * 前端只可提交 `continue` / `finalize`；`timeout` 由后端在等待超时后自产。
  */
 export type GateDecision = "continue" | "finalize" | "timeout";
 
-/** 流水线进度事件 */
+/** 流水线进度事件（`type` 名与各事件字段名的**跨语言锁** = `src/test/wireProtocol.test.ts`，
+ *  双向比对 Rust `models::PipelineEvent` 枚举；Rust 侧 `models::tests::*_wire_format` 只自证本侧）。 */
 export type PipelineEvent =
   | { type: "step_start"; role: PipelineRoleKey }
   | { type: "step_done"; role: PipelineRoleKey; summary: string }
@@ -139,8 +142,11 @@ export type PipelineEvent =
   | { type: "backoff_end"; attempt: number };
 
 /**
- * #27-c 退避原因（与 Rust `llm::BackoffReason::as_str` 同源，wire format 由
- * `llm::tests::backoff_reason_wire_format` + `orchestrator::tests::backoff_notice_maps_to_pipeline_event` 锁定）。
+ * #27-c 退避原因（与 Rust `llm::BackoffReason::as_str` 同源）。
+ * 第二十一批更正注记：原注称"wire format 由 `llm::tests::backoff_reason_wire_format` +
+ * `orchestrator::tests::backoff_notice_maps_to_pipeline_event` 锁定"——**当时为假**，
+ * 这两个测试只自证 Rust 侧（后者锁"通知→事件"映射，同样不碰前端），对本联合零约束。
+ * 真正的**跨语言锁**是 `src/test/wireProtocol.test.ts`（`?raw` 读 `llm.rs` 逐位比对）。
  * 取值即 i18n 文案键后缀（`status.backoff.<reason>`）——新增原因必须同时补中英文案。
  */
 export type BackoffReason = "rate_limit" | "server_error" | "network";
