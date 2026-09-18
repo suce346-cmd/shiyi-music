@@ -133,6 +133,25 @@ const zh: Strings = {
   "error.reload": "重新加载",
   "queue.waiting": "等待中",
   "queue.clear": "清空等待",
+  // #27-a/#27-b 厂商模板卡片 + 可搜索模型下拉 + API 地址格式层校验
+  "settings.providers": "厂商模板",
+  "settings.providers.hint": "点击填入该厂商的 API 地址与默认模型（不改动 API Key）",
+  "settings.model.ph": "搜索或输入模型名",
+  "settings.model.nomatch": "无匹配，可直接使用当前输入",
+  "settings.url.err.empty": "请填写 API 地址",
+  "settings.url.err.parse": "地址格式不正确（形如 https://api.example.com/v1）",
+  "settings.url.err.scheme": "仅支持 http/https 地址",
+  "settings.url.err.userinfo": "地址不允许携带用户名/密码",
+  "settings.url.err.localhost": "地址不能指向 localhost",
+  "settings.url.err.private_ip": "地址不能指向内网/环回/保留地址",
+  "provider.xfyun": "讯飞星辰",
+  "provider.deepseek": "DeepSeek",
+  "provider.openai": "OpenAI",
+  "provider.dashscope": "阿里云百炼",
+  "provider.zhipu": "智谱 GLM",
+  "provider.moonshot": "Moonshot Kimi",
+  "provider.volcengine": "火山方舟",
+  "provider.siliconflow": "硅基流动",
 };
 
 const en: Strings = {
@@ -264,6 +283,25 @@ const en: Strings = {
   "error.reload": "Reload",
   "queue.waiting": "waiting",
   "queue.clear": "Clear waiting",
+  // #27-a/#27-b provider templates + searchable model select + base-URL format check
+  "settings.providers": "Providers",
+  "settings.providers.hint": "Click to fill in this provider's base URL and default model (API Key untouched)",
+  "settings.model.ph": "Search or type a model",
+  "settings.model.nomatch": "No match — your input is used as-is",
+  "settings.url.err.empty": "Base URL is required",
+  "settings.url.err.parse": "Invalid URL (expected e.g. https://api.example.com/v1)",
+  "settings.url.err.scheme": "Only http/https URLs are supported",
+  "settings.url.err.userinfo": "Credentials in the URL are not allowed",
+  "settings.url.err.localhost": "The URL cannot point to localhost",
+  "settings.url.err.private_ip": "The URL cannot point to a private/loopback/reserved address",
+  "provider.xfyun": "iFlytek Spark",
+  "provider.deepseek": "DeepSeek",
+  "provider.openai": "OpenAI",
+  "provider.dashscope": "Alibaba Bailian",
+  "provider.zhipu": "Zhipu GLM",
+  "provider.moonshot": "Moonshot Kimi",
+  "provider.volcengine": "Volcengine Ark",
+  "provider.siliconflow": "SiliconFlow",
 };
 
 const DICTS: Record<Locale, Strings> = { zh, en };

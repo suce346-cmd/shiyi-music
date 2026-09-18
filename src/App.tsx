@@ -14,6 +14,10 @@ import { orderRoundSpeech, assembleFinalTurns } from "./utils/speechOrder";
 import { freezePartial, toChatMessages } from "./utils/partialDraft";
 import { useQueue, queueLabel, dequeueNext, terminalQueueStatus, queueResultEntry } from "./hooks/useQueue";
 import QueuePanel from "./components/QueuePanel";
+import SearchableSelect from "./components/SearchableSelect";
+import ProviderTemplates from "./components/ProviderTemplates";
+import { modelsForBaseUrl } from "./data/providers";
+import { formatUrlIssue } from "./utils/urlGuard";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import type { Mode, ChatMessage, ChatTurn, HistoryEntry, LLMStatus, ExpertCard, PipelineRoleKey } from "./types";
 import { MODE_LABELS, errText, isCancelledError } from "./types";
@@ -723,6 +727,11 @@ export default function App() {
 
   const filteredHistory = historyFilter === "all" ? historyEntries : historyEntries.filter(e => e.mode === historyFilter);
 
+  /** #27 配套：全局 baseUrl 的**格式层**校验（协议/userinfo/localhost/字面内网 IP）。
+   *  DNS 层判定在后端 `models::validate_url`（前端拿不到可靠解析结果，不重复这一层）。
+   *  非 null 时：输入框下方给出原因，"测试连接"同步置灰（不再让必失败的按钮看起来可用）。 */
+  const baseUrlIssue = formatUrlIssue(settings.baseUrl);
+
   return (
     <div className="h-screen flex flex-col overflow-hidden">
       {/* Top bar */}
@@ -770,13 +779,17 @@ export default function App() {
                          focus:border-brand-500/40 focus:ring-1 focus:ring-brand-500/20
                          transition-all duration-150 disabled:opacity-50" placeholder={secretsReady ? "sk-...（清空后留空 = 沿用已保存的 Key）" : "密钥加载中…"} />
           </div>
+          {/* #27-a 厂商模板卡片：点击 = 写入该厂商 baseUrl + 默认模型（不动 API Key） */}
+          <ProviderTemplates baseUrl={settings.baseUrl} locale={settings.language}
+            onApply={(p) => { updateSettings({ baseUrl: p.baseUrl, model: p.defaultModel }); setTestResult(null); }} />
           <div className="flex gap-2">
             <div className="flex-1">
               <label className="text-[11px] text-text-muted block mb-1">{t(settings.language, "settings.model")}</label>
-              <input value={settings.model} onChange={e => { updateSettings({ model: e.target.value }); setTestResult(null); }}
-                className="w-full bg-surface-0 border border-border/60 rounded-lg px-3 py-2 text-[13px]
-                           text-text-1 focus:outline-none focus:border-brand-500/40 focus:ring-1 focus:ring-brand-500/20
-                           transition-all duration-150" />
+              {/* #27-b 可搜索模型下拉：候选来自当前 baseUrl 命中的厂商模板，自由输入实时透传（不锁死） */}
+              <SearchableSelect value={settings.model} options={modelsForBaseUrl(settings.baseUrl)}
+                locale={settings.language} placeholder={t(settings.language, "settings.model.ph")}
+                ariaLabel={t(settings.language, "settings.model")}
+                onChange={(v) => { updateSettings({ model: v }); setTestResult(null); }} />
             </div>
             <div className="flex-1">
               <label className="text-[11px] text-text-muted block mb-1">{t(settings.language, "settings.baseurl")}</label>
@@ -784,6 +797,12 @@ export default function App() {
                 className="w-full bg-surface-0 border border-border/60 rounded-lg px-3 py-2 text-[13px]
                            text-text-1 focus:outline-none focus:border-brand-500/40 focus:ring-1 focus:ring-brand-500/20
                            transition-all duration-150" />
+              {/* 格式层校验结果（与后端 validate_url 同口径的前半段；DNS 层由后端兜底） */}
+              {baseUrlIssue && (
+                <p className="text-[9px] text-danger mt-1 leading-relaxed">
+                  {t(settings.language, `settings.url.err.${baseUrlIssue}`)}
+                </p>
+              )}
             </div>
           </div>
           {/* 思考模式：后端按模型能力路由表自动注入厂商思考参数（DeepSeek/讯飞 → thinking；o 系/gpt-5 → reasoning_effort；未登记模型自动忽略） */}
@@ -854,7 +873,8 @@ export default function App() {
                 className="w-20 bg-surface-0 border border-border/60 rounded-lg px-2 py-1 text-[12px] text-text-1 focus:outline-none focus:border-brand-500/40 transition-all duration-150" />
             </div>
           </div>
-          <button onClick={handleTestApi} disabled={testingApi || !settings.apiKey || !secretsReady}
+          {/* 地址格式层不过 → 置灰（该按钮此刻必然失败；与其做假 affordance，不如给出上面的原因） */}
+          <button onClick={handleTestApi} disabled={testingApi || !settings.apiKey || !secretsReady || baseUrlIssue !== null}
             className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-[12px] font-medium
                        bg-surface-2 hover:bg-surface-3 border border-border/50 text-text-2
                        disabled:opacity-50 transition-all duration-150 active:scale-[0.98]">
@@ -887,7 +907,13 @@ export default function App() {
             </button>
             {showRoleApi && (
               <div className="mt-2 space-y-1.5 max-h-64 overflow-y-auto pr-0.5">
-                {(Object.keys(ROLE_NAMES) as PipelineRoleKey[]).map((role) => (
+                {(Object.keys(ROLE_NAMES) as PipelineRoleKey[]).map((role) => {
+                  /** 该角色**生效**的 API 地址（覆盖缺省继承全局）——模型候选与地址校验都以它为准 */
+                  const roleOverrideUrl = settings.roleOverrides?.[role]?.base_url?.trim() ?? "";
+                  const roleBaseUrl = roleOverrideUrl || settings.baseUrl;
+                  /** 留空 = 继承全局，故空值不算错；非空才校验（与全局同一套格式层判定） */
+                  const roleUrlIssue = roleOverrideUrl ? formatUrlIssue(roleOverrideUrl) : null;
+                  return (
                   <div key={role} className="rounded-lg border border-border/40 bg-surface-0/40 p-2">
                     <div className="flex items-center justify-between">
                       <span className="text-[11px] text-text-1">{ROLE_EMOJIS[role]} {ROLE_NAMES[role]}</span>
@@ -895,7 +921,7 @@ export default function App() {
                         {/* 角色级测试连接（测该角色的生效配置：覆盖缺省 fallback 全局） */}
                         <button
                           onClick={() => handleTestRoleApi(role)}
-                          disabled={roleTestStates[role] === "testing"}
+                          disabled={roleTestStates[role] === "testing" || roleUrlIssue !== null}
                           className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] border transition-colors ${
                             roleTestStates[role] === "ok"
                               ? "text-success border-success/40 bg-success/10"
@@ -917,10 +943,13 @@ export default function App() {
                     </div>
                     {expandedRole === role && (
                       <div className="mt-1.5 space-y-1.5">
-                        <input value={settings.roleOverrides?.[role]?.model ?? ""}
-                          onChange={e => updateRoleOverride(role, "model", e.target.value)}
+                        {/* 模型同样走可搜索下拉：候选 = 该角色**生效地址**命中的厂商模板（留空 = 继承全局） */}
+                        <SearchableSelect value={settings.roleOverrides?.[role]?.model ?? ""}
+                          options={modelsForBaseUrl(roleBaseUrl)} locale={settings.language}
                           placeholder="模型（留空继承全局）"
-                          className="w-full bg-surface-0 border border-border/60 rounded-lg px-2.5 py-1.5 text-[11px] text-text-1 placeholder:text-text-muted/30 focus:outline-none focus:border-brand-500/40 transition-all duration-150" />
+                          ariaLabel={`${ROLE_NAMES[role]} 模型`}
+                          onChange={(v) => updateRoleOverride(role, "model", v)}
+                          inputClassName="w-full bg-surface-0 border border-border/60 rounded-lg px-2.5 py-1.5 text-[11px] text-text-1 placeholder:text-text-muted/30 focus:outline-none focus:border-brand-500/40 transition-all duration-150" />
                         <input value={settings.roleOverrides?.[role]?.api_key ?? ""}
                           onChange={e => updateRoleOverride(role, "api_key", e.target.value)}
                           placeholder="API Key（留空继承全局）"
@@ -929,10 +958,16 @@ export default function App() {
                           onChange={e => updateRoleOverride(role, "base_url", e.target.value)}
                           placeholder="API 地址（留空继承全局）"
                           className="w-full bg-surface-0 border border-border/60 rounded-lg px-2.5 py-1.5 text-[11px] text-text-1 placeholder:text-text-muted/30 focus:outline-none focus:border-brand-500/40 transition-all duration-150" />
+                        {roleUrlIssue && (
+                          <p className="text-[9px] text-danger leading-relaxed">
+                            {t(settings.language, `settings.url.err.${roleUrlIssue}`)}
+                          </p>
+                        )}
                       </div>
                     )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
             <p className="text-[9px] text-text-muted mt-1.5 leading-relaxed">
