@@ -46,15 +46,24 @@ impl From<&str> for AppError {
     }
 }
 
-impl AppError {
-    /// API HTTP 状态分类：401/403=Auth，429=RateLimit，5xx=Network（瞬时故障可重试含义见 llm.rs），其余=Network
-    pub fn api_status(status: u16, body: &str) -> Self {
-        let kind = match status {
+impl ErrorKind {
+    /// HTTP 状态 → 错误类别（**唯一单源**）：401/403=Auth，429=RateLimit，
+    /// 5xx 及其他=Network（瞬时故障可重试含义见 llm.rs）。
+    /// 有响应体时走 `AppError::api_status`，无响应体（重试耗尽的终态）走本函数——
+    /// 两处同源，避免"带体分类"与"不带体分类"各自 match 一份而漂移。
+    pub fn for_status(status: u16) -> Self {
+        match status {
             401 | 403 => ErrorKind::Auth,
             429 => ErrorKind::RateLimit,
             _ => ErrorKind::Network,
-        };
-        Self::new(kind, format!("API returned {}: {}", status, body))
+        }
+    }
+}
+
+impl AppError {
+    /// API HTTP 状态分类：类别由 `ErrorKind::for_status` 单源给出
+    pub fn api_status(status: u16, body: &str) -> Self {
+        Self::new(ErrorKind::for_status(status), format!("API returned {}: {}", status, body))
     }
 }
 

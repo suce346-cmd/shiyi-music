@@ -132,7 +132,29 @@ export type PipelineEvent =
   /** #12 轮间确认门开启：流水线已暂停，等用户决断（timeout_secs 后自动继续） */
   | { type: "round_gate_pending"; round: number; next_round: number; timeout_secs: number }
   /** #12 门已解除（decision ∈ continue / finalize / timeout） */
-  | { type: "round_gate_resolved"; round: number; decision: GateDecision };
+  | { type: "round_gate_resolved"; round: number; decision: GateDecision }
+  /** #27-c 进入退避等待（原因 + 实际等待秒数，前端据此显示倒计时） */
+  | { type: "backoff"; attempt: number; wait_secs: number; reason: BackoffReason }
+  /** #27-c 退避结束、即将重试（前端据此撤下倒计时） */
+  | { type: "backoff_end"; attempt: number };
+
+/**
+ * #27-c 退避原因（与 Rust `llm::BackoffReason::as_str` 同源，wire format 由
+ * `llm::tests::backoff_reason_wire_format` + `orchestrator::tests::backoff_notice_maps_to_pipeline_event` 锁定）。
+ * 取值即 i18n 文案键后缀（`status.backoff.<reason>`）——新增原因必须同时补中英文案。
+ */
+export type BackoffReason = "rate_limit" | "server_error" | "network";
+
+/** #27-c 退避等待态（usePipeline 维护；StatusIndicator 据此渲染倒计时） */
+export interface BackoffInfo {
+  /** 第几次尝试即将重试（1 起，与后端 attempt 同义） */
+  attempt: number;
+  /** 后端给出的实际等待秒数（已含抖动） */
+  waitSecs: number;
+  reason: BackoffReason;
+  /** 本端收到事件的时刻（倒计时基准；用本端时钟避免与后端时钟漂移） */
+  startedAt: number;
+}
 
 /** 事件信封（后端统一包 envelope 传输；run_id 归属，旧裸事件不再出现） */
 export interface PipelineEnvelope {
@@ -155,9 +177,17 @@ export function errText(e: unknown): string {
   return String(e);
 }
 
+/** 结构化错误取 kind——非结构化错误返回 null（与 errText 同源：同一个 e 的两个投影） */
+export function errKind(e: unknown): AppError["kind"] | null {
+  if (e && typeof e === "object" && typeof (e as AppError).kind === "string") {
+    return (e as AppError).kind;
+  }
+  return null;
+}
+
 /** 是否取消错误（Q4：取消走空闲通道，不标红；结构化 kind 与文案双认） */
 export function isCancelledError(e: unknown): boolean {
-  if (e && typeof e === "object" && (e as AppError).kind === "cancelled") return true;
+  if (errKind(e) === "cancelled") return true;
   const msg = errText(e);
   return msg.includes("取消") || msg.includes("cancel");
 }

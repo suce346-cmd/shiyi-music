@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { IconLoader, IconCheck, IconAlertTriangle, IconRefresh, IconMessagePlus } from "@tabler/icons-react";
-import type { LLMStatus, Locale } from "../types";
+import { IconLoader, IconCheck, IconAlertTriangle, IconRefresh, IconMessagePlus, IconClock } from "@tabler/icons-react";
+import type { AppError, BackoffInfo, BackoffReason, LLMStatus, Locale } from "../types";
 import { errText } from "../types";
-import { t } from "../i18n";
+import { t, tf } from "../i18n";
 
 interface Props {
   status: LLMStatus;
@@ -19,6 +19,10 @@ interface Props {
   getRunId?: () => string;
   /** 界面语言（缺省中文） */
   locale?: Locale;
+  /** #27-c：后端退避等待态（非空 = 正在等配额/服务端恢复后重试，显示原因 + 倒计时） */
+  backoff?: BackoffInfo | null;
+  /** #27-c：终态错误类别（rate_limit 时额外给可操作指引，与错误正文区分"该等"还是"该换 Key"） */
+  errorKind?: AppError["kind"] | null;
 }
 
 /** 状态文案 key（locale 运行时解析） */
@@ -38,12 +42,36 @@ const config: Record<LLMStatus, { icon: typeof IconLoader; color: string; bg: st
   error: { icon: IconAlertTriangle, color: "text-danger", bg: "bg-danger/8" },
 };
 
-export default function StatusIndicator({ status, errorMessage, onRetry, onResume, onCancel, getRunId, locale, canRetry = true }: Props) {
+/** 退避原因 → 文案 key（**单源**：Record 穷尽约束，后端新增原因时必须在此补键，
+ *  否则 TS 报缺项——避免"后端发了新原因、前端显示成 key 字面量"）。 */
+const BACKOFF_TEXT_KEY: Record<BackoffReason, string> = {
+  rate_limit: "status.backoff.rate_limit",
+  server_error: "status.backoff.server_error",
+  network: "status.backoff.network",
+};
+
+export default function StatusIndicator({ status, errorMessage, onRetry, onResume, onCancel, getRunId, locale, canRetry = true, backoff, errorKind }: Props) {
   /** 插话输入展开态 + 发送中 + 结果提示 */
   const [showInterject, setShowInterject] = useState(false);
   const [note, setNote] = useState("");
   const [sending, setSending] = useState(false);
   const [msg, setMsg] = useState("");
+  /** #27-c 倒计时剩余秒数（每秒重算；以本端时钟为基准，不受后端时钟漂移影响） */
+  const [remaining, setRemaining] = useState(0);
+
+  // hooks 必须先于下面的提前 return（idle 直接不渲染）——否则条件调用 hooks 违反规则
+  useEffect(() => {
+    if (!backoff) {
+      setRemaining(0);
+      return;
+    }
+    const compute = () =>
+      Math.max(0, backoff.waitSecs - Math.floor((Date.now() - backoff.startedAt) / 1000));
+    setRemaining(compute());
+    const id = setInterval(() => setRemaining(compute()), 1000);
+    return () => clearInterval(id);
+  }, [backoff]);
+
   if (status === "idle") return null;
   const c = config[status];
   const Icon = c.icon;
@@ -125,6 +153,22 @@ export default function StatusIndicator({ status, errorMessage, onRetry, onResum
           </div>
         )}
       </div>
+      {/* #27-c 退避等待：此前这段最长 60s+抖动 的等待 UI 完全静止，用户误判卡死。
+          原因文案 + 实时倒计时 + 第几次尝试，三件一起给出"还在动"的确证。 */}
+      {backoff && running && (
+        <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-warning">
+          <IconClock size={12} className="shrink-0" />
+          <span className="font-medium">{t(locale, BACKOFF_TEXT_KEY[backoff.reason])}</span>
+          <span className="opacity-80">· {tf(locale, "status.backoff.wait", { secs: remaining })}</span>
+          <span className="opacity-60">· {tf(locale, "status.backoff.attempt", { n: backoff.attempt })}</span>
+        </div>
+      )}
+      {/* 限流终态指引：与"网络错误"区分——告诉用户该等还是该换 Key（#27-c 终态分类修复的 UI 落点） */}
+      {status === "error" && errorKind === "rate_limit" && (
+        <p className="mt-1.5 text-[11px] text-warning opacity-90">
+          {t(locale, "status.error.rate_limit.hint")}
+        </p>
+      )}
       {/* 插话输入区 */}
       {showInterject && running && (
         <div className="mt-2 flex gap-1.5">

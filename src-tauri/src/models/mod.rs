@@ -128,6 +128,25 @@ mod tests {
         assert_eq!(on.round_gate, Some(true));
     }
 
+    /// #27-c 退避事件 wire format 锁——前端 union 依赖 type 与字段名，改名即红。
+    #[test]
+    fn backoff_events_wire_format() {
+        let start: Value = serde_json::to_value(PipelineEvent::Backoff {
+            attempt: 1,
+            wait_secs: 30,
+            reason: "rate_limit".into(),
+        })
+        .unwrap();
+        assert_eq!(start["type"], "backoff", "snake_case tag: {}", start);
+        assert_eq!(start["attempt"], 1);
+        assert_eq!(start["wait_secs"], 30);
+        assert_eq!(start["reason"], "rate_limit");
+
+        let end: Value = serde_json::to_value(PipelineEvent::BackoffEnd { attempt: 1 }).unwrap();
+        assert_eq!(end["type"], "backoff_end", "snake_case tag: {}", end);
+        assert_eq!(end["attempt"], 1);
+    }
+
     #[test]
     fn mode_to_str_name() {
         assert_eq!(Mode::ModeA.to_str_name(), "mode_a");
@@ -894,6 +913,13 @@ pub enum PipelineEvent {
     /// #12 门已解除（用户决断或等待超时）——前端据此撤下确认条。
     /// decision ∈ continue / finalize / timeout（与 `gate::GateDecision::as_str` 同源）。
     RoundGateResolved { round: u32, decision: String },
+    /// #27-c 进入退避等待：请求失败（限流/服务端/网络）后本层不再静默等待，
+    /// 前端据此显示"原因 + 倒计时"（此前 30–65s 内 UI 完全静止，用户误判卡死）。
+    /// attempt = 第几次尝试即将重试（1 起）；wait_secs = 实际等待秒数（**已含抖动**）；
+    /// reason ∈ rate_limit / server_error / network（与 `llm::BackoffReason::as_str` 同源）。
+    Backoff { attempt: u32, wait_secs: u64, reason: String },
+    /// #27-c 退避结束、即将发起下一次尝试——前端据此撤下倒计时提示。
+    BackoffEnd { attempt: u32 },
 }
 
 /// 事件信封——run_id 归属 + 事件本体（前端按 run_id 过滤，替代旧纯 token 补丁的后端原生支持）

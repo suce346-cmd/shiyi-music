@@ -16,19 +16,73 @@ pub(crate) fn truncate_err(s: &str) -> String {
     }
 }
 
-/// 重试决策（纯函数，可测）：返回(是否可重试, 等待秒数)。
+/// 退避原因（wire format 单源）：与前端 `BackoffReason` 逐字对应（事件 `reason` 字段）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BackoffReason {
+    /// 429 限流
+    RateLimit,
+    /// 5xx 服务端错误
+    ServerError,
+    /// 网络错误（连接失败/超时/断流）
+    Network,
+}
+
+impl BackoffReason {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            BackoffReason::RateLimit => "rate_limit",
+            BackoffReason::ServerError => "server_error",
+            BackoffReason::Network => "network",
+        }
+    }
+}
+
+/// 退避计划：等待秒数 + 原因。**单源**——两者由同一次判定产出；
+/// 若拆成两个 match，改了一处忘了另一处就会冒出"等了 30s 却报网络错误"的错配。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RetryPlan {
+    wait_secs: u64,
+    reason: BackoffReason,
+}
+
+/// 重试决策（纯函数，可测）：返回本次退避计划（None = 不重试）。
 /// - 429 限流：30s/60s 退避（API 配额恢复后自动续跑）
 /// - 5xx 服务端错误：15s/30s 退避（瞬时故障，重试通常可恢复）
 /// - 网络错误（连接失败/超时）：10s/20s 退避（断网恢复后重试）
 /// - 其他 4xx（400/401/403 等凭据或请求问题）：不可重试，重试无意义
-fn retry_plan(attempt: usize, status: Option<u16>, network_err: bool) -> Option<u64> {
+fn retry_plan(attempt: usize, status: Option<u16>, network_err: bool) -> Option<RetryPlan> {
+    let plan = |wait_secs: u64, reason: BackoffReason| Some(RetryPlan { wait_secs, reason });
     match (status, network_err) {
-        (Some(429), _) => Some(if attempt == 0 { 30 } else { 60 }),
-        (Some(s), _) if s >= 500 => Some(if attempt == 0 { 15 } else { 30 }),
-        (None, true) => Some(if attempt == 0 { 10 } else { 20 }),
+        (Some(429), _) => plan(if attempt == 0 { 30 } else { 60 }, BackoffReason::RateLimit),
+        (Some(s), _) if s >= 500 => plan(if attempt == 0 { 15 } else { 30 }, BackoffReason::ServerError),
+        (None, true) => plan(if attempt == 0 { 10 } else { 20 }, BackoffReason::Network),
         _ => None, // 4xx 或其他：不重试
     }
 }
+
+/// 重试耗尽的终态类别（**单源**：复用 `ErrorKind::for_status`）：
+/// 429 → RateLimit，5xx/其他 → Network；全程无响应（网络错误）→ Network。
+/// 旧规则一律报 Network——429 走到这里被报成"网络错误"，排障方向被误导（#27-c 一并修复）。
+fn terminal_kind(last_status: Option<u16>) -> ErrorKind {
+    match last_status {
+        Some(s) => ErrorKind::for_status(s),
+        None => ErrorKind::Network,
+    }
+}
+
+/// 退避播报（进/出）：本层只陈述"发生了什么"，转成什么 UI 事件由上层决定
+/// （本层不依赖 Tauri，故不直接 emit）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BackoffNotice {
+    /// 进入退避等待：wait_secs **已含抖动**（前端倒计时应显示实际等待时长）
+    Start { attempt: u32, wait_secs: u64, reason: BackoffReason },
+    /// 退避结束、即将发起下一次尝试
+    End { attempt: u32 },
+}
+
+/// 退避播报钩子（可空）：无 UI 场景（测试连接 / 单测）传 None。
+/// 用 trait object 而非泛型——`None` 处无需标注具体类型，调用点更轻。
+pub(crate) type BackoffHook<'a> = &'a (dyn Fn(BackoffNotice) + Send + Sync);
 
 /// R4：退避抖动 0–5 秒（无 rand 依赖，用纳秒取模；纯函数阈值不动，抖动包在外面）。
 /// 429 错峰重发，避免同秒齐射撞出第二波 60s。
@@ -48,19 +102,60 @@ fn backoff_jitter_secs() -> u64 {
 /// 阶段 2 入口传 reserve=ZERO 即解除约束，全额使用剩余预算。
 pub(crate) const FINAL_STAGE_RESERVE: std::time::Duration = std::time::Duration::from_secs(120);
 
+/// 退避等待（HTTP 错误与网络错误**唯一共用路径**）：播报进入 → 等待（可按保底截断）→ 播报结束。
+/// 旧规则两条分支各写一份等待/截断逻辑（同一规则两处实现，改一处必漂移）；
+/// 收口后新增播报只需改这一处。返回 Err = 等待被预算打断或保底截断，调用方直接中止本轮。
+async fn apply_backoff(
+    plan: RetryPlan,
+    attempt: usize,
+    budget: &SharedBudget,
+    reserve: std::time::Duration,
+    notify: Option<BackoffHook<'_>>,
+) -> Result<(), AppError> {
+    // R4：计划等待 + 0–5s 抖动错峰（阈值不动，离散包在外面；#14 后讨论轮串行，
+    // 抖动仍覆盖终稿/跨 run 等其他并发源）
+    let planned = plan.wait_secs + backoff_jitter_secs();
+    tracing::warn!(wait_secs = planned, attempt = attempt + 1, reason = plan.reason.as_str(), "LLM 请求失败，退避重试");
+    if let Some(n) = notify {
+        n(BackoffNotice::Start { attempt: (attempt + 1) as u32, wait_secs: planned, reason: plan.reason });
+    }
+    // 退避等待可被预算到期中断——不等满，只等到 deadline
+    // R1：讨论轮等待上限为 remaining - 保底，不等满时按保底直接进终稿
+    let wait_dur = std::time::Duration::from_secs(planned).min(budget.remaining_for_discussion(reserve));
+    if tokio::time::timeout(budget.remaining(), tokio::time::sleep(wait_dur)).await.is_err() {
+        return Err(AppError::new(ErrorKind::Timeout, budget_stop_msg(reserve, "等待重试中止")));
+    }
+    // 保底截断了等待：不等满直接中止本轮，不再消耗（Q3：此前文案写“转入终稿”，
+    // 实际讨论轮 Timeout 经 .await? 直接中止整线，无跳终稿分支；文案如实改中止）。
+    if wait_dur < std::time::Duration::from_secs(planned) {
+        return Err(AppError::new(
+            ErrorKind::Timeout,
+            budget_stop_msg(reserve, &format!("退避被保底截断（已等 {:?}，计划 {}s），中止本轮", wait_dur, planned)),
+        ));
+    }
+    if let Some(n) = notify {
+        n(BackoffNotice::End { attempt: (attempt + 1) as u32 });
+    }
+    Ok(())
+}
+
 /// 带退避重试的请求发送：429/5xx/网络错误按 retry_plan 退避，最多 3 次（4xx 凭据类错误不重试）。
-/// 错误分类——reqwest 层失败=Network，重试耗尽=Network。
+/// 错误分类——reqwest 层失败=Network；重试耗尽按**最后一次响应状态**分类（429→RateLimit）。
 /// 每次尝试前查共享预算——剩余不足则跳过重试直接 Timeout；退避等待可被预算到期中断。
 /// R1：讨论轮传 reserve=FINAL_STAGE_RESERVE 预留终稿额度；阶段 2 传 reserve=ZERO 全额使用。
+/// #27-c：每次进入退避经 notify 播报（前端据此显示原因 + 倒计时），不再静默干等。
 async fn send_with_retry(
     req: reqwest::RequestBuilder,
     budget: &SharedBudget,
     run_id: &str,
     reserve: std::time::Duration,
+    notify: Option<BackoffHook<'_>>,
 ) -> Result<reqwest::Response, AppError> {
     /// 预算不足以再尝试一次的最低门槛（一次 HTTP 往返的悲观下限）
     const MIN_ATTEMPT_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
     let mut last_err = "unknown".to_string();
+    // 最后一次**有响应**的状态码（纯网络层失败保持 None）——决定重试耗尽的终态类别
+    let mut last_status: Option<u16> = None;
     for attempt in 0..3 {
         // 取消检查优先于预算（按 run_id 隔离）
         if crate::commands::cancel::is_cancelled(run_id) {
@@ -82,62 +177,37 @@ async fn send_with_retry(
             return Err(AppError::new(ErrorKind::Timeout, hint));
         }
         let builder = req.try_clone().ok_or_else(|| AppError::new(ErrorKind::Internal, "请求无法克隆（重试不可用）"))?;
-        match builder.send().await {
+        // 本轮结论：可重试 → 退避计划；不可重试 → 就地返回（响应交调用方分类 / 网络错误直接报）
+        let plan = match builder.send().await {
             Ok(resp) => {
                 let status = resp.status();
                 match retry_plan(attempt, Some(status.as_u16()), false) {
-                    Some(wait) => {
+                    Some(p) => {
+                        last_status = Some(status.as_u16());
                         last_err = format!("{} 错误", status);
-                        // R4：计划等待 + 0–5s 抖动错峰（阈值不动，离散包在外面；#14 后讨论轮串行，
-                        // 抖动仍覆盖终稿/跨 run 等其他并发源）
-                        let planned = wait + backoff_jitter_secs();
-                        tracing::warn!(status = %status, wait_secs = planned, attempt = attempt + 1, "LLM 请求错误，退避重试");
-                        // 退避等待可被预算到期中断——不等满，只等到 deadline
-                        // R1：讨论轮等待上限为 remaining - 保底，不等满时按保底直接进终稿
-                        let wait_dur = std::time::Duration::from_secs(planned)
-                            .min(budget.remaining_for_discussion(reserve));
-                        if tokio::time::timeout(budget.remaining(), tokio::time::sleep(wait_dur)).await.is_err() {
-                            return Err(AppError::new(ErrorKind::Timeout, budget_stop_msg(reserve, "等待重试中止")));
-                        }
-                        // 保底截断了等待：不等满直接中止本轮，不再消耗（Q3：此前文案写“转入终稿”，
-                        // 实际讨论轮 Timeout 经 .await? 直接中止整线，无跳终稿分支；文案如实改中止）。
-                        if wait_dur < std::time::Duration::from_secs(planned) {
-                            return Err(AppError::new(
-                                ErrorKind::Timeout,
-                                budget_stop_msg(reserve, &format!("退避被保底截断（已等 {:?}，计划 {}s），中止本轮", wait_dur, planned)),
-                            ));
-                        }
-                        continue;
+                        p
                     }
                     None => return Ok(resp),
                 }
             }
-            Err(e) => {
-                // 网络层错误（连接失败/超时/断流）：可重试
-                if let Some(wait) = retry_plan(attempt, None, true) {
+            Err(e) => match retry_plan(attempt, None, true) {
+                Some(p) => {
                     last_err = format!("网络错误: {}", e);
-                    // R4：同 HTTP 分支叠加抖动
-                    let planned = wait + backoff_jitter_secs();
-                    tracing::warn!(wait_secs = planned, attempt = attempt + 1, error = %e, "LLM 网络错误，退避重试");
-                    // R1：同 HTTP 分支，等待按保底截断
-                    let wait_dur = std::time::Duration::from_secs(planned)
-                        .min(budget.remaining_for_discussion(reserve));
-                    if tokio::time::timeout(budget.remaining(), tokio::time::sleep(wait_dur)).await.is_err() {
-                        return Err(AppError::new(ErrorKind::Timeout, budget_stop_msg(reserve, "等待重试中止")));
-                    }
-                    if wait_dur < std::time::Duration::from_secs(planned) {
-                        return Err(AppError::new(
-                            ErrorKind::Timeout,
-                            budget_stop_msg(reserve, &format!("退避被保底截断（已等 {:?}，计划 {}s），中止本轮", wait_dur, planned)),
-                        ));
-                    }
-                    continue;
+                    p
                 }
-                return Err(AppError::new(ErrorKind::Network, format!("API request failed: {}", e)));
-            }
-        }
+                None => return Err(AppError::new(ErrorKind::Network, format!("API request failed: {}", e))),
+            },
+        };
+        apply_backoff(plan, attempt, budget, reserve, notify).await?;
     }
-    Err(AppError::new(ErrorKind::Network, format!("API 请求失败（重试 3 次后仍失败）：{}", last_err)))
+    let kind = terminal_kind(last_status);
+    // 限流终态给可操作指引（旧规则文案与网络错误同形，用户分不清"该等"还是"该换 Key"）
+    let message = if kind == ErrorKind::RateLimit {
+        format!("API 限流：重试 3 次后仍被拒绝（{}）。请稍后重试，或检查该 Key 的配额与限流档位", last_err)
+    } else {
+        format!("API 请求失败（重试 3 次后仍失败）：{}", last_err)
+    };
+    Err(AppError::new(kind, message))
 }
 
 /// G-1 单源：预算打断文案按 reserve 分流——终稿（reserve=ZERO）说"流水线预算"，
@@ -231,7 +301,7 @@ fn extract_message(json: &Value) -> Option<(String, Option<String>, Option<Token
 
 /// 发送请求并解析正文；无正文返回 Err（供思考模式降级重试判断）。
 /// HTTP 状态分类（401/403=Auth，429=RateLimit，5xx/其他=Network）；解析失败=Parse。
-/// budget 透传给 send_with_retry（预算闸门）。
+/// budget 透传给 send_with_retry（预算闸门）；notify 透传退避播报钩子（#27-c）。
 async fn send_and_extract(
     client: &Client,
     url: &str,
@@ -240,6 +310,7 @@ async fn send_and_extract(
     budget: &SharedBudget,
     run_id: &str,
     reserve: std::time::Duration,
+    notify: Option<BackoffHook<'_>>,
 ) -> Result<LLMResponse, AppError> {
     // R7：非流式 body 解码失败重试（网关抖动下 body 半截是常态）。
     // 仅解码路径重试：HTTP 状态错误仍直接分类返回，不碰 retry_plan 通道，避免双重退避。
@@ -253,6 +324,7 @@ async fn send_and_extract(
         budget: &SharedBudget,
         run_id: &str,
         reserve: std::time::Duration,
+        notify: Option<BackoffHook<'_>>,
     ) -> Result<LLMResponse, AppError> {
         let r = send_with_retry(
             client
@@ -263,6 +335,7 @@ async fn send_and_extract(
             budget,
             run_id,
             reserve,
+            notify,
         )
         .await?;
         let status = r.status();
@@ -283,7 +356,7 @@ async fn send_and_extract(
             .ok_or_else(|| AppError::new(ErrorKind::Parse, "API response missing content".to_string()))?;
         Ok(LLMResponse { raw, finish_reason, usage })
     }
-    match extract_once(client, url, api_key, body, budget, run_id, reserve).await {
+    match extract_once(client, url, api_key, body, budget, run_id, reserve, notify).await {
         Ok(resp) => Ok(resp),
         Err(e) if e.kind == ErrorKind::Parse || e.message.starts_with("Stream error") => {
             // R9：解码失败提到最多 3 次（首次 + 2 次重发，等待 5s/10s，可被预算打断）。
@@ -303,7 +376,7 @@ async fn send_and_extract(
                         format!("预算打断，停止解码重发；最后一次错误: {}", truncate_err(&last.message)),
                     ));
                 }
-                match extract_once(client, url, api_key, body, budget, run_id, reserve).await {
+                match extract_once(client, url, api_key, body, budget, run_id, reserve, notify).await {
                     Ok(resp) => return Ok(resp),
                     Err(e2) if e2.kind == ErrorKind::Parse || e2.message.starts_with("Stream error") => {
                         tracing::warn!(attempt = attempt + 1, error = %e2.message, "非流式响应解码失败，重发");
@@ -323,6 +396,7 @@ async fn send_and_extract(
 /// 思考模式下若响应无正文（思维链偶发吃满预算），自动降级为无思考重试一次，保证流水线不中断。
 /// budget 透传（单调用超时按剩余预算收紧，见 build_client_for_budget）。
 /// gen 缺省走内置默认（temperature 0.6 / max_tokens=调用方传入值）。
+/// notify 透传退避播报钩子（#27-c：流水线调用点传 Some，无 UI 场景传 None）。
 pub(crate) async fn call_llm_silent(
     base_url: &str,
     api_key: &str,
@@ -334,6 +408,7 @@ pub(crate) async fn call_llm_silent(
     gen: &crate::models::GenerationConfig,
     run_id: &str,
     reserve: std::time::Duration,
+    notify: Option<BackoffHook<'_>>,
 ) -> Result<LLMResponse, AppError> {
     // 单调用超时取 min(场景默认, 剩余预算)——预算不足时 reqwest 层即快速失败
     let client_timeout = budget.remaining().as_secs().min(if thinking { 300 } else { 120 }).max(10);
@@ -352,7 +427,7 @@ pub(crate) async fn call_llm_silent(
     if thinking {
         apply_thinking(&mut body, model, max_tokens, true);
     }
-    match send_and_extract(&client, &url, &api_key, &body, budget, run_id, reserve).await {
+    match send_and_extract(&client, &url, &api_key, &body, budget, run_id, reserve, notify).await {
         Ok(resp) => Ok(resp),
         Err(e) if thinking && e.message.contains("missing content") => {
             // 降级：去掉思考参数重试一次（同一 prompt 无思考直接输出，必有正文）
@@ -364,13 +439,14 @@ pub(crate) async fn call_llm_silent(
                 "temperature": temperature,
                 "max_tokens": max_tokens,
             });
-            send_and_extract(&client, &url, &api_key, &fallback, budget, run_id, reserve).await
+            send_and_extract(&client, &url, &api_key, &fallback, budget, run_id, reserve, notify).await
         }
         Err(e) => Err(e),
     }
 }
 
 /// 调用 LLM 流式接口并逐 chunk 转发给前端（budget 透传gen 缺省 temperature 0.7）
+/// notify 透传退避播报钩子（#27-c）
 pub(crate) async fn call_llm_stream<R: Runtime>(
     app: AppHandle<R>,
     base_url: &str,
@@ -382,6 +458,7 @@ pub(crate) async fn call_llm_stream<R: Runtime>(
     gen: &crate::models::GenerationConfig,
     run_id: &str,
     reserve: std::time::Duration,
+    notify: Option<BackoffHook<'_>>,
 ) -> Result<LLMResponse, AppError> {
     let client_timeout = budget.remaining().as_secs().min(if thinking { 300 } else { 120 }).max(10);
     let client = build_client(client_timeout)?;
@@ -407,6 +484,7 @@ pub(crate) async fn call_llm_stream<R: Runtime>(
         budget,
         run_id,
         reserve,
+        notify,
     )
     .await?;
 
@@ -597,19 +675,24 @@ mod tests {
         assert_eq!(parse_sse_line("", &mut full, &mut finish, &mut usage), None);
     }
 
-    /// 重试决策：429 退避 30s/60s；5xx 退避 15s/30s；网络错误 10s/20s；4xx 不重试
+    /// 重试决策：429 退避 30s/60s；5xx 退避 15s/30s；网络错误 10s/20s；4xx 不重试。
+    /// #27-c：等待秒数与原因由同一次判定产出（单源），故两者一并断言——只测秒数会让
+    /// "原因写错"漏网（前端据此显示文案，错配即误导）。
     #[test]
     fn retry_plan_classifies_errors() {
+        let rl = |w| RetryPlan { wait_secs: w, reason: BackoffReason::RateLimit };
+        let se = |w| RetryPlan { wait_secs: w, reason: BackoffReason::ServerError };
+        let nw = |w| RetryPlan { wait_secs: w, reason: BackoffReason::Network };
         // 429 限流：可重试，30s/60s
-        assert_eq!(retry_plan(0, Some(429), false), Some(30));
-        assert_eq!(retry_plan(1, Some(429), false), Some(60));
+        assert_eq!(retry_plan(0, Some(429), false), Some(rl(30)));
+        assert_eq!(retry_plan(1, Some(429), false), Some(rl(60)));
         // 5xx 服务端错误：可重试，15s/30s
-        assert_eq!(retry_plan(0, Some(500), false), Some(15));
-        assert_eq!(retry_plan(1, Some(502), false), Some(30));
-        assert_eq!(retry_plan(0, Some(503), false), Some(15));
+        assert_eq!(retry_plan(0, Some(500), false), Some(se(15)));
+        assert_eq!(retry_plan(1, Some(502), false), Some(se(30)));
+        assert_eq!(retry_plan(0, Some(503), false), Some(se(15)));
         // 网络错误：可重试，10s/20s
-        assert_eq!(retry_plan(0, None, true), Some(10));
-        assert_eq!(retry_plan(1, None, true), Some(20));
+        assert_eq!(retry_plan(0, None, true), Some(nw(10)));
+        assert_eq!(retry_plan(1, None, true), Some(nw(20)));
         // 4xx 凭据/请求错误：不可重试
         assert_eq!(retry_plan(0, Some(400), false), None);
         assert_eq!(retry_plan(0, Some(401), false), None);
@@ -617,6 +700,68 @@ mod tests {
         assert_eq!(retry_plan(0, Some(404), false), None);
         // 成功响应无需重试决策（调用方直接返回）
         assert_eq!(retry_plan(0, Some(200), false), None);
+    }
+
+    /// #27-c 退避原因 wire format 锁——前端按 `reason` 取文案，改名即红
+    #[test]
+    fn backoff_reason_wire_format() {
+        assert_eq!(BackoffReason::RateLimit.as_str(), "rate_limit");
+        assert_eq!(BackoffReason::ServerError.as_str(), "server_error");
+        assert_eq!(BackoffReason::Network.as_str(), "network");
+    }
+
+    /// #27-c 重试耗尽的终态类别：429 必须报限流（旧规则一律报 Network，误导排障方向）；
+    /// 5xx/无响应保持 Network；类别与 `ErrorKind::for_status` 同源
+    #[test]
+    fn terminal_kind_keeps_rate_limit() {
+        assert_eq!(terminal_kind(Some(429)), ErrorKind::RateLimit);
+        assert_eq!(terminal_kind(Some(500)), ErrorKind::Network);
+        assert_eq!(terminal_kind(Some(503)), ErrorKind::Network);
+        assert_eq!(terminal_kind(None), ErrorKind::Network);
+    }
+
+    /// #27-c 退避播报契约：进入播报在等待之前、结束播报在等待之后（顺序即契约，
+    /// 前端靠 End 撤下倒计时；若顺序反了 UI 会在等待中提前消失）。
+    /// 注意：`wait_secs` 播报的是**含抖动**的实际等待（计划 0s + 0–5s 抖动），
+    /// 故此处只断言抖动上界，不写死 0——写死等于把"抖动必须存在"这条规则测没了。
+    #[tokio::test]
+    async fn apply_backoff_reports_start_then_end() {
+        use crate::budget::Budget;
+        use std::sync::{Arc, Mutex};
+        let seen: Arc<Mutex<Vec<BackoffNotice>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        let hook = move |n: BackoffNotice| sink.lock().unwrap().push(n);
+        let budget = Arc::new(Budget::with_timeout(std::time::Duration::from_secs(60)));
+        // 计划等待 0s（抖动最多再补 5s）——仍走完整"播报→等待→播报"路径
+        let plan = RetryPlan { wait_secs: 0, reason: BackoffReason::Network };
+        apply_backoff(plan, 0, &budget, std::time::Duration::ZERO, Some(&hook))
+            .await
+            .unwrap();
+        let got = seen.lock().unwrap().clone();
+        assert_eq!(got.len(), 2, "必须恰好播报两次（Start + End），实际 {:?}", got);
+        match (&got[0], &got[1]) {
+            (
+                BackoffNotice::Start { attempt, wait_secs, reason },
+                BackoffNotice::End { attempt: end_attempt },
+            ) => {
+                assert_eq!(*attempt, 1);
+                // End 必须与 Start 同一次尝试——前端按 attempt 配对，错配会撤错提示
+                assert_eq!(*end_attempt, 1);
+                assert_eq!(*reason, BackoffReason::Network);
+                assert!(*wait_secs <= 5, "抖动上界 5s，实际播报 {}s", wait_secs);
+            }
+            other => panic!("播报顺序必须是 Start → End，实际 {:?}", other),
+        }
+    }
+
+    /// 无播报钩子（测试连接等无 UI 场景）不得 panic
+    #[tokio::test]
+    async fn apply_backoff_without_hook_is_noop_safe() {
+        use crate::budget::Budget;
+        use std::sync::Arc;
+        let budget = Arc::new(Budget::with_timeout(std::time::Duration::from_secs(60)));
+        let plan = RetryPlan { wait_secs: 0, reason: BackoffReason::RateLimit };
+        assert!(apply_backoff(plan, 1, &budget, std::time::Duration::ZERO, None).await.is_ok());
     }
 
     /// R4：退避抖动恒在 0–5s（阈值不动，离散包在外面；多次采样不越界）
@@ -763,12 +908,12 @@ mod tests {
         // 预算已耗尽（0ms）：必须直接 Timeout，不得尝试发送
         let spent = Arc::new(Budget::with_timeout(std::time::Duration::from_millis(0)));
         std::thread::sleep(std::time::Duration::from_millis(5));
-        let err = send_with_retry(req, &spent, "", std::time::Duration::ZERO).await.unwrap_err();
+        let err = send_with_retry(req, &spent, "", std::time::Duration::ZERO, None).await.unwrap_err();
         assert_eq!(err.kind, ErrorKind::Timeout, "预算耗尽应直接 Timeout: {:?}", err);
         // 预算充足时同样不可达地址应走 Network 路径（证明闸门是预算触发的，不是地址问题）
         let rich = Arc::new(Budget::unlimited());
         let req2 = build_client(2).unwrap().get("http://127.0.0.1:1/unreachable");
-        let err2 = send_with_retry(req2, &rich, "", std::time::Duration::ZERO).await.unwrap_err();
+        let err2 = send_with_retry(req2, &rich, "", std::time::Duration::ZERO, None).await.unwrap_err();
         assert_eq!(err2.kind, ErrorKind::Network, "预算充足时应尝试发送并报 Network: {:?}", err2);
     }
 
@@ -781,12 +926,12 @@ mod tests {
         // 剩余 130s，保底 120s：可用 10s < 15s 门 → 讨论轮被拦，文案明示保底
         let tight = Arc::new(Budget::with_timeout(std::time::Duration::from_secs(130)));
         let req = client.get("http://127.0.0.1:1/unreachable");
-        let err = send_with_retry(req, &tight, "", FINAL_STAGE_RESERVE).await.unwrap_err();
+        let err = send_with_retry(req, &tight, "", FINAL_STAGE_RESERVE, None).await.unwrap_err();
         assert_eq!(err.kind, ErrorKind::Timeout);
         assert!(err.message.contains("终稿"), "讨论轮被拦文案应明示保底，实际: {}", err.message);
         // 同一预算终稿（reserve=ZERO）按全额判定：130s 充足 → 放行尝试（不可达地址走 Network）
         let req2 = build_client(2).unwrap().get("http://127.0.0.1:1/unreachable");
-        let err2 = send_with_retry(req2, &tight, "", std::time::Duration::ZERO).await.unwrap_err();
+        let err2 = send_with_retry(req2, &tight, "", std::time::Duration::ZERO, None).await.unwrap_err();
         assert_eq!(err2.kind, ErrorKind::Network, "终稿全额下应放行尝试: {:?}", err2);
     }
 
@@ -880,6 +1025,8 @@ pub async fn test_api(
         &budget,
         "",
         std::time::Duration::ZERO,
+        // #27-c：测试连接无流水线 run（不播报退避事件）；退避期间前端"测试中…"即为等待观感
+        None,
     )
     .await
     // G-3：kind 原样透传（旧规则硬转 Network——key 填错被报成"网络请求失败"，排障方向被误导）

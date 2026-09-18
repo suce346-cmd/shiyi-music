@@ -9,6 +9,7 @@ import type {
   PipelineRequest,
   PipelineRoleKey,
   ExpertCard,
+  BackoffInfo,
 } from "../types";
 import { errText } from "../types";
 import { sanitizeStored } from "./useSettings";
@@ -150,6 +151,8 @@ interface PipelineState {
   usage: { prompt_tokens: number; completion_tokens: number };
   /** #12 轮间确认门：非 null = 流水线已暂停，等用户决断（null = 未在等待） */
   gate: { round: number; nextRound: number; timeoutSecs: number } | null;
+  /** #27-c 退避等待：非 null = 后端正在等配额/服务端恢复后重试（前端显示原因 + 倒计时） */
+  backoff: BackoffInfo | null;
 }
 
 /** 用量零值（startRun/reset 时复位） */
@@ -192,6 +195,7 @@ export function usePipeline() {
     doneStages: [],
     usage: { ...ZERO_USAGE },
     gate: null,
+    backoff: null,
   });
 
   const unlistenRef = useRef<UnlistenFn | null>(null);
@@ -382,7 +386,7 @@ export function usePipeline() {
         }
         case "cancelled":
           // 用户取消——回到空闲，不标红为错误（#12：暂停中取消同样要撤下确认条）
-          setState((prev) => ({ ...prev, error: null, phase: "done", active: false, currentStage: null, gate: null }));
+          setState((prev) => ({ ...prev, error: null, phase: "done", active: false, currentStage: null, gate: null, backoff: null }));
           break;
         case "step_usage": {
           // 累计本轮 token 用量（过期 run 的事件已在顶部丢弃）。
@@ -428,9 +432,26 @@ export function usePipeline() {
           speechCbRef.current?.(makeSpeech("host", text));
           break;
         }
+        case "backoff":
+          // #27-c：后端进入退避等待（限流/服务端/网络）——此前这段等待 UI 完全静止，
+          // 用户误判卡死。startedAt 用本端时钟，倒计时以它为基准（避免依赖后端时钟）。
+          setState((prev) => ({
+            ...prev,
+            backoff: {
+              attempt: e.attempt,
+              waitSecs: e.wait_secs,
+              reason: e.reason,
+              startedAt: Date.now(),
+            },
+          }));
+          break;
+        case "backoff_end":
+          // 退避结束、即将发起下一次尝试——撤下倒计时提示
+          setState((prev) => ({ ...prev, backoff: null }));
+          break;
         case "failed":
           // active:false + 清 currentStage：防后端只发 Failed 不返回 Err 时 UI 永久卡"进行中"
-          setState((prev) => ({ ...prev, error: e.error, phase: "done", active: false, currentStage: null, gate: null }));
+          setState((prev) => ({ ...prev, error: e.error, phase: "done", active: false, currentStage: null, gate: null, backoff: null }));
           break;
         default: {
           // C5/D6 兜底：未知事件类型显式忽略（后端只增枚举值时旧前端不崩）
@@ -444,7 +465,8 @@ export function usePipeline() {
 
   const finishRun = useCallback(() => {
     // #12：收尾一律撤下确认条（正常结束/异常结束都不留悬挂的门条）
-    setState((prev) => ({ ...prev, active: false, phase: "done", error: null, gate: null }));
+    // #27-c：退避提示同理——收尾若仍在退避（如取消/异常中断），不能把倒计时留在屏上
+    setState((prev) => ({ ...prev, active: false, phase: "done", error: null, gate: null, backoff: null }));
     cleanup();
   }, [cleanup]);
 
@@ -472,6 +494,7 @@ export function usePipeline() {
         doneStages: [],
         usage: { ...ZERO_USAGE },
         gate: null,
+        backoff: null,
       });
       usageRef.current = { ...ZERO_USAGE };
       degradedRef.current = [];
@@ -588,6 +611,7 @@ export function usePipeline() {
         usage: { ...ZERO_USAGE },
         // #12：切模式/重置一律撤下确认条（旧 run 的门已随 cancel 作废）
         gate: null,
+        backoff: null,
       });
       usageRef.current = { ...ZERO_USAGE };
       degradedRef.current = [];
@@ -607,7 +631,8 @@ export function usePipeline() {
       const runId = runIdRef.current;
       if (!runId) throw new Error("无可续跑的任务（run_id 为空）");
       speechCbRef.current = opts.onSpeech ?? null;
-      setState((prev) => ({ ...prev, active: true, error: null }));
+      // #27-c：续跑是新一段流程，上一次 run 遗留的退避提示一律撤下
+      setState((prev) => ({ ...prev, active: true, error: null, backoff: null }));
       try {
         await startListening(token, runId);
       } catch (e) {

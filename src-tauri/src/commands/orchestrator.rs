@@ -602,6 +602,8 @@ async fn execute_review<R: Runtime>(
     let emit = |event: PipelineEvent| {
         let _ = app.emit("pipeline", PipelineEnvelope::new(run_id.to_string(), event));
     };
+    // #27-c 退避播报钩子（本函数两次调用共用，同一 run 同一信封）
+    let backoff = backoff_hook(app.clone(), run_id.to_string());
     let kb = load_knowledge()?;
     let r = roles::role_for(role);
 
@@ -643,6 +645,7 @@ async fn execute_review<R: Runtime>(
         &gen,
         &run_id,
         llm::FINAL_STAGE_RESERVE,
+        Some(&backoff),
     )
     .await?;
     // （上限放开后简化）：30000 上限下截断极罕见，观测记录即可——JSON 已完整时仍可正常解析
@@ -662,6 +665,7 @@ async fn execute_review<R: Runtime>(
             &gen,
             &run_id,
             llm::FINAL_STAGE_RESERVE,
+            Some(&backoff),
         )
         .await?;
         let result2 = parse_review(&resp2.raw);
@@ -758,6 +762,8 @@ async fn execute_audit_review<R: Runtime>(
     let emit = |event: PipelineEvent| {
         let _ = app.emit("pipeline", PipelineEnvelope::new(run_id.to_string(), event));
     };
+    // #27-c 退避播报钩子（本函数两次调用共用）
+    let backoff = backoff_hook(app.clone(), run_id.to_string());
     let kb = load_knowledge()?;
 
     let mut system = String::new();
@@ -798,6 +804,7 @@ async fn execute_audit_review<R: Runtime>(
         &gen,
         &run_id,
         llm::FINAL_STAGE_RESERVE,
+        Some(&backoff),
     )
     .await?;
     // （上限放开后简化）：截断观测记录，JSON 完整时照常解析
@@ -817,6 +824,7 @@ async fn execute_audit_review<R: Runtime>(
             &gen,
             &run_id,
             llm::FINAL_STAGE_RESERVE,
+            Some(&backoff),
         )
         .await?;
         let result2 = parse_review(&resp2.raw);
@@ -924,6 +932,8 @@ async fn run_host_initial<R: Runtime>(
     let emit = |event: PipelineEvent| {
         let _ = app.emit("pipeline", PipelineEnvelope::new(run_id.to_string(), event));
     };
+    // #27-c 退避播报钩子（整流重发循环共用）
+    let backoff = backoff_hook(app.clone(), run_id.to_string());
     let _ = emit(PipelineEvent::HostStart { stage: HostStage::Initial });
     // #23：阶段0 思维资产注入需要知识库（阶段0 行不再只靠 primer 手写句）；
     // 相关性排序基准 = 用户输入（初稿阶段还没有方案文本）
@@ -975,6 +985,7 @@ async fn run_host_initial<R: Runtime>(
             &gen,
             &run_id,
             llm::FINAL_STAGE_RESERVE,
+            Some(&backoff),
         )
         .await
         {
@@ -1034,6 +1045,8 @@ async fn enforce_envelope<R: Runtime>(
         plan
     );
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Host);
+    // #27-c 退避播报钩子（信封门纠错重写）
+    let backoff = backoff_hook(app.clone(), run_id.to_string());
     let resp = llm::call_llm_silent(
         &base_url, &api_key, &model,
         vec![
@@ -1048,6 +1061,7 @@ async fn enforce_envelope<R: Runtime>(
         &req.generation.clone().unwrap_or_default(),
         run_id,
         llm::FINAL_STAGE_RESERVE,
+        Some(&backoff),
     )
     .await?;
     emit_usage(app, PipelineRole::Host, &resp, run_id);
@@ -1148,6 +1162,8 @@ async fn run_host_summarize<R: Runtime>(
     let emit = |event: PipelineEvent| {
         let _ = app.emit("pipeline", PipelineEnvelope::new(run_id.to_string(), event));
     };
+    // #27-c 退避播报钩子
+    let backoff = backoff_hook(app.clone(), run_id.to_string());
     // L-4 新规则：Mode C 原歌词贯穿全链路——阶段 0（初稿）与阶段 2（格式输出）都带原词，
     // 旧规则唯独汇总阶段不带，主持人整合修订时无比对基准，属盲改。措辞与阶段 2 同口径。
     let user = build_summarize_user_prompt(current_plan, round_changes, req.original_lyrics_text());
@@ -1171,6 +1187,7 @@ async fn run_host_summarize<R: Runtime>(
         &gen,
         &run_id,
         llm::FINAL_STAGE_RESERVE,
+        Some(&backoff),
     )
     .await?;
     // （上限放开后简化）：截断观测记录，split_tasks 对无标记文本全文当方案，行为兼容
@@ -1256,6 +1273,28 @@ fn emit_pipeline_event<R: tauri::Runtime>(
     let _ = app.emit("pipeline", PipelineEnvelope::new(run_id.to_string(), event));
 }
 
+/// #27-c 退避播报 → 流水线事件（纯函数，可测）：wire format 单源，
+/// 无需 AppHandle 即可锁定字段（事件字段改名由测试拦下）。
+fn backoff_event(n: llm::BackoffNotice) -> PipelineEvent {
+    match n {
+        llm::BackoffNotice::Start { attempt, wait_secs, reason } => PipelineEvent::Backoff {
+            attempt,
+            wait_secs,
+            reason: reason.as_str().to_string(),
+        },
+        llm::BackoffNotice::End { attempt } => PipelineEvent::BackoffEnd { attempt },
+    }
+}
+
+/// #27-c 退避播报钩子（单源）：llm 层进入/退出退避时回调 → 转成 pipeline 事件。
+/// 事件带 run_id 信封，前端按 run 归属过滤（跨 run 串台不会显示到别的 run 上）。
+fn backoff_hook<R: Runtime>(
+    app: AppHandle<R>,
+    run_id: String,
+) -> impl Fn(llm::BackoffNotice) + Send + Sync {
+    move |n| emit_pipeline_event(&app, &run_id, backoff_event(n))
+}
+
 /// 阶段 2：校验员按标准格式输出最终提示词包（硬校验失败打回重格式化）。
 /// 返回（文本, 是否截断）———截断由调用方注入打回 issue，不在本函数内重试（复用打回循环的次数上限）。
 async fn run_audit_format<R: Runtime>(
@@ -1317,6 +1356,8 @@ async fn call_auditor_format<R: Runtime>(
     let _ = emit(PipelineEvent::AuditStart);
     let req = ctx.request;
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Auditor);
+    // #27-c 退避播报钩子（终稿格式输出——限流时用户能看到"还要等多久"）
+    let backoff = backoff_hook(ctx.app.clone(), ctx.run_id.to_string());
     // R1：阶段 2 保底解除——全额使用剩余预算，保证终稿至少有一次完整尝试 + 退避
     let resp = llm::call_llm_silent(
         &base_url, &api_key, &model,
@@ -1327,6 +1368,7 @@ async fn call_auditor_format<R: Runtime>(
         &req.generation.clone().unwrap_or_default(),
         ctx.run_id,
         std::time::Duration::ZERO,
+        Some(&backoff),
     )
     .await?;
     emit_usage(ctx.app, PipelineRole::Auditor, &resp, ctx.run_id);
@@ -2446,6 +2488,47 @@ mod tests {
     /// 测试用嵌入式知识库（宿主/角色注入测试共用，避免逐处 unwrap 噪音）
     fn test_kb() -> KnowledgeBase {
         KnowledgeBase::load_embedded().unwrap()
+    }
+
+    // ---- #27-c：退避播报 → 流水线事件（前端限流 UI 的上游契约） ----
+
+    /// 退避播报转换单源：进入 → Backoff（原因取自 BackoffReason::as_str，与前端文案键同源），
+    /// 结束 → BackoffEnd。字段错位（如把 wait_secs 当 attempt）在此拦下。
+    #[test]
+    fn backoff_notice_maps_to_pipeline_event() {
+        let start = backoff_event(llm::BackoffNotice::Start {
+            attempt: 2,
+            wait_secs: 63,
+            reason: llm::BackoffReason::RateLimit,
+        });
+        match start {
+            PipelineEvent::Backoff { attempt, wait_secs, reason } => {
+                assert_eq!((attempt, wait_secs), (2, 63));
+                assert_eq!(reason, "rate_limit", "reason 必须与 BackoffReason::as_str 同源");
+            }
+            other => panic!("Start 必须映射为 Backoff，实际: {:?}", other),
+        }
+        let end = backoff_event(llm::BackoffNotice::End { attempt: 2 });
+        match end {
+            PipelineEvent::BackoffEnd { attempt } => assert_eq!(attempt, 2),
+            other => panic!("End 必须映射为 BackoffEnd，实际: {:?}", other),
+        }
+    }
+
+    /// 三种退避原因全部有对应 wire 值（前端按 reason 取文案键，漏一种即文案落空）
+    #[test]
+    fn backoff_reason_wire_values_are_exhaustive() {
+        let cases = [
+            (llm::BackoffReason::RateLimit, "rate_limit"),
+            (llm::BackoffReason::ServerError, "server_error"),
+            (llm::BackoffReason::Network, "network"),
+        ];
+        for (reason, expect) in cases {
+            match backoff_event(llm::BackoffNotice::Start { attempt: 1, wait_secs: 1, reason }) {
+                PipelineEvent::Backoff { reason, .. } => assert_eq!(reason, expect),
+                other => panic!("必须映射为 Backoff，实际: {:?}", other),
+            }
+        }
     }
 
     // ---- #26：准入限额单源 + 插话入口不再"伪造请求蹭校验" ----

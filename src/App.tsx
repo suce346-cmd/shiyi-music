@@ -19,8 +19,8 @@ import ProviderTemplates from "./components/ProviderTemplates";
 import { modelsForBaseUrl } from "./data/providers";
 import { formatUrlIssue } from "./utils/urlGuard";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import type { Mode, ChatMessage, ChatTurn, HistoryEntry, LLMStatus, ExpertCard, PipelineRoleKey } from "./types";
-import { MODE_LABELS, errText, isCancelledError } from "./types";
+import type { AppError, Mode, ChatMessage, ChatTurn, HistoryEntry, LLMStatus, ExpertCard, PipelineRoleKey } from "./types";
+import { MODE_LABELS, errKind, errText, isCancelledError } from "./types";
 import { t } from "./i18n";
 
 const HISTORY_KEY = "suno-prompt-history";
@@ -65,6 +65,24 @@ export default function App() {
     setStreamText(v);
   }, []);
   const [errorMessage, setErrorMessage] = useState("");
+  /** #27-c：终态错误类别（与 errorMessage 同源写入——同一错误的两个投影）。
+   *  限流终态据此给可操作指引；null = 非结构化错误或无错误。 */
+  const [errorKind, setErrorKind] = useState<AppError["kind"] | null>(null);
+  /** #27-c 单源：run 错误落点——文案与类别同点写入（此前只写文案，429 的"限流"身份
+   *  在 UI 层丢失，只能与网络错误同形提示）。三处 run catch 共用，杜绝各写各的。 */
+  const applyRunError = useCallback((e: unknown) => {
+    if (isCancelledError(e)) {
+      // 取消走空闲通道：不标红、不带类别（否则"限流"指引会挂在取消态上）
+      setStatus("idle"); setErrorMessage("已取消"); setErrorKind(null);
+    } else {
+      setStatus("error"); setErrorMessage(errText(e)); setErrorKind(errKind(e));
+    }
+  }, []);
+  /** #27-c 单源：错误落点清除——任何"重新开始/复位"都经此，
+   *  避免上一轮 kind 残留让下一次普通错误也带上"限流"指引。 */
+  const clearRunError = useCallback(() => {
+    setErrorMessage(""); setErrorKind(null);
+  }, []);
   const [lastUserInput, setLastUserInput] = useState("");
   const [conversation, setConversation] = useState<ChatTurn[]>([]);
   // 历史改走文件存储——初始空，启动 useEffect 从 history_load 回填 + 迁移旧 localStorage
@@ -372,7 +390,7 @@ export default function App() {
     extra?: { originalLyrics: string },
   ) => {
     const token = ++runTokenRef.current; // 作废旧 run
-    setStatus("loading"); writeStreamText(""); setErrorMessage("");
+    setStatus("loading"); writeStreamText(""); clearRunError();
     // mode_c 的 userInput 即新主题（原歌词走独立字段）；历史展示用拼接文本保留上下文
     const displayInput = runMode === "mode_c" && extra
       ? `原歌词：\n${extra.originalLyrics}\n\n新主题：\n${userInput}`
@@ -441,12 +459,9 @@ export default function App() {
     } catch (e) {
       if (token !== runTokenRef.current) return; // 过期 run 的错误丢弃
       // Q4：取消走空闲通道（不标红、不写历史）；失败才走 error
+      // #27-c：文案 + 类别同源落点（applyRunError 单源）
       const cancelled = isCancelledError(e);
-      if (cancelled) {
-        setStatus("idle"); setErrorMessage("已取消");
-      } else {
-        setStatus("error"); setErrorMessage(errText(e));
-      }
+      applyRunError(e);
       // #10 固化半成品（判定单源在 utils/partialDraft::freezePartial）：失败/取消前已流出的正文
       // 此前只活在 streamText 里（可见但不可用——无 assistant 轮就没有复制入口，chatHistoryRef
       // 又在 run 开始被清空 → 优化必丢半成品）。固化成 partial 轮 + 同步会话历史（两处同形），
@@ -496,7 +511,7 @@ export default function App() {
   const handleRefine = useCallback(async (feedback: string, refineMode: "fast" | "full" = "fast") => {
     if (!feedback.trim()) return;
     const token = ++runTokenRef.current; // 作废旧 run
-    setStatus("loading"); writeStreamText(""); setErrorMessage("");
+    setStatus("loading"); writeStreamText(""); clearRunError();
     setLastFeedback(feedback);
     speechLogRef.current = [];
     setHistoryView(null); // 优化时同样关闭历史面板（与 handleGenerate 一致）
@@ -546,12 +561,8 @@ export default function App() {
       });
     } catch (e) {
       if (token !== runTokenRef.current) return; // 过期 run 的错误丢弃
-      // Q4：取消走空闲通道
-      if (isCancelledError(e)) {
-        setStatus("idle"); setErrorMessage("已取消");
-      } else {
-        setStatus("error"); setErrorMessage(errText(e));
-      }
+      // Q4：取消走空闲通道（#27-c：文案 + 类别同源落点）
+      applyRunError(e);
       return;
     }
     if (token !== runTokenRef.current) return; // 过期 run 的结果丢弃
@@ -603,7 +614,7 @@ export default function App() {
   const handleResume = useCallback(async () => {
     if (status !== "error") return;
     const token = ++runTokenRef.current; // 作废旧 run
-    setStatus("loading"); writeStreamText(""); setErrorMessage("");
+    setStatus("loading"); writeStreamText(""); clearRunError();
     speechLogRef.current = [];
     try {
       await ensureLlmListener();
@@ -647,14 +658,10 @@ export default function App() {
       }
     } catch (e) {
       if (token !== runTokenRef.current) return; // 过期 run 的错误丢弃
-      // Q4：取消走空闲通道
-      if (isCancelledError(e)) {
-        setStatus("idle"); setErrorMessage("已取消");
-      } else {
-        setStatus("error"); setErrorMessage(errText(e));
-      }
+      // Q4：取消走空闲通道（#27-c：文案 + 类别同源落点）
+      applyRunError(e);
     }
-  }, [status, mode, lastUserInput, conversation, saveToHistory, currentHistoryId, updateHistoryEntry, pipeline, ensureLlmListener]);
+  }, [status, mode, lastUserInput, conversation, saveToHistory, currentHistoryId, updateHistoryEntry, pipeline, ensureLlmListener, applyRunError]);
 
   const deleteHistory = (id: string) => { const u = historyEntries.filter(e => e.id !== id); setHistoryEntries(u); scheduleSave(u); };
   const clearHistory = () => { setHistoryEntries([]); scheduleSave([]); };
@@ -1042,7 +1049,7 @@ export default function App() {
                 if (llmUnlistenRef.current) { llmUnlistenRef.current(); llmUnlistenRef.current = null; }
                 setMode(m);
                 rosterRef.current = MODE_EXPERTS[m].map((e) => e.id); // D-1：阵容序同步
-                setStatus("idle"); writeStreamText(""); setErrorMessage("");
+                setStatus("idle"); writeStreamText(""); clearRunError();
                 setConversation([]); chatHistoryRef.current = [];
                 setLastUserInput(""); setLastFeedback("");
                 setHistoryView(null); setCurrentHistoryId(null);
@@ -1095,7 +1102,7 @@ export default function App() {
           <div className="flex-1 flex flex-col overflow-hidden">
             {status !== "idle" && (
               <div className="shrink-0">
-                <StatusIndicator status={status} errorMessage={errorMessage} onRetry={handleRetry} canRetry={canRetry} onResume={handleResume} onCancel={handleCancelCurrent} getRunId={pipeline.getRunId} locale={settings.language} />
+                <StatusIndicator status={status} errorMessage={errorMessage} onRetry={handleRetry} canRetry={canRetry} onResume={handleResume} onCancel={handleCancelCurrent} getRunId={pipeline.getRunId} locale={settings.language} backoff={pipeline.backoff} errorKind={errorKind} />
                 {/* 生成队列面板（等待项列表；完成项点击查看） */}
                 <QueuePanel
                   queue={queue.queue}
