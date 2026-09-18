@@ -52,10 +52,31 @@ describe("ResultPanel 操作条（#10/#11）", () => {
     expect(screen.queryByText("复制")).toBeNull();
   });
 
-  it("全无产出：明确说明并指向重试（不留白）", () => {
+  it("失败且无产出：显示失败态并指向重试（不再冒充新手引导）", () => {
     setup([user, expert], "error");
-    expect(screen.getByText(/本次没有产出可复制或优化/)).toBeTruthy();
+    expect(screen.getByText("本次生成失败，没有产出内容")).toBeTruthy();
+    expect(screen.getByText("可点上方「重试」或「从上次继续」")).toBeTruthy();
     expect(screen.queryByText("复制")).toBeNull();
+    // 关键：#2 的锁——错误态绝不能落回新手引导（旧实现在"零产出"时把用户丢回引导）
+    expect(screen.queryByText(/输入内容开始生成/)).toBeNull();
+  });
+
+  it("零轮次 + error：同样进失败态（App 外层不再按「有无产出」复制判定）", () => {
+    setup([], "error");
+    expect(screen.getByText("本次生成失败，没有产出内容")).toBeTruthy();
+    expect(screen.queryByText(/输入内容开始生成/)).toBeNull();
+  });
+
+  it("零轮次 + 非错误：新手引导（唯一进入引导的路径）", () => {
+    setup([], "idle");
+    expect(screen.getByText(/输入内容开始生成/)).toBeTruthy();
+    expect(screen.queryByText("复制")).toBeNull();
+  });
+
+  it("有轮次但无产出且非错误（中断/取消）：诚实说明且不提「重试」（该态没有重试入口）", () => {
+    setup([user, expert], "idle");
+    expect(screen.getByText("本次没有产出内容，可直接重新生成")).toBeTruthy();
+    expect(screen.queryByText(/重试/)).toBeNull();
   });
 
   it("半成品后续被完整重做后：操作条按**最后一条**判定（旧 turn 的半成品标注保留——历史属实）", () => {

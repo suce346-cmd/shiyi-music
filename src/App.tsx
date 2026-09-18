@@ -11,8 +11,8 @@ import RoundtablePanel from "./components/RoundtablePanel";
 import { useSettingsWithSecrets } from "./hooks/useSettings";
 import { usePipeline, ROLE_NAMES, ROLE_EMOJIS, MODE_EXPERTS } from "./hooks/usePipeline";
 import { orderRoundSpeech, assembleFinalTurns } from "./utils/speechOrder";
-import { freezePartial } from "./utils/partialDraft";
-import { useQueue, queueLabel, dequeueNext } from "./hooks/useQueue";
+import { freezePartial, toChatMessages } from "./utils/partialDraft";
+import { useQueue, queueLabel, dequeueNext, terminalQueueStatus, queueResultEntry } from "./hooks/useQueue";
 import QueuePanel from "./components/QueuePanel";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import type { Mode, ChatMessage, ChatTurn, HistoryEntry, LLMStatus, ExpertCard, PipelineRoleKey } from "./types";
@@ -431,11 +431,14 @@ export default function App() {
       // 队列项完成归档（queueId 命中时标记 done + 关联 history id）
       if (queue.peek().some((q) => q.id === runId)) {
         queue.mark(runId, "done");
+        // 精确关联历史条目：点击查看不再按"输入前 20 字"模糊匹配（会串项/查不到）
+        queue.linkHistory(runId, entry.id);
       }
     } catch (e) {
       if (token !== runTokenRef.current) return; // 过期 run 的错误丢弃
       // Q4：取消走空闲通道（不标红、不写历史）；失败才走 error
-      if (isCancelledError(e)) {
+      const cancelled = isCancelledError(e);
+      if (cancelled) {
         setStatus("idle"); setErrorMessage("已取消");
       } else {
         setStatus("error"); setErrorMessage(errText(e));
@@ -444,15 +447,19 @@ export default function App() {
       // 此前只活在 streamText 里（可见但不可用——无 assistant 轮就没有复制入口，chatHistoryRef
       // 又在 run 开始被清空 → 优化必丢半成品）。固化成 partial 轮 + 同步会话历史（两处同形），
       // 使"复制 / 基于半成品继续优化"两条路都有源可依；无正文则不固化（由操作条提示承担引导）。
-      const frozen = freezePartial(streamTextRef.current, displayInput);
+      const partialText = streamTextRef.current;
+      const frozen = freezePartial(partialText, displayInput);
       if (frozen) {
         setConversation((prev) => [...prev, frozen.turn]);
         chatHistoryRef.current = frozen.history;
         writeStreamText("");
       }
-      // 队列项失败标记（用户可从队列点击查看错误态，点击删除清理）
+      // 队列项终态 + **产出快照**：完成链会立即取队首续跑，而新 run 开头会清空会话——
+      // 产出若只活在会话 state 里，这一项的半成品会在被看见之前就被抹掉（#10 修好也白搭）。
+      // 状态按实际终态写：取消不能被 failure 覆盖成"失败"（旧实现无条件 mark error）
       if (queue.peek().some((q) => q.id === runId)) {
-        queue.mark(runId, "error");
+        queue.mark(runId, terminalQueueStatus(cancelled));
+        if (frozen) queue.setResult(runId, { output: partialText, partial: true });
       }
     } finally {
       // 完成链——无论成败，取队首继续（取消走 cancel 流程同样经此处继续）
@@ -655,7 +662,9 @@ export default function App() {
     if (!feedback.trim()) return;
     const ctx = buildHistoryRefineContext(entry);
     // 装载历史条目为当前会话（handleRefine 从 chatHistoryRef/lastUserInput/mode 取上下文）
-    chatHistoryRef.current = ctx.conversation.map(({ role, content }) => ({ role, content }));
+    // partial 必须随行（旧实现只搬 role/content → 半成品的标记在此丢失，后续优化不再注入
+    // "可能被截断"的告知，模型会把截断处当完整方案继续加工）
+    chatHistoryRef.current = toChatMessages(ctx.conversation);
     setConversation(ctx.conversation);
     setMode(ctx.mode);
     rosterRef.current = MODE_EXPERTS[ctx.mode].map((e) => e.id); // D-1：历史装载同步阵容序
@@ -666,13 +675,23 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [handleRefine]);
 
-  /** 队列查看——完成/失败项点击查看对应历史（按 input 匹配最新一条） */
+  /** 队列查看——**精确**取回该项产出：成功项 → 关联的历史条目；失败/取消项 → 产出快照。
+  旧实现按"输入前 20 字"模糊匹配历史，失败项（不写历史）永远查不到且**静默无响应**。
+  可点击性由 QueuePanel 的 canViewQueueItem 保证（有内容才画成可点），此处不再有死点击。 */
   const selectQueueItem = useCallback((id: string) => {
     const item = queue.peek().find((q) => q.id === id);
     if (!item) return;
-    const entry = historyRef.current.find((e) => e.input.includes(item.userInput.slice(0, 20)));
+    const entry = item.historyId ? historyRef.current.find((e) => e.id === item.historyId) : undefined;
     if (entry) {
       setHistoryView(entry);
+      setShowHistory(false);
+      return;
+    }
+    // 失败/取消的半成品：构造成与历史条目同形的视图（queueResultEntry 单源，带上 partial 标记），
+    // 复用既有"历史视图 + 继续优化"全链，不另起一套渲染
+    const fromResult = queueResultEntry(item);
+    if (fromResult) {
+      setHistoryView(fromResult);
       setShowHistory(false);
     }
   }, [queue]);
@@ -1075,21 +1094,10 @@ export default function App() {
                     onRefine={(feedback, refineMode) => { handleRefineFromHistory(historyView, feedback, refineMode); }}
                     mode={historyView.mode} locale={settings.language} />
                 );
-              })() : (conversation.length > 0 || streamText) ? (
+              })() : (
+                /* 结果区渲染不由 App 判定内容（旧实现复制了一份"有无产出"判定 → 错误且无产出时
+                   把用户丢回新手引导）：空态/失败态/引导在 ResultPanel 内单源判定 */
                 <ResultPanel conversation={conversation} streamText={streamText} status={status} onRefine={handleRefine} mode={mode} locale={settings.language} />
-              ) : (
-                <div className="h-full flex flex-col items-center justify-center text-text-muted px-8">
-                  <div className="w-16 h-16 rounded-2xl glass-panel flex items-center justify-center mb-3">
-                    <IconSparkles size={28} className="text-brand-400/50" />
-                  </div>
-                  <p className="text-[13px] mb-4">{t(settings.language, "empty.hint")}</p>
-                  <div className="w-full max-w-[420px] glass-panel rounded-xl border border-border/40 p-4 space-y-2 text-[11px] leading-relaxed">
-                    <p className="text-text-2 font-medium">{t(settings.language, "empty.flow")}</p>
-                    <p className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-brand-400" /> {t(settings.language, "empty.s1")}</p>
-                    <p className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-brand-400" /> {t(settings.language, "empty.s2")}</p>
-                    <p className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-brand-400" /> {t(settings.language, "empty.s3")}</p>
-                  </div>
-                </div>
               )}
             </div>
 

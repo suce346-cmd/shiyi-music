@@ -203,6 +203,7 @@ pub const RULE_REGISTRY: &[RuleSpec] = &[ /* 每条参数/格式规则一行 */ 
 | 功能开关 | 新增 `features: {strict_param_gate, transcription_fidelity}`，默认 true | Settings 透传，出问题可不发版关闭（后端读默认值） |
 | 轮间人工确认门（第九批新增机制） | **新增** | 三重兼容：请求 `round_gate` 缺省 false（老前端/无头/矩阵**不暂停**）；事件为"只增枚举值"（旧前端 match 兜底忽略未知事件）；暂停等待**有上限**（超时自动放行 + 降级声明，不改动 `spawn_guarded` 既有硬超时语义——只在门开启时追加 `ROUND_GATE_TIMEOUT_ALLOWANCE` 补偿） |
 | 半成品产出与结果操作条（第十批，#10/#11） | **新增**（不新增设置字段、不改后端协议） | 兼容锚点是**既有 refine 协议**：半成品告知作为 `【上一版方案】` 标记**段内正文之前**的一段文字随 `user_input` 下发（`partialDraft::composeRefineInput` 单源），后端 `extract_previous_plan` 的 `rfind(标记)` 语义由此**逐字对齐**，后端零改动；`ChatTurn.partial` 为**只增可选字段**（旧历史记录无此字段 = 视为完整产出，不误标半成品） |
+| 队列项产出落点与结果区判定（第十一批，#30/#31） | **新增**（纯前端；不改后端协议、不新增设置字段） | ① 成功项以 `QueueItem.historyId` **精确关联**既有历史条目（替代"输入前 20 字"模糊匹配），历史文件格式不动；② 失败/取消项的记忆落在**队列项内存快照** `QueueItem.result`（进程内，不落盘）——**不写 history.json**，与 Q4"取消不写历史"口径一致，重启即失效属预期；③ `queueResultEntry` 以快照造**与 HistoryEntry 同形**的视图条目，复用既有"历史视图 + 继续优化"全链，`partial` 标记随行；④ 结果区内容判定从 App/ResultPanel **双源收敛为 ResultPanel 单源**三分支（失败态 / 新手引导 / 诚实说明），新手引导仅在"零轮次且非错误"时可达；⑤ 前端新增 **`?raw` 源码形状锁**（`queueItemResult.test.tsx`）锁定 App 接线，防"纯函数绿灯、接线缺失"的空转 |
 
 ---
 

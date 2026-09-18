@@ -4,7 +4,9 @@ import {
   PARTIAL_DRAFT_NOTICE,
   composeRefineInput,
   freezePartial,
+  toChatMessages,
 } from "../utils/partialDraft";
+import type { ChatTurn } from "../types";
 
 /** #10 半成品告知的**协议单源锁**：
  * 1. 标记必须与后端 orchestrator::extract_previous_plan 的标记逐字相同（改了即失联，
@@ -60,5 +62,26 @@ describe("freezePartial（#10 失败固化的唯一判定处）", () => {
   it("无正文 / 纯空白：不固化（不产生空气泡）", () => {
     expect(freezePartial("", "主题")).toBeNull();
     expect(freezePartial("   \n\t ", "主题")).toBeNull();
+  });
+});
+
+describe("toChatMessages（半成品标记装载必须随行）", () => {
+  it("partial 标记随内容一起装载（旧实现只搬 role/content → 标记半路丢失，告知失效）", () => {
+    const turns: ChatTurn[] = [
+      { role: "user", content: "主题", timestamp: 1 },
+      { role: "assistant", content: "半成品正文", timestamp: 2, partial: true },
+    ];
+    expect(toChatMessages(turns)).toEqual([
+      { role: "user", content: "主题", partial: undefined },
+      { role: "assistant", content: "半成品正文", partial: true },
+    ]);
+  });
+
+  it("结合 composeRefineInput：装载后的半成品仍能触发告知", () => {
+    const msg = toChatMessages([
+      { role: "user", content: "主题", timestamp: 1 },
+      { role: "assistant", content: "半成品正文", timestamp: 2, partial: true },
+    ]).reverse().find((m) => m.role === "assistant")!;
+    expect(composeRefineInput("主题", msg.content, msg.partial === true)).toContain(PARTIAL_DRAFT_NOTICE.trim());
   });
 });

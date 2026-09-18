@@ -2,6 +2,7 @@ import { IconX, IconTrash, IconList } from "@tabler/icons-react";
 import { MODE_LABELS } from "../types";
 import type { Locale } from "../types";
 import { t } from "../i18n";
+import { canViewQueueItem } from "../hooks/useQueue";
 import type { QueueItem } from "../hooks/useQueue";
 
 interface Props {
@@ -44,13 +45,17 @@ export default function QueuePanel({ queue, runningId, onRemove, onClear, onSele
         )}
       </div>
       <div className="space-y-1 max-h-32 overflow-y-auto">
-        {queue.map((q) => (
+        {queue.map((q) => {
+          // 可点击 ⟺ 有可查看内容（canViewQueueItem 单源）：此前无条件把 done/error 画成可点击，
+          // 失败项查不到历史时点击静默无响应（假 affordance）
+          const viewable = canViewQueueItem(q);
+          return (
           <div key={q.id}
-            onClick={() => (q.status === "done" || q.status === "error") && onSelect(q.id)}
+            onClick={() => viewable && onSelect(q.id)}
             className={`flex items-center gap-2 px-2 py-1.5 rounded-lg transition-colors ${
               q.id === runningId
                 ? "bg-brand-500/10 border border-brand-500/30"
-                : q.status === "done" || q.status === "error"
+                : viewable
                   ? "cursor-pointer hover:bg-surface-2/60 border border-transparent"
                   : "border border-transparent"
             }`}>
@@ -71,7 +76,8 @@ export default function QueuePanel({ queue, runningId, onRemove, onClear, onSele
               </button>
             )}
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

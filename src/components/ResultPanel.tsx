@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { IconCopy, IconCheck, IconRefresh, IconChevronDown } from "@tabler/icons-react";
+import { IconCopy, IconCheck, IconRefresh, IconChevronDown, IconSparkles, IconAlertTriangle } from "@tabler/icons-react";
 import type { ChatTurn, LLMStatus, Mode, Locale } from "../types";
 import { t } from "../i18n";
 import { estimateRefineTargets, REFINE_TARGET_NAMES } from "../utils/refineTargets";
@@ -109,7 +109,6 @@ export default function ResultPanel({ conversation, streamText, status, onRefine
   if (streamText && status !== "done") {
     turns.push({ role: "assistant", content: streamText, timestamp: Date.now() });
   }
-  if (turns.length === 0 && !streamText) return null;
 
   // #10/#11 操作条的**唯一判定处**（此前散落写死 status === "done"，失败/取消时整条消失）：
   // - hasOutput：有可复制/可优化的产出（含失败时固化的半成品 turn；流式中断留下的流式文本也算）
@@ -122,6 +121,47 @@ export default function ResultPanel({ conversation, streamText, status, onRefine
   /** 有产出 + 非在途 → 操作条（复制 + 优化）。历史条目同样可优化（#9 起）
    *  ——旧的 readOnly 分支已下线：该 prop 早已无人传（历史也能反馈），留着只会误导"历史只读" */
   const showActions = hasOutput && !busy;
+
+  // 结果区"显示什么"的**唯一判定处**：App 外层此前复制了一份"有无产出"的判定来决定
+  // 渲染结果区还是新手引导——错误且无产出时会把用户丢回新手引导（像什么都没发生）。
+  // 三种空态各有明确语义，互不冒充：
+  // - 失败且无产出 → 失败态（指向重试/续跑，错误正文在上方状态条）
+  // - 从未开始（无任何轮次）→ 新手引导
+  // - 跑过/取消但无产出 → 诚实说明（不再提"重试"——该态没有重试入口）
+  if (!hasOutput && !busy) {
+    if (status === "error") {
+      return (
+        <div className="h-full flex flex-col items-center justify-center text-text-muted px-8">
+          <div className="w-14 h-14 rounded-2xl glass-panel flex items-center justify-center mb-3">
+            <IconAlertTriangle size={24} className="text-danger/60" />
+          </div>
+          <p className="text-[13px] text-text-2">{t(locale, "result.failed")}</p>
+          <p className="text-[11px] mt-1.5 text-center">{t(locale, "result.failed.hint")}</p>
+        </div>
+      );
+    }
+    if (conversation.length === 0) {
+      return (
+        <div className="h-full flex flex-col items-center justify-center text-text-muted px-8">
+          <div className="w-16 h-16 rounded-2xl glass-panel flex items-center justify-center mb-3">
+            <IconSparkles size={28} className="text-brand-400/50" />
+          </div>
+          <p className="text-[13px] mb-4">{t(locale, "empty.hint")}</p>
+          <div className="w-full max-w-[420px] glass-panel rounded-xl border border-border/40 p-4 space-y-2 text-[11px] leading-relaxed">
+            <p className="text-text-2 font-medium">{t(locale, "empty.flow")}</p>
+            <p className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-brand-400" /> {t(locale, "empty.s1")}</p>
+            <p className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-brand-400" /> {t(locale, "empty.s2")}</p>
+            <p className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-brand-400" /> {t(locale, "empty.s3")}</p>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className="h-full flex flex-col items-center justify-center text-text-muted px-8">
+        <p className="text-[12px]">{t(locale, "result.none")}</p>
+      </div>
+    );
+  }
 
   return (
     <div className="animate-[slideUp_300ms_ease] space-y-3">
@@ -224,13 +264,6 @@ export default function ResultPanel({ conversation, streamText, status, onRefine
               {lastIsPartial ? t(locale, "result.partial.ready") : t(locale, "result.actions.hint")}
             </span>
           </div>
-        </div>
-      )}
-
-      {/* #10 无产出时的诚实说明：失败/取消且没有任何正文——不静默留白，明确指向重试 */}
-      {!hasOutput && !busy && (
-        <div className="text-[11px] text-text-muted px-1">
-          {t(locale, "result.none")}
         </div>
       )}
 

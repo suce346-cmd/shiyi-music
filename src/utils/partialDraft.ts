@@ -56,3 +56,13 @@ export function freezePartial(
     ],
   };
 }
+
+/** ChatTurn[] → ChatMessage[]（把历史会话装载为 refine 上下文时用）。
+ *
+ *  为什么单独成函数：装载点此前只搬 `role/content`，**`partial` 在半路丢失**——
+ *  从历史/队列打开半成品再优化时，注入层拿不到标记，于是不再告知"可能被截断"，
+ *  模型把截断处当完整方案继续加工（与 freezePartial 写标记的意义直接抵消）。
+ *  标记必须与内容**同路**，故此映射也收敛成单源，由测试锁住。 */
+export function toChatMessages(turns: ChatTurn[]): ChatMessage[] {
+  return turns.map(({ role, content, partial }) => ({ role, content, partial }));
+}

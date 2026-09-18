@@ -6,9 +6,19 @@
  *  - 本文件只含纯调度的可测函数 + useQueue hook；UI 在 QueuePanel.tsx。
  */
 import { useState, useCallback, useRef } from "react";
-import type { Mode } from "../types";
+import type { HistoryEntry, Mode } from "../types";
 
 export type QueueItemStatus = "queued" | "running" | "done" | "error" | "cancelled";
+
+/** 队列项产出快照（**失败/取消**时固化的产出；成功项走 `historyId` 指向历史条目）。
+ *  必要性：完成后立即取队首续跑，新 run 开头会清空会话——若产出只活在会话 state 里，
+ *  上一项的产出（尤其失败时的半成品）会在被看见之前就被抹掉。 */
+export interface QueueResult {
+  /** 中断前已流出的正文 */
+  output: string;
+  /** 是否"生成中断的半成品"（内容可能被截断；与 ChatTurn.partial 同义） */
+  partial: boolean;
+}
 
 export interface QueueItem {
   id: string;
@@ -19,6 +29,10 @@ export interface QueueItem {
   extra?: { originalLyrics: string };
   status: QueueItemStatus;
   enqueuedAt: number;
+  /** 成功项归档后的历史条目 id（点击查看走**精确**关联，不再按输入前缀模糊匹配） */
+  historyId?: string;
+  /** 失败/取消项的产出快照（无产出则缺省） */
+  result?: QueueResult;
 }
 
 /** 展示标签：输入前 30 字（换行压成空格） */
@@ -59,6 +73,47 @@ export function clearQueued(queue: QueueItem[]): QueueItem[] {
   return queue.filter((q) => q.status !== "queued");
 }
 
+/** 纯函数：关联历史条目 id（成功归档后调用） */
+export function linkQueueHistory(queue: QueueItem[], id: string, historyId: string): QueueItem[] {
+  return queue.map((q) => (q.id === id ? { ...q, historyId } : q));
+}
+
+/** 纯函数：写入产出快照（失败/取消时固化；成功项不写，走 historyId） */
+export function setQueueResult(queue: QueueItem[], id: string, result: QueueResult): QueueItem[] {
+  return queue.map((q) => (q.id === id ? { ...q, result } : q));
+}
+
+/** 该项是否有可查看内容——**点击可用性的唯一判定源**（UI 只在为真时给可点击样式）。
+ *  此前无条件把 done/error 画成可点击，实际查不到历史时点击静默无响应（假affordance）。 */
+export function canViewQueueItem(item: QueueItem): boolean {
+  return Boolean(item.historyId) || Boolean(item.result);
+}
+
+/** 队列项终态单源：**取消不得被写成"失败"**（旧实现无条件 mark error，覆盖掉取消标记，
+ *  用户主动取消的项在列表里变成红灯"失败"——状态失真）。 */
+export function terminalQueueStatus(cancelled: boolean): QueueItemStatus {
+  return cancelled ? "cancelled" : "error";
+}
+
+/** 失败/取消项的产出快照 → 与历史条目**同形**的视图条目（复用"历史视图 + 继续优化"全链）。
+ *  快照里的 partial 必须落到 assistant 轮的 `partial` 上——否则从这里再优化时注入层拿不到标记，
+ *  不会告知模型"上一版是可能被截断的半成品"。无快照 → null（该项本就没有可查看内容）。 */
+export function queueResultEntry(item: QueueItem): HistoryEntry | null {
+  const r = item.result;
+  if (!r) return null;
+  return {
+    id: item.id,
+    mode: item.mode,
+    input: item.userInput,
+    output: r.output,
+    conversation: [
+      { role: "user", content: item.userInput, timestamp: item.enqueuedAt },
+      { role: "assistant", content: r.output, timestamp: item.enqueuedAt, partial: r.partial },
+    ],
+    timestamp: item.enqueuedAt,
+  };
+}
+
 /** useQueue hook：队列状态 + 操作（执行调度由 App 层完成链驱动） */
 export function useQueue() {
   const [queue, setQueue] = useState<QueueItem[]>([]);
@@ -97,8 +152,26 @@ export function useQueue() {
     });
   }, []);
 
+  /** 关联历史条目（成功归档后） */
+  const linkHistory = useCallback((id: string, historyId: string) => {
+    setQueue((prev) => {
+      const next = linkQueueHistory(prev, id, historyId);
+      queueRef.current = next;
+      return next;
+    });
+  }, []);
+
+  /** 写入产出快照（失败/取消固化） */
+  const setResult = useCallback((id: string, result: QueueResult) => {
+    setQueue((prev) => {
+      const next = setQueueResult(prev, id, result);
+      queueRef.current = next;
+      return next;
+    });
+  }, []);
+
   /** 同步读取当前队列（完成链回调内用，避闭包过期） */
   const peek = useCallback(() => queueRef.current, []);
 
-  return { queue, push, mark, remove, clearWaiting, peek };
+  return { queue, push, mark, remove, clearWaiting, linkHistory, setResult, peek };
 }
