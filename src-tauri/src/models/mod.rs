@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use crate::errors::{AppError, ErrorKind};
+use crate::rules::{FEEDBACK_MAX_CHARS, INPUT_MAX_CHARS};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -313,6 +314,7 @@ mod tests {
             }
         }
         use crate::errors::ErrorKind;
+        use crate::rules::{FEEDBACK_MAX_CHARS, INPUT_MAX_CHARS};
         // 合法通过
         assert!(validate_request(&good(), None).is_ok());
         // 空输入
@@ -320,13 +322,13 @@ mod tests {
         r.user_input = "   ".into();
         let e = validate_request(&r, None).unwrap_err();
         assert_eq!(e.kind, ErrorKind::Validation);
-        // 超长输入
+        // 超长输入（边界由单源常量派生——数字不得在夹具里再抄一份）
         r = good();
-        r.user_input = "啊".repeat(20001);
+        r.user_input = "啊".repeat(INPUT_MAX_CHARS + 1);
         assert_eq!(validate_request(&r, None).unwrap_err().kind, ErrorKind::Validation);
-        // 边界 20000 通过
+        // 边界恰好等于上限通过
         r = good();
-        r.user_input = "啊".repeat(20000);
+        r.user_input = "啊".repeat(INPUT_MAX_CHARS);
         assert!(validate_request(&r, None).is_ok());
         // 非法 base_url
         r = good();
@@ -336,13 +338,37 @@ mod tests {
         r = good();
         r.model = " ".into();
         assert_eq!(validate_request(&r, None).unwrap_err().kind, ErrorKind::Validation);
-        // feedback 超长/空
-        assert_eq!(validate_request(&good(), Some(&"啊".repeat(2001))).unwrap_err().kind, ErrorKind::Validation);
+        // feedback 分支委托 validate_feedback：此处只锁"委托了"，边界细节见 validate_feedback 专项
+        assert_eq!(
+            validate_request(&good(), Some(&"啊".repeat(FEEDBACK_MAX_CHARS + 1))).unwrap_err().kind,
+            ErrorKind::Validation
+        );
+        assert!(validate_request(&good(), Some(&"啊".repeat(FEEDBACK_MAX_CHARS))).is_ok());
         assert_eq!(validate_request(&good(), Some("  ")).unwrap_err().kind, ErrorKind::Validation);
         // 原歌词超长
         r = good();
-        r.original_lyrics = Some("啊".repeat(20001));
+        r.original_lyrics = Some("啊".repeat(INPUT_MAX_CHARS + 1));
         assert_eq!(validate_request(&r, None).unwrap_err().kind, ErrorKind::Validation);
+    }
+
+    /// #26：feedback 规则的**独立入口**边界（优化反馈与中途插话共用同一实现）。
+    /// 锁三件事：① 上限恰好通过 / 上限+1 拒绝（边界由常量派生，不手抄数字）；
+    /// ② 空与纯空白拒绝（原实现的两条分支顺序不变）；③ 报错文案带上限值（前端原样展示）。
+    #[test]
+    fn validate_feedback_boundaries() {
+        assert!(validate_feedback(&"啊".repeat(FEEDBACK_MAX_CHARS)).is_ok(), "恰好等于上限应通过");
+        let e = validate_feedback(&"啊".repeat(FEEDBACK_MAX_CHARS + 1)).unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Validation);
+        assert!(
+            e.message.contains(&FEEDBACK_MAX_CHARS.to_string()),
+            "报错文案须包含单源上限值：{}",
+            e.message
+        );
+        assert_eq!(validate_feedback("").unwrap_err().kind, ErrorKind::Validation);
+        assert_eq!(validate_feedback("   ").unwrap_err().kind, ErrorKind::Validation);
+        // 顺序不变量：先长度、后非空——超长且空白仍报"过长"（与旧分支逐字一致）
+        let long_blank = " ".repeat(FEEDBACK_MAX_CHARS + 1);
+        assert!(validate_feedback(&long_blank).unwrap_err().message.contains("过长"));
     }
 
     /// S-1：validate_url 内网/环回/保留/变形 URL 全拒绝（IP 字面量直测，不依赖 DNS）
@@ -718,42 +744,59 @@ fn is_forbidden_ip(ip: std::net::IpAddr) -> bool {
     }
 }
 
+/// 字符数超限报错（准入限额的唯一报错出口）
+fn too_long(field: &str, len: usize, max: usize) -> AppError {
+    AppError::new(
+        ErrorKind::Validation,
+        format!("{}过长（{} 字符，上限 {}），请精简后重试", field, len, max),
+    )
+}
+
+/// 优化反馈 / 中途插话的准入校验（**唯一实现**）：长度上限 + 非空。
+///
+/// 为什么必须独立成函数（#26 根因）：这条规则原先**只**存在于 `validate_request` 体内，
+/// 于是只需要这一条规则的中途插话入口无法引用它，只能**伪造一个完整 PipelineRequest**
+/// 来"蹭"校验（该伪造体同时写死了凭据字段与占位域名）——
+/// 后果有二：① 生产代码出现"硬编码凭据"形状的字面量（Mimosa CWE-798 的命中面，
+/// 与"源码不写可用凭据字面量"的硬约束直接冲突）；② 插话被 input/model/api_key/base_url/
+/// validate_url 等**无关规则**结构性耦合，任一规则收紧（如 host 白名单再升级、新增必填字段）
+/// 都会连带改变插话行为——"给反馈定了长度门"这件事与"请求能不能发出去"本是两回事。
+/// 规则本体在此单源（限额来自 `rules::FEEDBACK_MAX_CHARS`），需要它的入口直接调用本函数。
+///
+/// 校验顺序与旧实现在 `validate_request` 内的分支逐字一致：先长度、后非空。
+pub fn validate_feedback(feedback: &str) -> Result<(), AppError> {
+    let n = feedback.chars().count();
+    if n > FEEDBACK_MAX_CHARS {
+        return Err(too_long("优化反馈", n, FEEDBACK_MAX_CHARS));
+    }
+    if feedback.trim().is_empty() {
+        return Err(AppError::new(ErrorKind::Validation, "优化反馈为空"));
+    }
+    Ok(())
+}
+
 /// 请求准入校验（后端兜底——前端 InputPanel 保留快速反馈，后端为准入闸门）。
-/// 限额：user_input ≤20000 字符、原歌词 ≤20000、feedback ≤2000；
+/// 限额：user_input 与原歌词共用 `rules::INPUT_MAX_CHARS`、feedback 走 `rules::FEEDBACK_MAX_CHARS`
+/// （数字单一真源在 rules.rs，本注释不复述数值——复述即第二份拷贝，必然漂移）；
 /// base_url 双层校验（http(s) 前缀 + validate_url host 解析）且覆盖全部 role_overrides.base_url；
 /// model/api_key 去空白后非空。
 /// 失败返回 Validation kind（预留正式启用），前端 errText 原样展示。
 pub fn validate_request(req: &PipelineRequest, feedback: Option<&str>) -> Result<(), AppError> {
-    /// 字符数超限报错
-    fn too_long(field: &str, len: usize, max: usize) -> AppError {
-        AppError::new(
-            ErrorKind::Validation,
-            format!("{}过长（{} 字符，上限 {}），请精简后重试", field, len, max),
-        )
-    }
-    const MAX_INPUT: usize = 20000;
-    const MAX_FEEDBACK: usize = 2000;
     let input_len = req.user_input.chars().count();
     if req.user_input.trim().is_empty() {
         return Err(AppError::new(ErrorKind::Validation, "输入为空，请输入内容后重试"));
     }
-    if input_len > MAX_INPUT {
-        return Err(too_long("输入", input_len, MAX_INPUT));
+    if input_len > INPUT_MAX_CHARS {
+        return Err(too_long("输入", input_len, INPUT_MAX_CHARS));
     }
     if let Some(lyrics) = req.original_lyrics_text() {
         let n = lyrics.chars().count();
-        if n > MAX_INPUT {
-            return Err(too_long("原歌词", n, MAX_INPUT));
+        if n > INPUT_MAX_CHARS {
+            return Err(too_long("原歌词", n, INPUT_MAX_CHARS));
         }
     }
     if let Some(fb) = feedback {
-        let n = fb.chars().count();
-        if n > MAX_FEEDBACK {
-            return Err(too_long("优化反馈", n, MAX_FEEDBACK));
-        }
-        if fb.trim().is_empty() {
-            return Err(AppError::new(ErrorKind::Validation, "优化反馈为空"));
-        }
+        validate_feedback(fb)?;
     }
     if req.model.trim().is_empty() {
         return Err(AppError::new(ErrorKind::Validation, "模型未配置，请在设置中填写"));

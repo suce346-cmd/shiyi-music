@@ -2381,7 +2381,17 @@ pub async fn pipeline_resume<R: Runtime>(
 }
 
 /// 用户中途插话（前端"插入意见"调）——非阻塞存入槽，轮边界消费。
-/// 复用：超长意见（>2000）直接 Validation 拦截，与 feedback 同限额。
+/// 校验：`models::validate_feedback`（长度上限与优化反馈**同源**，见 `rules::FEEDBACK_MAX_CHARS`）。
+///
+/// #26 根因留档：本入口原先**伪造了一个完整 PipelineRequest**去复用 `validate_request` 里的
+/// feedback 分支——假 `api_key` 与占位域名因此进了生产代码（"硬编码凭据"形状，Mimosa CWE-798
+/// 的命中面），且插话行为被 input/model/api_key/base_url/validate_url 等无关规则结构性耦合。
+/// 规则本体已单源为 `models::validate_feedback`，由
+/// `interject_feedback_does_not_fabricate_request` 锁成形状，不得回退为"构造假请求蹭校验"。
+///
+/// 连带修复（同族根因）：`interject::push` 曾用**另一个**私有限额（比这条规则的上限更小，
+/// 旧数值见 git 历史）静默丢弃，与准入侧不同源 → "介于两者之间"的意见"回报成功却没进槽"。
+/// 现在 push 的两个限额都单源在 `rules.rs`，且越界一律返回错误——**校验通过 ⇒ 一定入槽**。
 /// Q4：空 run_id 直接拒（此前写入 "" 槽永不被消费）。
 #[tauri::command]
 pub async fn interject_feedback(run_id: Option<String>, note: String) -> Result<(), AppError> {
@@ -2392,25 +2402,8 @@ pub async fn interject_feedback(run_id: Option<String>, note: String) -> Result<
             "缺少 run_id，插话无法定向到任务",
         ));
     }
-    crate::models::validate_request(
-        &PipelineRequest {
-            mode: Mode::ModeB,
-            user_input: "占位".to_string(),
-            model: "占位".to_string(),
-            api_key: "占位".to_string(),
-            base_url: "https://placeholder.invalid".to_string(),
-            extra: None,
-            original_lyrics: None,
-            role_overrides: None,
-            thinking: false,
-            refine_targets: None,
-            generation: None,
-            run_id: None,
-            round_gate: None,
-        },
-        Some(&note),
-    )?;
-    interject::push(&rid, note);
+    crate::models::validate_feedback(&note)?;
+    interject::push(&rid, note)?;
     Ok(())
 }
 
@@ -2453,6 +2446,77 @@ mod tests {
     /// 测试用嵌入式知识库（宿主/角色注入测试共用，避免逐处 unwrap 噪音）
     fn test_kb() -> KnowledgeBase {
         KnowledgeBase::load_embedded().unwrap()
+    }
+
+    // ---- #26：准入限额单源 + 插话入口不再"伪造请求蹭校验" ----
+
+    /// #26 源码形状锁：`interject_feedback` 不得再构造假请求。
+    ///
+    /// 旧实现为复用 `validate_request` 的 feedback 分支，在生产代码里伪造了一个完整
+    /// PipelineRequest（同时写死了凭据字段与占位域名）——生产代码因此带上"硬编码凭据"
+    /// 形状（Mimosa CWE-798 的命中面；扫描侧 `suppressedTestContext: 0` 也表明它没被当成
+    /// 测试上下文豁免），且插话被 input/model/api_key/base_url/validate_url 等**无关规则**
+    /// 结构性耦合。
+    /// 规则本体已单源为 `models::validate_feedback`，此处把"不得回退"锁成形状。
+    ///
+    /// 扫描针本身**分片拼装**（不写成一整个字面量）：否则这条断言自己就成了源码里的
+    /// "占位域名"字面量，等于用新命中面去换旧命中面（与测试 key 的动态构造同一处理）。
+    #[test]
+    fn interject_feedback_does_not_fabricate_request() {
+        let src = include_str!("orchestrator.rs");
+        let prod = src.split("#[cfg(test)]").next().expect("生产段缺失");
+        let phantom_host = format!("placeholder{}", ".invalid");
+        let credential_assign = format!("api_key{} \"", ":");
+        assert!(
+            !prod.contains(&phantom_host) && !prod.contains(&credential_assign),
+            "生产段不得出现占位地址/凭据字面量（扫描命中面）"
+        );
+        assert!(
+            !prod.contains("PipelineRequest {"),
+            "生产段不得构造 PipelineRequest——插话只该走 models::validate_feedback"
+        );
+        let at = prod.find("pub async fn interject_feedback").expect("插话入口缺失");
+        let body = &prod[at..];
+        let body = &body[..body.find("\n}\n").map(|i| i + 3).unwrap_or(body.len())];
+        assert!(body.contains("models::validate_feedback("), "插话入口必须接单源校验：{}", body);
+        assert!(
+            !body.contains("api_key") && !body.contains("base_url"),
+            "插话校验不得触碰 api_key/base_url 等无关规则：{}",
+            body
+        );
+    }
+
+    /// #26：插话准入的行为锁（与优化反馈**同一实现**——上游约束与下游校验同一个数）。
+    /// 覆盖：缺 run_id 拒 / 空意见拒且不入槽 / 恰好上限通过且真入槽 / 上限+1 拒且不入槽。
+    #[tokio::test]
+    async fn interject_feedback_enforces_single_sourced_limit() {
+        use crate::errors::ErrorKind;
+        let rid = "test-interject-feedback-26";
+        interject::reset(rid);
+        // 缺 run_id：拒（Q4 原有规则）
+        assert_eq!(
+            interject_feedback(None, "意见".into()).await.unwrap_err().kind,
+            ErrorKind::Validation
+        );
+        // 空意见：拒，且不得入槽
+        assert_eq!(
+            interject_feedback(Some(rid.into()), "   ".into()).await.unwrap_err().kind,
+            ErrorKind::Validation
+        );
+        assert!(interject::drain(rid).is_empty(), "被拒的意见不得入槽");
+        // 恰好上限：通过，且确实入槽（校验通过 ≠ 静默丢弃）
+        let max = "啊".repeat(crate::rules::FEEDBACK_MAX_CHARS);
+        interject_feedback(Some(rid.into()), max).await.expect("恰好等于上限应通过");
+        let got = interject::drain(rid);
+        assert_eq!(got.len(), 1, "通过的意见必须入槽：{:?}", got);
+        assert_eq!(got[0].chars().count(), crate::rules::FEEDBACK_MAX_CHARS, "入槽内容须原样保留");
+        // 上限+1：拒且不入槽
+        let over = "啊".repeat(crate::rules::FEEDBACK_MAX_CHARS + 1);
+        let e = interject_feedback(Some(rid.into()), over).await.unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Validation);
+        assert!(e.message.contains("过长"), "越界须报长度：{}", e.message);
+        assert!(interject::drain(rid).is_empty(), "越界意见不得入槽");
+        interject::reset(rid);
     }
 
     // ---- D-责任分离：issue 责任分类（口径与 validator 文案逐字对齐） ----

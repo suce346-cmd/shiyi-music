@@ -51,6 +51,27 @@ pub const DESC_LINE_MAX_CHARS: usize = 200;
 /// Mode C 尾部收尾允许行数
 pub const LYRIC_FILL_TAIL_ALLOW: usize = 2;
 
+/// 请求准入·用户输入上限字符数（user_input 与原歌词共用）。
+///
+/// 单源理由：这两个数原先作为**函数局部常量**写在 `models::validate_request` 体内，
+/// 于是 ① 需要同一规则的另一入口无法引用，只能伪造整个请求来"蹭"校验
+/// （见 `models::validate_feedback` 的说明）；② doc 注释只能手抄数字，注释与常量必然漂移。
+/// 消费点：`models::validate_request`（唯一引用处，`admission_limits_are_single_sourced` 锁定）。
+pub const INPUT_MAX_CHARS: usize = 20000;
+/// 请求准入·优化反馈 / 中途插话上限字符数。
+///
+/// 消费点：`models::validate_feedback`（`validate_request` 的 feedback 分支与
+/// `orchestrator::interject_feedback` 共用同一实现——上游约束与下游校验同一个数），
+/// 以及 `commands::interject::push` 的**同值**兜底（见下条注释）。
+pub const FEEDBACK_MAX_CHARS: usize = 2000;
+
+/// 单 run 待消费插话的**条数**上限（内存保护：防 UI 异常循环 push 撑爆内存）。
+///
+/// 与 `FEEDBACK_MAX_CHARS` 的区别：一个管"单条多长"，一个管"最多几条"，都是准入规则，
+/// 故同处单源。消费点：`commands::interject::push`（达上限返回 Validation 错误，不静默丢弃）
+/// 与 `orchestrator::interject_feedback`（错误原样透传给前端提示）。
+pub const INTERJECT_MAX_PER_RUN: usize = 10;
+
 /// 弧线参数区间（Weirdness min/max + Style Influence min/max），与 suno_rules.csv 同源。
 /// K-1 正名：CSV 仅 style_arc_high 有结构化列（85-90，arc_high_matches_csv_structured_value 锁定）；
 /// 其余 9 条的 Weirdness 区间只散在 CSV 描述文本中，无结构化列，数值系 prose 共识——
@@ -968,6 +989,66 @@ mod tests {
                     sym, rule.id
                 );
             }
+        }
+    }
+
+    /// #26 准入限额单源锁：input / feedback / 插话三个限额的唯一真源在本文件。
+    ///
+    /// 旧实现把前两个数写成 `models::validate_request` 的**函数局部常量**，后果有三：
+    /// ① doc 注释只能手抄数值（注释与常量必然漂移，实际已手抄了一份）；
+    /// ② 需要同一规则的中途插话入口无法引用它，只能伪造整个请求去"蹭"校验——
+    /// 生产代码因此出现凭据字段 + 占位域名的字面量（Mimosa CWE-798 命中面）；
+    /// ③ 下游执行侧（`interject::push`）另写了**更小**的一份私有限额，与准入侧不同源，
+    /// 于是"介于两者之间"的意见通过校验后被静默丢弃 = 回报成功却没进槽的假成功。
+    /// 本锁五件事：消费点必须引用常量 / 局部常量与旧标识符不得回归 /
+    /// 生产段注释与文案不得复述限额数值 / 生产段不得出现凭据形状字面量 /
+    /// 越界边界必须由常量派生（+1 越界、等值通过）。
+    #[test]
+    fn admission_limits_are_single_sourced() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let read = |rel: &str| std::fs::read_to_string(src.join(rel)).expect(rel);
+        let models = read("models/mod.rs");
+        let orch = read("commands/orchestrator.rs");
+        let ij = read("commands/interject.rs");
+        // ① 真消费：规则实现唯一，两个入口（整请求准入 / 中途插话）共用
+        assert!(models.contains("pub fn validate_feedback("), "models 缺 feedback 规则实现");
+        assert!(models.contains("INPUT_MAX_CHARS"), "models 未引用输入上限常量");
+        assert!(models.contains("FEEDBACK_MAX_CHARS"), "models 未引用反馈上限常量");
+        assert!(orch.contains("models::validate_feedback("), "插话入口未接单源校验");
+        assert!(ij.contains("crate::rules::FEEDBACK_MAX_CHARS"), "插话槽未引用单条长度单源常量");
+        assert!(ij.contains("crate::rules::INTERJECT_MAX_PER_RUN"), "插话槽未引用条数单源常量");
+        // ② 旧声明不得回归（函数局部常量 = 第二份真源；`const ` 前缀避免撞上常量名的子串）
+        for legacy in ["const MAX_FEEDBACK", "const MAX_INPUT", "const MAX_TEXT_CHARS", "const MAX_PER_RUN"] {
+            assert!(
+                !models.contains(legacy) && !ij.contains(legacy) && !orch.contains(legacy),
+                "{} 局部常量不得回归",
+                legacy
+            );
+        }
+        // ③ 越界夹具必须由常量派生（手抄数字的夹具会在常量变更时静默失真）
+        assert!(models.contains("INPUT_MAX_CHARS + 1"), "输入越界夹具须由常量派生");
+        assert!(models.contains("FEEDBACK_MAX_CHARS + 1"), "反馈越界夹具须由常量派生");
+        assert!(ij.contains("FEEDBACK_MAX_CHARS + 1"), "插话槽越界夹具须由常量派生");
+        assert!(orch.contains("FEEDBACK_MAX_CHARS + 1"), "插话入口越界夹具须由常量派生");
+        // ④⑤ 生产段（`#[cfg(test)]` 之前）：不复述限额数值，且无凭据形状字面量。
+        // 扫描针分片拼装——否则断言自己就成了新的"占位域名/凭据字段"字面量。
+        let phantom_host = format!("placeholder{}", ".invalid");
+        let credential_assign = format!("api_key{} \"", ":");
+        for (name, full) in [
+            ("models/mod.rs", &models),
+            ("commands/orchestrator.rs", &orch),
+            ("commands/interject.rs", &ij),
+        ] {
+            let prod = full.split("#[cfg(test)]").next().expect("生产段缺失");
+            for v in [INPUT_MAX_CHARS, FEEDBACK_MAX_CHARS] {
+                assert!(
+                    !prod.contains(&v.to_string()),
+                    "{} 生产段复述了限额数值 {}——数值唯一真源在本文件，请引用常量",
+                    name, v
+                );
+            }
+            assert!(!prod.contains(&phantom_host), "{} 生产段出现占位域名字面量（CWE-798 命中面）", name);
+            assert!(!prod.contains(&credential_assign), "{} 生产段出现凭据字段字面量（CWE-798 命中面）", name);
         }
     }
 

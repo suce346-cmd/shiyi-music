@@ -7,6 +7,16 @@
 > 网关预算错误 / 前端主链 / 外围模块 / 安全纵深）的全部置信度≥80 发现。
 > 不含 Mimosa 密封扫描替代项；Mimosa deep（`scan-2026-09-06T17-23-34.820Z-6563a683e228`，
 > seal `sha256:6e2c2a7e…`）结论仍为参考：HIGH×1 为测试占位串，1 包命中 2 条 advisory（包名未给出）。
+>
+> **补注（2026-09-18，第十二批核实）**：上句对**当时那次扫描**逐字属实（该 HIGH 位于测试内
+> `api_key: "global-key"`，已由 `e49d6dd` 改动态构造，复扫 0 findings），但它的**覆盖范围被误读**——
+> 同一形状的第二个实例在**生产代码** `orchestrator::interject_feedback` 中（由 `1ee56bb` 2026-09-06
+> "用户中途插话非阻塞通道"引入，为复用 `validate_request` 的 feedback 分支而伪造整个 `PipelineRequest`，
+> 写死凭据字段与占位域名），**自 09-07 起未再扫描，因而从未被该结论覆盖**。另：本地扫描目录
+> `~/.mimosa/security-scans/project-4a6aa00d…/` 四次扫描**全部** `runStatus: inconclusive` +
+> `completeness: partial`，gap 恒为「调用图部分不完整:部分调用为动态派发或超出分析规模」——
+> `inconclusive` 是**工具覆盖缺口**，不得当作"已扫干净"的等价证据。上述两处已由第十二批处置：
+> 生产侧伪造请求删除、改走 `models::validate_feedback` 单源，并加生产段凭据形状字面量扫描锁。
 > 合规：凭据只从环境变量/密钥服务读；服务端 URL 仅 http/https，发请求前校验 host，
 > 拒绝 localhost、环回、私有、保留地址。本计划无真实凭据写入。
 
