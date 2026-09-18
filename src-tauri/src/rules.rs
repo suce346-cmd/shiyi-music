@@ -978,7 +978,9 @@ pub(crate) fn production_segment(src: &str) -> String {
     let mut out = String::with_capacity(src.len());
     let mut skipping = false;
     for line in src.split_inclusive('\n') {
-        let body = line.trim_end_matches('\n');
+        // Windows 检出（autocrlf）下行尾是 \r\n：只剥 \n 会让 body 拖着 \r，
+        // `body == "}"` 永不匹配、生产段剔除失效（CI windows 实证）。行尾 \r 一并剥离。
+        let body = line.trim_end_matches(['\n', '\r']);
         if skipping {
             // 顶层测试模块的收尾：列 0 的 `}`
             if body == "}" {
@@ -1792,6 +1794,9 @@ mod tests {
     /// ② `fn <name>() -> &'static str { … }`——无参、返回静态字符串的文案函数。
     /// 只认含中文的定义（构成"进 LLM 上下文的上游告知"）。
     fn discover_prose_definitions(src: &str) -> Vec<(String, String)> {
+        // Windows 检出（autocrlf）下载体文本是 \r\n：入口统一归一为 \n，
+        // 否则按段落/精确匹配的解析全部失灵（CI windows 实证）。
+        let src = src.replace("\r\n", "\n");
         let lines: Vec<&str> = src.lines().collect();
         let mut out: Vec<(String, String)> = Vec::new();
         for (i, line) in lines.iter().enumerate() {
