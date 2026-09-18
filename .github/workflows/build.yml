@@ -115,6 +115,15 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Clean stale rw.*.dmg (macOS)
+        # 原 beforeBuildCommand 内联的 node 清理脚本在 Windows cmd 下引号解析即死（3 秒失败），
+        # 挪到这里并限定 macOS；bundle 目录不存在时静默跳过。
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        run: |
+          D="src-tauri/target/release/bundle/macos"
+          if [ -d "$D" ]; then find "$D" -type f -name 'rw.*.dmg' -delete; fi
+
       - name: Build (macOS)
         if: matrix.os != 'windows-latest'
         run: npm run tauri build -- --target ${{ matrix.target }}

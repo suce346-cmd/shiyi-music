@@ -5,7 +5,7 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "node -e \"const fs=require('fs'),d='src-tauri/target/release/bundle/macos';try{for(const f of fs.readdirSync(d))if(f.startsWith('rw.')&&f.endsWith('.dmg'))fs.rmSync(d+'/'+f)}catch(e){}\" && npm run build",
+    "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
   "app": {
