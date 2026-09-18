@@ -4,6 +4,7 @@ import { IconLoader, IconCheck, IconAlertTriangle, IconRefresh, IconMessagePlus,
 import type { AppError, BackoffInfo, BackoffReason, LLMStatus, Locale } from "../types";
 import { errText } from "../types";
 import { t, tf } from "../i18n";
+import type { MessageKey } from "../i18n";
 
 interface Props {
   status: LLMStatus;
@@ -25,8 +26,9 @@ interface Props {
   errorKind?: AppError["kind"] | null;
 }
 
-/** 状态文案 key（locale 运行时解析） */
-const STATUS_TEXT_KEY: Record<LLMStatus, string> = {
+/** 状态文案 key（locale 运行时解析）。`idle` 无文案，故取值域为 `MessageKey | ""`
+ *  （`""` 由调用点的 `STATUS_TEXT_KEY[status] ? … : ""` 短路，不进 `t()`）。 */
+const STATUS_TEXT_KEY: Record<LLMStatus, MessageKey | ""> = {
   idle: "",
   loading: "status.connecting",
   streaming: "status.streaming",
@@ -42,9 +44,12 @@ const config: Record<LLMStatus, { icon: typeof IconLoader; color: string; bg: st
   error: { icon: IconAlertTriangle, color: "text-danger", bg: "bg-danger/8" },
 };
 
-/** 退避原因 → 文案 key（**单源**：Record 穷尽约束，后端新增原因时必须在此补键，
- *  否则 TS 报缺项——避免"后端发了新原因、前端显示成 key 字面量"）。 */
-const BACKOFF_TEXT_KEY: Record<BackoffReason, string> = {
+/** 退避原因 → 文案 key。**双约束**（第十九批修正：原文只声称"Record 穷尽约束"，
+ *  而 `Record<BackoffReason, string>` 对**映射值**零约束——补了映射项但指向不存在的键，
+ *  界面仍会把 key 原文显示给用户）：
+ *   ① 穷尽：后端新增原因必须在此补映射项，否则 TS 报缺项；
+ *   ② 存在：映射值类型为 `MessageKey`，键名写错/字典缺键**编译期**即红。 */
+const BACKOFF_TEXT_KEY: Record<BackoffReason, MessageKey> = {
   rate_limit: "status.backoff.rate_limit",
   server_error: "status.backoff.server_error",
   network: "status.backoff.network",

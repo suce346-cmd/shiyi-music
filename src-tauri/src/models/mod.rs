@@ -3,24 +3,48 @@ use std::collections::HashMap;
 use crate::errors::{AppError, ErrorKind};
 use crate::rules::{FEEDBACK_MAX_CHARS, INPUT_MAX_CHARS};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Mode {
-    ModeA,
-    ModeB,
-    ModeC,
-    ModeD,
+/// 模式枚举的**单源定义宏**：变体、机读名（`to_str_name`）与变体表（`Mode::ALL`）
+/// 由同一次调用派生——三者不可能漂移。
+///
+/// 为什么必须是宏（第十九批复核实测）：原实现把变体（`enum Mode`）、机读名（`to_str_name`
+/// 的 match）与"全模式名清单"（`rules::ALL_MODES`）写成**三份互不相干的字面量**。rustc 只能
+/// 强制前两者同步（match 必须穷尽），第三份**零守护**——红灯先行实测：往 `ALL_MODES` 里塞一个
+/// 枚举中根本不存在的 `"mode_e"`，`cargo test --lib rules::` 40 项全绿、无任何告警。
+///
+/// 而 `ALL_MODES` 是规则注册表模式域、思维资产条件标签模式域、`STYLE_PROMPT_*_MODES`
+/// 等"全模式"清单的共同取值域：**多一个名字** → 指向它的规则/条件标签"永不适用"且无人察觉；
+/// **少一个名字** → 该模式静默无校验清单（`checklist()` 回退 A）、无 primer、不在任何规则
+/// 模式域。故改为宏单源：新增模式 = 在下面 `define_modes!` 里加一行，枚举/`ALL`/机读名
+/// 三处同时到位，无从遗漏。
+macro_rules! define_modes {
+    ($($variant:ident => $name:literal),+ $(,)?) => {
+        #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        pub enum Mode {
+            $($variant),+
+        }
+
+        impl Mode {
+            /// 全部变体（**单源** = 本宏调用）。消费方：`rules::ALL_MODES` 的双向等价锁。
+            pub const ALL: &'static [Mode] = &[$(Mode::$variant),+];
+
+            /// 机读名（**单源** = 宏调用里的字面量）。与 serde 的 `snake_case` 序列化名
+            /// 一致性由 `mode_names_are_single_sourced_and_match_serde` 锁定。
+            /// 后端各处一律走本函数（旧规则用 `Debug` 字符串变换，两处序列化口径漂移风险）。
+            pub fn to_str_name(&self) -> &'static str {
+                match self {
+                    $(Mode::$variant => $name),+
+                }
+            }
+        }
+    };
 }
 
-impl Mode {
-    pub fn to_str_name(&self) -> &'static str {
-        match self {
-            Mode::ModeA => "mode_a",
-            Mode::ModeB => "mode_b",
-            Mode::ModeC => "mode_c",
-            Mode::ModeD => "mode_d",
-        }
-    }
+define_modes! {
+    ModeA => "mode_a",
+    ModeB => "mode_b",
+    ModeC => "mode_c",
+    ModeD => "mode_d",
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -147,12 +171,30 @@ mod tests {
         assert_eq!(end["attempt"], 1);
     }
 
+    /// 模式机读名单源锁（第十九批：替换原 `mode_to_str_name` 的四条手写断言）。
+    ///
+    /// 原测试把 4 个机读名**手抄一遍**——它自己就是第二真源（改宏调用里的名字不会让它报红，
+    /// 它只会跟着"看起来对"），且对"新增变体后 `ALL` 是否跟上"零约束。现改为从
+    /// `Mode::ALL` **派生**校验，三件事一次锁死：
+    ///   ① 机读名与 serde 序列化名一致（宏调用里写错 literal 而忽略 `rename_all` 即红）；
+    ///   ② 机读名不重复（重复会让"按模式查表"静默命中错项）；
+    ///   ③ `ALL` 非空（空表会让上层"遍历全部模式"的守护测试集体空转成绿灯）。
     #[test]
-    fn mode_to_str_name() {
-        assert_eq!(Mode::ModeA.to_str_name(), "mode_a");
-        assert_eq!(Mode::ModeB.to_str_name(), "mode_b");
-        assert_eq!(Mode::ModeC.to_str_name(), "mode_c");
-        assert_eq!(Mode::ModeD.to_str_name(), "mode_d");
+    fn mode_names_are_single_sourced_and_match_serde() {
+        assert!(!Mode::ALL.is_empty(), "Mode::ALL 为空——模式表不得为空");
+        let mut seen: Vec<&str> = Vec::with_capacity(Mode::ALL.len());
+        for m in Mode::ALL {
+            let name = m.to_str_name();
+            assert_eq!(
+                serde_json::to_value(m).unwrap(),
+                serde_json::Value::String(name.to_string()),
+                "to_str_name（`{}`）与 serde 序列化名不一致——宏调用里的 literal 与 rename_all 口径漂移",
+                name
+            );
+            assert!(!name.is_empty(), "模式机读名不得为空");
+            assert!(!seen.contains(&name), "模式机读名重复：{}", name);
+            seen.push(name);
+        }
     }
 
     #[test]

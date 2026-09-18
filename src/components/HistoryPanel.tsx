@@ -34,13 +34,23 @@ async function exportEntry(id: string, format: "txt" | "md"): Promise<string | n
 
 const modeIcon: Record<Mode, typeof IconFileText> = { mode_a: IconFileText, mode_b: IconStars, mode_c: IconEdit, mode_d: IconBrandTiktok };
 
-const FILTER_TABS: { label: string; value: Mode | "all" }[] = [
-  { label: "全部", value: "all" },
-  { label: "A", value: "mode_a" },
-  { label: "B", value: "mode_b" },
-  { label: "C", value: "mode_c" },
-  { label: "D", value: "mode_d" },
-];
+/** 筛选页签标签（**穷尽映射**：`Record<Mode | "all", string>`）。
+ *
+ *  旧写法是数组 `{label, value}[]`——TS 对数组**不做**取值域穷尽检查，新增一个 `Mode` 变体时
+ *  本面板只是**静默少一个筛选页签**：该模式的历史条目在筛选下不可达，而 tsc / 全部测试照旧
+ *  全绿（第十九批，与 `ModeSelector` 的 `MODES` 数组同族一并修复）。改 `Record` 后漏配即编译期报错。 */
+const FILTER_LABELS: Record<Mode | "all", string> = {
+  all: "全部",
+  mode_a: "A",
+  mode_b: "B",
+  mode_c: "C",
+  mode_d: "D",
+};
+
+/** 页签序（= `FILTER_LABELS` 声明序；键类型由 `Record<Mode | "all", …>` 保证恰为取值域） */
+const FILTER_TABS: { label: string; value: Mode | "all" }[] = (
+  Object.keys(FILTER_LABELS) as (Mode | "all")[]
+).map((value) => ({ value, label: FILTER_LABELS[value] }));
 
 /** export 供单测（纯函数） */
 export function outputSummary(entry: HistoryEntry): string {

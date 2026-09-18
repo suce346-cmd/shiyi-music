@@ -1,10 +1,26 @@
 /** 界面文案（中英双语；后端 prompt 与 AI 生成内容不翻译）。
- *  类型锁：en 与 zh 必须 key 逐位一致（Record<Strings, string> 编译期保证，漏 key 即红灯）。 */
+ *
+ *  **键守护三层（2026-09-18 第十九批复核修正）**
+ *
+ *  原文声称"`Record<Strings, string>` 编译期保证，漏 key 即红灯"——**该声明不成立**：
+ *  `Strings = Record<string, string>` 是自由字符串映射，对键集合零约束。红灯先行实测：
+ *  把 `en` 的任一键改名（= 漏键），`npx tsc --noEmit` 仍 **exit 0**；只有 vitest 里那条
+ *  `dictKeys("en") === dictKeys("zh")` 运行期断言才报红——即"编译期锁"是**假守护**。
+ *
+ *  现改为三层真守护（键集合单源 = 下表的 `zh`）：
+ *   ① 编译期·穷尽：`MessageKey = keyof typeof zh`，`en` 声明为 `Record<MessageKey, string>`
+ *      → 漏键 / 多键 / 改名 一律 tsc 报错（不再依赖跑测试）。
+ *   ② 编译期·引用：`t`/`tf` 的 key 参数类型 = `MessageKey` → 组件里写错键名编译期即红。
+ *      旧写法 `key: string` 下，写错的键**编译期与运行期都不报错**，直接把 `result.foo.bar`
+ *      这样的原文渲染给用户（静默降级，与"假 affordance"同族）。
+ *   ③ 运行期·动态族：由运行时取值拼接的键（`provider.${id}` / `settings.url.err.${issue}` /
+ *      `settings.theme.${v}`）静态类型只能保证"取值域成员已登记"，"字典里确实存在"由
+ *      `src/test/i18nKeys.test.ts` 逐族断言，并反向断言"字典无孤儿键（既无静态引用、
+ *      也不属于任何动态族）"——防已下线文案长期滞留成第二真源。
+ */
 import type { Locale } from "./types";
 
-export type Strings = Record<string, string>;
-
-const zh: Strings = {
+const zh = {
   "app.history": "历史",
   "app.settings": "API 设置",
   "settings.title": "API 设置",
@@ -158,7 +174,14 @@ const zh: Strings = {
   "provider.moonshot": "Moonshot Kimi",
   "provider.volcengine": "火山方舟",
   "provider.siliconflow": "硅基流动",
-};
+} as const;
+
+/** 文案键联合（**单源** = 上面 `zh` 的键集合）：
+ *  新增文案只改 `zh` 一处；`en` 漏写 / 写错键名 → 编译期即红（不再是运行期才红）。 */
+export type MessageKey = keyof typeof zh;
+
+/** 单语言字典：键必须与 `MessageKey` 逐位一致（穷尽映射——漏键、多键都是编译错误） */
+export type Strings = Record<MessageKey, string>;
 
 const en: Strings = {
   "app.history": "History",
@@ -318,8 +341,11 @@ const en: Strings = {
 
 const DICTS: Record<Locale, Strings> = { zh, en };
 
-/** 取文案（缺省中文；未知 key 回中文，中文也没有回 key 本身——永不白屏） */
-export function t(locale: Locale | undefined, key: string): string {
+/** 取文案（缺省中文；未知 key 回中文，中文也没有回 key 本身——永不白屏）。
+ *  `key: MessageKey` 是**编译期引用锁**：写错键名 tsc 即红，不会把键原文渲染给用户。
+ *  （`?? zh[key] ?? key` 保留为运行期兜底——覆盖旧版 localStorage / 用户覆盖文件带来的
+ *  历史键，不因键集合收敛而白屏。） */
+export function t(locale: Locale | undefined, key: MessageKey): string {
   const l: Locale = locale === "en" ? "en" : "zh";
   return DICTS[l][key] ?? zh[key] ?? key;
 }
@@ -329,7 +355,7 @@ export function t(locale: Locale | undefined, key: string): string {
  *  拆成前后缀再拼接会破坏语序，故用整句 + 占位符单源。 */
 export function tf(
   locale: Locale | undefined,
-  key: string,
+  key: MessageKey,
   params: Record<string, string | number>,
 ): string {
   return t(locale, key).replace(/\{(\w+)\}/g, (m, k) =>
@@ -337,7 +363,8 @@ export function tf(
   );
 }
 
-/** 字典完整性：en 与 zh key 集合一致（单测锁定） */
-export function dictKeys(locale: Locale): string[] {
-  return Object.keys(DICTS[locale]).sort();
+/** 字典键集合（已排序）。`en`/`zh` 的一致性由**编译期**穷尽映射保证（见文件头①），
+ *  此函数供运行期测试断言"动态族键存在"与"无孤儿键"（见 `i18nKeys.test.ts`）。 */
+export function dictKeys(locale: Locale): MessageKey[] {
+  return (Object.keys(DICTS[locale]) as MessageKey[]).sort();
 }

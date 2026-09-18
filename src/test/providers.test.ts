@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { PROVIDER_TEMPLATES, matchProviderByBaseUrl, modelsForBaseUrl } from "../data/providers";
 import { formatUrlIssue } from "../utils/urlGuard";
 import { t } from "../i18n";
+import type { MessageKey } from "../i18n";
 
 /** 第十五批（#27-a/#27-b）：厂商模板单源良构 + URL 格式层校验（后端 validate_url 的非 DNS 层镜像）。
  *
@@ -40,7 +41,9 @@ describe("厂商模板单源良构（#27-a）", () => {
 
   it("每个 id 在中英字典里都有 `provider.${id}` 文案（缺 key 时按钮直接显示 key 本身）", () => {
     for (const p of PROVIDER_TEMPLATES) {
-      const key = `provider.${p.id}`;
+      // 显式 `MessageKey` 标注 = 编译期锁（缺字典键即 tsc 报错）；不加标注 TS 会把
+      // 模板串推成 `string`，锁就退化成运行期断言
+      const key: MessageKey = `provider.${p.id}`;
       expect(t("zh", key)).not.toBe(key);
       expect(t("en", key)).not.toBe(key);
     }

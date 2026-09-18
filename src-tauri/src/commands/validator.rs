@@ -1627,7 +1627,10 @@ TRANSCRIPTION_ISSUE: 收敛方案含 ``` 围栏与参数行格式错误，需主
                 m
             );
         }
-        for m in ["mode_a", "mode_b", "mode_d"] {
+        // 模式域取自常量本体（第十九批修正）：原为手抄 `["mode_a","mode_b","mode_d"]`——
+        // 本测试的文档主张"模式域与注册表同读同一常量（无二源）"，而测试体自己就是第二份
+        // 手抄清单：改常量时它照着旧值验，新增/移除一个下限模式则静默验错域且全绿。
+        for m in rules::STYLE_PROMPT_MIN_MODES {
             assert!(
                 style_prompt_length_issues(m, "民谣").iter().any(|i| i.contains("过短")),
                 "{} 下限门缺失",

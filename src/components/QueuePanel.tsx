@@ -2,6 +2,7 @@ import { IconX, IconTrash, IconList } from "@tabler/icons-react";
 import { MODE_LABELS } from "../types";
 import type { Locale } from "../types";
 import { t } from "../i18n";
+import type { MessageKey } from "../i18n";
 import { canViewQueueItem } from "../hooks/useQueue";
 import type { QueueItem } from "../hooks/useQueue";
 
@@ -16,8 +17,9 @@ interface Props {
   locale?: Locale;
 }
 
-/** 状态文案 key（locale 运行时解析） */
-const STATUS_KEY: Record<QueueItem["status"], string> = {
+/** 状态文案 key（locale 运行时解析）。`Record<Union, MessageKey>` 双约束：
+ *  新增队列状态必须补映射项（穷尽），映射项指向的键必须真实存在（编译期）。 */
+const STATUS_KEY: Record<QueueItem["status"], MessageKey> = {
   queued: "queue.st.queued",
   running: "queue.st.running",
   done: "queue.st.done",

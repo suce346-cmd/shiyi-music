@@ -122,7 +122,14 @@ pub const STYLE_PROMPT_MAX_MODES: &[&str] = ALL_MODES;
 pub const STYLE_PROMPT_MIN_MODES: &[&str] = &["mode_a", "mode_b", "mode_d"];
 
 /// 全部模式名（单源）：模式域条件标签的取值域 + `STYLE_PROMPT_MAX_MODES` 等"全模式"清单别名。
-/// 取值必须与 `models::Mode::to_str_name()` 逐一对应（守护测试锁定）。
+///
+/// **与枚举的双向等价由 `all_modes_equals_mode_enum_exactly` 锁定**（第十九批新增）。
+/// 此前的注释写作"取值必须与 `models::Mode::to_str_name()` 逐一对应（守护测试锁定）"，
+/// 但该锁**并不存在**——既有测试只校验"注册表/条件标签里的模式名 ∈ ALL_MODES"（上界方向），
+/// 对 ALL_MODES 自身不得多、不得少零约束。红灯先行实测：往本常量塞一个枚举中不存在的
+/// `"mode_e"`，`cargo test --lib rules::` 40 项全绿、零告警。
+/// 故**枚举侧**改为宏单源（`models::define_modes!` 同时产出 `Mode::ALL` 与机读名），
+/// **本侧**由双向等价锁盯住；两侧缺一即红。
 pub const ALL_MODES: &[&str] = &["mode_a", "mode_b", "mode_c", "mode_d"];
 
 /// 规则执行者所在文件的**声明式扫描面**——守护测试 `rule_registry_symbols_have_executors` 消费。
@@ -171,13 +178,13 @@ pub const RULE_REGISTRY: &[RuleSpec] = &[
     RuleSpec { id: "douyin_line_max", modes: &["mode_d"], symbols: &["DOUYIN_LINE_MAX_CHARS"], executor: "validate_douyin" },
     // 说明行上限：方案侧信封门（envelope_defect_mode）左移拦截 + 终稿侧 A/B/C/D 全模式硬门，
     // 两侧同读 DESC_LINE_MAX_CHARS（旧 douyin_desc_line_max 仅 D 单模式 + 80 上限，已废）
-    RuleSpec { id: "desc_line_max_terminal", modes: &["mode_a", "mode_b", "mode_c", "mode_d"], symbols: &["DESC_LINE_MAX_CHARS", "is_desc_line"], executor: "desc_line_length_issues" },
+    RuleSpec { id: "desc_line_max_terminal", modes: ALL_MODES, symbols: &["DESC_LINE_MAX_CHARS", "is_desc_line"], executor: "desc_line_length_issues" },
     // 执行者更正（第三批）：原挂 check_style_prompt_blocks（不消费 DOUYIN_BPM_MIN、只查下限），
     // 真执行者 = check_bpm_range（validator::check_bpm_range 消费 DOUYIN_BPM_MIN，经 orchestrator 接线）。
     RuleSpec { id: "douyin_bpm_min", modes: &["mode_d"], symbols: &["DOUYIN_BPM_MIN"], executor: "check_bpm_range" },
     RuleSpec { id: "lyric_fill_tail_allow", modes: &["mode_c"], symbols: &["LYRIC_FILL_TAIL_ALLOW"], executor: "validate_lyric_fill" },
     // D-Envelope：方案信封契约——解析器是"方案是否符合结构"的唯一执行者（2026-09-09）
-    RuleSpec { id: "plan_envelope_contract", modes: &["mode_a", "mode_b", "mode_c", "mode_d"], symbols: &["parse_plan_sections", "envelope_spec"], executor: "enforce_envelope" },
+    RuleSpec { id: "plan_envelope_contract", modes: ALL_MODES, symbols: &["parse_plan_sections", "envelope_spec"], executor: "enforce_envelope" },
     // -----------------------------------------------------------------------
     // 准入限额族（第十三批 D1 补登记）：与上面的**产出硬门族**不同，这三条是**请求准入硬门**
     // （§6.4 验收口径是"每条参数/格式规则恰有一个执行点"，未按产出/准入分类豁免）。
@@ -747,6 +754,16 @@ pub(crate) fn production_segment(src: &str) -> String {
 mod tests {
     use super::*;
 
+    /// 全模式名（**派生自** `Mode::ALL`，不手抄）。
+    ///
+    /// 第十九批替换原先散落本模块的三处 `["mode_a","mode_b","mode_c","mode_d"]` 手写清单：
+    /// 手抄清单在**新增模式时静默停止覆盖**——遍历照旧全绿，新模式既没被验到也没被察觉
+    /// （与 `ALL_MODES` 自身无守护同族）。派生后，新增模式要么在既有断言上真跑一遍，
+    /// 要么立刻报红，不再有"悄悄漏掉一整个模式"的中间态。
+    fn all_mode_names() -> Vec<&'static str> {
+        crate::models::Mode::ALL.iter().map(|m| m.to_str_name()).collect()
+    }
+
     #[test]
     fn interpolate_resolves_param_ranges() {
         let t = "抖音 ${DOUYIN_WEIRD_RANGE}/${DOUYIN_STYLE_RANGE}；B ${MODE_B_WEIRD_RANGE}/${MODE_B_STYLE_RANGE}；上限 ${STYLE_PROMPT_MAX}；说明行 ${DESC_LINE_MAX}";
@@ -1140,6 +1157,48 @@ mod tests {
         }
     }
 
+    /// 模式名清单**双向等价锁**（第十九批新增，替换原注释里那句不存在的"守护测试锁定"）。
+    ///
+    /// 为什么不能只锁一个方向：既有测试（本条上方的 `rule_registry_is_wellformed` ③、
+    /// `knowledge::craft_trigger_vocabulary_has_consumers_and_real_scope`）都只做
+    /// 「取值 ∈ ALL_MODES」，而 ALL_MODES 自己就是那个"取值域单源"——**自己校验自己没有意义**。
+    /// 红灯先行实测：把 `"mode_e"` 塞进 ALL_MODES，上述测试全部绿灯。
+    ///
+    /// 两个方向的后果不对称，但都不可接受：
+    /// - **多**一个名字（如 `"mode_e"`）：注册表/条件标签可以合法引用它，规则"永不适用"、
+    ///   条件标签"永不命中"，且没有任何测试会因此报红；
+    /// - **少**一个名字（新增 Mode 变体却漏登记）：该模式 `checklist()` 回退通用 A 清单、
+    ///   `host_primer()` 返回 None（零 primer）、不在任何规则模式域——静默降级。
+    #[test]
+    fn all_modes_equals_mode_enum_exactly() {
+        let from_enum: Vec<&str> =
+            crate::models::Mode::ALL.iter().map(|m| m.to_str_name()).collect();
+        assert!(!from_enum.is_empty(), "Mode::ALL 为空——本锁将空转成绿灯");
+        for name in &from_enum {
+            assert!(
+                ALL_MODES.contains(name),
+                "模式 `{}`（存在 Mode::ALL）不在 ALL_MODES——该模式将静默：无专属校验清单、\
+                 无 primer、不在任何规则模式域",
+                name
+            );
+        }
+        for name in ALL_MODES {
+            assert!(
+                from_enum.contains(name),
+                "ALL_MODES 含枚举中不存在的模式名 `{}`——引用它的规则与条件标签将**永不适用**\
+                 且无人察觉（typo 与误登记同形）",
+                name
+            );
+        }
+        assert_eq!(
+            ALL_MODES.len(),
+            from_enum.len(),
+            "两侧数量不等（ALL_MODES {} 项 vs Mode::ALL {} 项）——存在重复或缺失",
+            ALL_MODES.len(),
+            from_enum.len()
+        );
+    }
+
     /// #26 准入限额单源锁：input / feedback / 插话三个限额的唯一真源在本文件。
     ///
     /// 旧实现把前两个数写成 `models::validate_request` 的**函数局部常量**，后果有三：
@@ -1253,7 +1312,7 @@ mod tests {
 
     #[test]
     fn primer_within_800_chars_per_mode() {
-        for m in ["mode_a", "mode_b", "mode_c", "mode_d"] {
+        for m in all_mode_names() {
             // 字数按**插值后**计（primer 原文含 `${占位符}`，未解析文本不是真送达内容）
             let p = interpolate(host_primer(m).expect("四模式 primer 缺失"));
             let n = p.chars().count();
@@ -1335,7 +1394,7 @@ mod tests {
         assert!(c.contains(&format!("≤{}行", LYRIC_FILL_TAIL_ALLOW)), "缺尾部2行");
         // 说明行上限（2026-09-18：80→200）：四模式清单都告知同一数字——上游告知与下游门同源，
         // 任一模式漏告知即"上游不知道、下游硬拦"的降级源（旧实现 A/B/C 三模式零告知）
-        for m in ["mode_a", "mode_b", "mode_c", "mode_d"] {
+        for m in all_mode_names() {
             let cl = checklist(m);
             assert!(cl.contains(&format!("≤{}", DESC_LINE_MAX_CHARS)), "{} 清单缺说明行上限 {}", m, DESC_LINE_MAX_CHARS);
             assert!(cl.contains("说明行"), "{} 清单缺说明行条目", m);
@@ -1348,7 +1407,7 @@ mod tests {
 // 数值断言一律针对**插值后**文本——"原文写法"由 no_handwritten_rule_numbers_in_prose_carriers 管）
         assert!(interpolate(PRIMER_D).contains(&format!("说明行≤{}字符", DESC_LINE_MAX_CHARS)), "D primer 说明行上限与常量不一致");
         // 全部上游告知载体的插值结果不得残留未解析占位符
-        for m in ["mode_a", "mode_b", "mode_c", "mode_d"] {
+        for m in all_mode_names() {
             assert!(!checklist(m).contains("${"), "{} 清单占位符未解析", m);
         }
     }

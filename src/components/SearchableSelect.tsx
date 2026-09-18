@@ -9,8 +9,9 @@ const DEFAULT_INPUT_CLASS =
 
 interface Props {
   value: string;
-  /** 候选模型名（来自当前 baseUrl 命中的厂商模板；空数组 = 无候选，退化为纯自由输入） */
-  options: string[];
+  /** 候选模型名（来自当前 baseUrl 命中的厂商模板；空数组 = 无候选，退化为纯自由输入）。
+   *  只读：候选来自 `providers.ts` 的单源只读数组，组件不得就地改写。 */
+  options: readonly string[];
   /** 每次输入/选择都回调：**自由输入实时透传**（下拉只是提示，不锁死自定义模型名） */
   onChange: (v: string) => void;
   locale?: Locale;
