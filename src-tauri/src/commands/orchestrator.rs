@@ -401,8 +401,9 @@ pub const INJECT_MAX_TOTAL_CHARS: usize = 5400;
 pub const INJECT_MAX_PLAN_CHARS: usize = 100_000;
 /// revisions_log 保留条数（完整档案原则：3 轮 × 全角色 + 主持人条目全额保留，不再折叠）
 pub const INJECT_MAX_LOG_ENTRIES: usize = 24;
-/// 格式输出截断时注入打回循环的 issue 文案（走 AuditResult 事件，用户可见）
-const TRUNCATION_ISSUE: &str = "输出被截断（finish_reason=length），请精简内容后重新输出完整提示词包";
+/// 格式输出截断时注入打回循环的 issue 文案（走 AuditResult 事件，用户可见；且随【格式问题】
+/// 清单进 LLM 上下文 → 属散文载体，已登记进 `rules::PROSE_CARRIERS`）
+pub(crate) const TRUNCATION_ISSUE: &str = "输出被截断（finish_reason=length），请精简内容后重新输出完整提示词包";
 
 /// 方案截断（超长截断 + 附注，不静默丢；纯函数可测）
 fn truncate_plan(plan: &str) -> String {

@@ -348,8 +348,11 @@ pub const CRAFT_RESERVED_ROWS: &[(&str, &str)] = &[
 // 单源口径：
 // - 检索键列 + 条数上限：本处 `KeywordTableReachability`（orchestrator 只查表，不写字面量）
 // - 键长下限：`KEYWORD_MIN_CHARS`（orchestrator::matching_keywords 与守护测试共读）
-// - 可达性守护：knowledge::tests::keyword_table_keys_meet_reachability_policy
+// - 可达性守护：knowledge::tests::keyword_tables_have_no_structurally_unreachable_rows
 //   （任一行的检索键为空或短于下限即红——死行不再静默）
+//   第二十批更正注记：此处此前写作 `keyword_table_keys_meet_reachability_policy`
+//   ——该测试**不存在**（挂在 knowledge 测试模块下的幽灵名，与第十九批"声明的锁并不存在"同族）。
+//   真名如上，由 `comment_referenced_tests_exist` 兜底：注释里的 `::tests::<名>` 引用必须能解析到真实函数。
 // - 运行期告警：knowledge::warn_reachability_violations（覆盖用户覆盖目录这一编译期测试覆盖不到的场景）
 // ---------------------------------------------------------------------------
 /// 关键词表的可达性规格：表名 → （检索键列, 单表条数上限）。
@@ -578,20 +581,37 @@ const PRIMER_C: &str = "【阶段0地基·C】对齐铁律：逐行等字数（�
 // D：前3秒画面 + 道具刻度 + 骤停提醒 + 字数提醒。
 const PRIMER_D: &str = "【阶段0地基·D】前3秒：开场3秒内建钩子或强画面，直接进内容不慢铺垫。道具刻度：核心情感绑有世俗重量的具体物（物作刻度），金句短、魔性、可独立传播，Hook≥${HOOK_MIN}次。约束：Verse≤${VERSE_MAX_LINES}行，每行≤${DOUYIN_LINE_MAX}字，说明行≤${DESC_LINE_MAX}字符（含方括号整行计），BPM≥${DOUYIN_BPM_MIN}。收尾：结尾骤停一刀切（不渐弱），动态标签用对，骤停后无乐器残留。";
 
-/// 上游告知载体（`&'static str`，直接进 LLM 上下文的 prose）注册表——**守护网扫描面单源**。
+/// 进 LLM 上下文的告知载体（`&'static str`，上游 prompt 与下游打回指令都算）注册表——
+/// **守护网扫描面单源**。
 ///
 /// 旧守护网 `no_handwritten_rule_numbers_in_prompt_sources` 只扫 `prompts.rs`/`roles.rs`
 /// 两个文件，把同类载体 `CHECKLIST_A–D` / `PRIMER_AB/C/D`（就在本文件）漏在网外——
 /// 于是"改常量改 CSV 不联动文案"的 #21 家族缺陷在本文件内继续存活。现在扫描面由本表声明：
-/// 新增载体必须登记，登记即被 `no_handwritten_rule_numbers_in_prose_carriers` 扫描。
+/// 新增载体必须登记，登记即被 `no_handwritten_rule_numbers_in_prose_carriers` 扫描；
+/// **入网自证**由 `prose_definitions_are_covered_by_scan_or_registry` 兜底（漏登记即红）。
 ///
 /// `csv_locked` = 显式豁免登记：字面量片段的数值权威在**知识库 CSV**（无常量可派生），
 /// 必须写明锁定它的测试名——登记条目不成立（测试名不存在/豁免未覆盖实际命中）即红。
+/// 第二十批补齐："测试名不存在即红"这半此前**只有注释**（实现只查非空字符串，
+/// 幽灵锁名照样全绿），现由 `no_handwritten_rule_numbers_in_prose_carriers` 解析锁名。
 pub struct ProseCarrier {
     pub name: &'static str,
     pub text: &'static str,
     pub csv_locked: &'static [(&'static str, &'static str)],
 }
+
+/// 行扫描式守护网（`no_handwritten_rule_numbers_in_prompt_sources`）的**声明式扫描面**。
+///
+/// 分工口径：本表内的文件由"逐行阈值扫描"覆盖（体量大、载体形态多）；其余文件里的上游告知
+/// 散文载体必须登记进 `PROSE_CARRIERS`，或在 `PROSE_CARRIER_EXEMPT` 显式豁免。
+/// **入网自证**由 `prose_definitions_are_covered_by_scan_or_registry` 兜底——新增文件/新增载体
+/// 若既不登记也不豁免即红（第二十批；旧状态：分工只有注释描述，与本表之前的
+/// `RULE_EXECUTOR_FILES` 同病——扫描面写死在测试里，新增载体静默漏网）。
+pub const PROSE_SOURCE_FILES: &[&str] = &["commands/prompts.rs", "commands/roles.rs"];
+
+/// `PROSE_CARRIERS` 之外的散文定义显式豁免（名 → 理由）。
+/// 只用于"形似散文、实际不进 LLM 上下文"的定义；进上下文的一律登记，不得豁免。
+pub const PROSE_CARRIER_EXEMPT: &[(&str, &str)] = &[];
 
 pub const PROSE_CARRIERS: &[ProseCarrier] = &[
     ProseCarrier { name: "CHECKLIST_A", text: CHECKLIST_A, csv_locked: &[] },
@@ -606,6 +626,16 @@ pub const PROSE_CARRIERS: &[ProseCarrier] = &[
     },
     ProseCarrier { name: "PRIMER_C", text: PRIMER_C, csv_locked: &[] },
     ProseCarrier { name: "PRIMER_D", text: PRIMER_D, csv_locked: &[] },
+    // 信封契约正文（第二十批补登记）：随 `envelope_spec()` 进主持人上下文——此前它
+    // 既不在两个源文件里、也不在本表里，属于"漏网载体"（发现网 `prose_definitions_are_covered_by_scan_or_registry` 报红暴露）
+    ProseCarrier { name: "ENVELOPE_SPEC_BASE", text: ENVELOPE_SPEC_BASE, csv_locked: &[] },
+    // 打回 issue 文案（第二十批补登记）：随【格式问题】清单进 LLM 上下文（orchestrator 打回循环），
+    // 此前既不在两个源文件里也没登记——同样是发现网暴露的漏网载体。为此把常量放开为 `pub(crate)`。
+    ProseCarrier {
+        name: "TRUNCATION_ISSUE",
+        text: crate::commands::orchestrator::TRUNCATION_ISSUE,
+        csv_locked: &[],
+    },
 ];
 
 /// C3/D3：prompt 数值单源插值——`${NAME}` 占位符替换为常量派生值。
@@ -888,9 +918,12 @@ mod tests {
     #[test]
     fn no_handwritten_rule_numbers_in_prompt_sources() {
         let mut violations: Vec<String> = Vec::new();
-        for file in ["src/commands/prompts.rs", "src/commands/roles.rs"] {
-            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(file);
-            let src = std::fs::read_to_string(&path).unwrap();
+        // 扫描面由 `PROSE_SOURCE_FILES` 声明（第二十批）：旧实现是两个文件名的字面量，
+        // 新增载体文件不会入网——与本表之前的 `RULE_EXECUTOR_FILES` 同病。
+        for rel in PROSE_SOURCE_FILES {
+            let file = format!("src/{}", rel);
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(&file);
+            let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("读载体源文件 {} 失败: {}", file, e));
             let mut depth_in_tests: i32 = -1; // -1 = 不在测试区
             for (i, raw) in src.lines().enumerate() {
                 let trimmed = raw.trim_start();
@@ -968,7 +1001,10 @@ mod tests {
     /// 未登记的字面量即红；登记了却无实际命中的豁免即红（防无主豁免随时间腐化）。
     #[test]
     fn no_handwritten_rule_numbers_in_prose_carriers() {
-        assert!(PROSE_CARRIERS.len() >= 7, "载体注册表条目数异常: {}", PROSE_CARRIERS.len());
+        assert!(PROSE_CARRIERS.len() >= 9, "载体注册表条目数异常: {}", PROSE_CARRIERS.len());
+        // 第二十批：锁名必须能解析到真实函数——旧实现只查"非空字符串"，注释却宣称
+        // "测试名不存在即红"（红灯先行实测：把锁名换成 zzz 幽灵名，本测试全绿）。
+        let defined = all_defined_fn_names();
         let mut violations: Vec<String> = Vec::new();
         for c in PROSE_CARRIERS {
             let hits = handwritten_rule_number_hits(c.text);
@@ -987,6 +1023,11 @@ mod tests {
             }
             // 反向：登记的豁免必须真的覆盖到命中（否则是无主豁免）
             for (lit, lock) in c.csv_locked {
+                assert!(
+                    defined.contains(*lock),
+                    "{} 的 CSV 豁免 \"{}\" 登记的锁 `{}` 不是任何真实函数名（幽灵锁）",
+                    c.name, lit, lock
+                );
                 assert!(!lock.is_empty(), "{} 的 CSV 豁免 \"{}\" 未写锁定测试名", c.name, lit);
                 assert!(
                     hits.iter().any(|h| lit.contains(h.as_str())),
@@ -1029,24 +1070,273 @@ mod tests {
     /// 第三批升级（红灯先行）：旧实现用 `src.contains(name)` 文件全文文本匹配——
     /// 函数"存在但无人调用"、或"名字被注释/字符串提及"都能过关。实测 `check_style_prompt_blocks`
     /// 只查下限却登记为 `douyin_bpm_min`（不消费 DOUYIN_BPM_MIN）的执行者，靠人工核对才发现。
-    /// 调用点判定：出现 `name(` 且其前紧邻非 `fn`（即非定义），且不在注释行内。
+    /// 调用点判定：出现 `name(` 且其前紧邻非 `fn`（即非定义），且不在注释/字符串里
+    /// （第二十批起经 `strip_code_noise` 剔除——行内注释与字符串里的 `name(` 同样不算调用）。
     fn has_call_site(src: &str, name: &str) -> bool {
         let needle = format!("{}(", name);
-        let mut from = 0usize;
-        while let Some(rel) = src[from..].find(&needle) {
-            let at = from + rel;
-            // 定义排除：前方紧邻（跳过空白）为 `fn`（含 `pub fn` / `async fn`）
-            if !src[..at].trim_end().ends_with("fn") {
-                // 注释排除：调用点所在行以 `//` 开头
-                let line_start = src[..at].rfind('\n').map(|p| p + 1).unwrap_or(0);
-                let line = src[line_start..].trim_start();
-                if !line.starts_with("//") {
+        for line in src.lines() {
+            let code = strip_code_noise(line);
+            let mut from = 0usize;
+            while let Some(rel) = code[from..].find(&needle) {
+                let at = from + rel;
+                // 定义排除：前方紧邻（跳过空白）为 `fn`（含 `pub fn` / `async fn`）
+                if !code[..at].trim_end().ends_with("fn") {
                     return true;
                 }
+                from = at + needle.len();
             }
-            from = at + needle.len();
         }
         false
+    }
+
+    /// 剔除一行代码里的**注释与字符串字面量**（保留其余代码，被剔除处留一个空格维持 token 边界）。
+    ///
+    /// 第二十批：判定"符号是否被消费"时，注释里的提及与字符串里的同名文本都不是消费——
+    /// 旧实现 `src.contains(sym)` 把它们全算成消费（红灯先行实测：`"// XSYM"` 一行即假绿）。
+    /// 覆盖三种字面量形态：普通/字节字符串（含转义）、字符字面量（`'"'` 这种会吞掉后续代码）、
+    /// 原始字符串 `r#"…"#`（不讲 `\` 转义，只看首个 `"#` 收尾）。
+    fn strip_code_noise(line: &str) -> String {
+        let chars: Vec<char> = line.chars().collect();
+        let mut out = String::with_capacity(line.len());
+        let mut i = 0usize;
+        while i < chars.len() {
+            let c = chars[i];
+            // 行内注释：`//` 起其余全丢（字符串已在上面的分支整段吃掉，故 `"http://"` 不会误判）
+            if c == '/' && chars.get(i + 1) == Some(&'/') {
+                break;
+            }
+            // 原始字符串：`r#"…"#`（前缀 `#` 个数可变）
+            if c == 'r' && chars.get(i + 1) == Some(&'#') {
+                let mut j = i + 1;
+                let mut hashes = 0usize;
+                while chars.get(j) == Some(&'#') {
+                    hashes += 1;
+                    j += 1;
+                }
+                if chars.get(j) == Some(&'"') {
+                    let mut k = j + 1;
+                    while k < chars.len() {
+                        if chars[k] == '"' && (1..=hashes).all(|h| chars.get(k + h) == Some(&'#')) {
+                            k += 1 + hashes;
+                            break;
+                        }
+                        k += 1;
+                    }
+                    i = k.min(chars.len());
+                    out.push(' ');
+                    continue;
+                }
+            }
+            // 普通字符串（含 `b"` / `c"` 前缀落在 `"` 上时的同一分支）
+            if c == '"' {
+                let mut k = i + 1;
+                while k < chars.len() {
+                    if chars[k] == '\\' {
+                        k += 2;
+                        continue;
+                    }
+                    if chars[k] == '"' {
+                        k += 1;
+                        break;
+                    }
+                    k += 1;
+                }
+                i = k.min(chars.len());
+                out.push(' ');
+                continue;
+            }
+            // 字符字面量 `'x'` / `'\n'`：闭合引号在 3 字符内才算字面量（生命周期 `'a` 不闭合，不误吞）
+            if c == '\'' {
+                let mut k = i + 1;
+                if chars.get(k) == Some(&'\\') {
+                    k += 1;
+                }
+                if k < chars.len() && chars[k] != '\'' {
+                    k += 1;
+                    if chars.get(k) == Some(&'\'') {
+                        i = k + 1;
+                        out.push(' ');
+                        continue;
+                    }
+                }
+            }
+            out.push(c);
+            i += 1;
+        }
+        out
+    }
+
+    /// 判定 `name` 在源码中被当作**独立标识符**使用（前后紧邻字符都不是标识符字符），
+    /// 且**不在注释与字符串里**。
+    ///
+    /// 第二十批（假锁复核）：旧实现用 `src.contains(sym)` 判定"符号有消费者"——注释里的
+    /// 提及、字符串里的一模一样文本、乃至 `XSYM` 这类**子串**都算消费。红灯先行实测：
+    /// 把测试夹具函数 `valid_mode_b_text_with_params`（只存在于 validator.rs 的
+    /// `#[cfg(test)] mod tests`）登记为 symbols，本锁全绿。
+    /// 判据与 `has_call_site` 同源：**剔除注释/字符串 + 标识符边界**。
+    fn has_symbol_use(src: &str, name: &str) -> bool {
+        // 标识符字符：ASCII 字母数字/下划线，以及任何非 ASCII（CJK 紧邻视为同一 token，
+        // 宁可漏判也不把中文里的同名片段当消费）
+        let is_ident_byte = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b >= 0x80;
+        for line in src.lines() {
+            let code = strip_code_noise(line);
+            let bytes = code.as_bytes();
+            let mut from = 0usize;
+            while let Some(rel) = code[from..].find(name) {
+                let at = from + rel;
+                let end = at + name.len();
+                let prev_ok = at == 0 || !is_ident_byte(bytes[at - 1]);
+                let next_ok = end >= bytes.len() || !is_ident_byte(bytes[end]);
+                if prev_ok && next_ok {
+                    return true;
+                }
+                from = end.max(at + 1);
+            }
+        }
+        false
+    }
+
+    /// `src/` 树下全部 `.rs` 文件（递归）——把"注释点名的测试"解析成真实函数的扫描面。
+    fn rust_sources_under(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("读源码目录失败") {
+            let p = entry.expect("目录项读取失败").path();
+            if p.is_dir() {
+                rust_sources_under(&p, out);
+            } else if p.extension().map(|e| e == "rs").unwrap_or(false) {
+                out.push(p);
+            }
+        }
+    }
+
+    /// 提取文本里声明的**函数名**（`fn <ident>`——含 `pub fn` / `async fn`）。
+    fn defined_fn_names(text: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let mut from = 0usize;
+        while let Some(rel) = text[from..].find("fn ") {
+            let at = from + rel + 3;
+            let name: String = text[at..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            if !name.is_empty() {
+                out.push(name);
+            }
+            from = at;
+        }
+        out
+    }
+
+    /// 提取文本里**点名测试**的引用名（`::tests::<ident>` 之后的标识符）。
+    ///
+    /// 只认带 `::tests::` 前缀的写法：裸名（`` `mode_a` `` / `interject`）不是可校验的引用。
+    fn referenced_test_names(text: &str) -> Vec<String> {
+        const MARK: &str = "::tests::";
+        let mut out: Vec<String> = Vec::new();
+        let mut from = 0usize;
+        while let Some(rel) = text[from..].find(MARK) {
+            let at = from + rel + MARK.len();
+            let name: String = text[at..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            if !name.is_empty() {
+                out.push(name);
+            }
+            from = at;
+        }
+        out
+    }
+
+    /// `src/` 下全部 .rs 的函数名集合（供"声明的引用必须存在"类断言共用）。
+    fn all_defined_fn_names() -> std::collections::HashSet<String> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        rust_sources_under(&root, &mut files);
+        assert!(files.len() > 10, "源码扫描面异常（{} 个 .rs）——本锁会空转", files.len());
+        files
+            .iter()
+            .flat_map(|f| defined_fn_names(&std::fs::read_to_string(f).unwrap_or_default()))
+            .collect()
+    }
+
+    /// 判定文本含中文（上游告知散文的判据；纯 ASCII 常量是键名/标记/路径，不是散文）。
+    fn has_cjk(s: &str) -> bool {
+        s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))
+    }
+
+    /// 发现生产段里的"散文定义"（定义名 → 文本片段）：
+    /// ① `const/static <NAME>: &str`（或 `&'static str`）`= "…"`——可跨行，收集到收尾引号；
+    /// ② `fn <name>() -> &'static str { … }`——无参、返回静态字符串的文案函数。
+    /// 只认含中文的定义（构成"进 LLM 上下文的上游告知"）。
+    fn discover_prose_definitions(src: &str) -> Vec<(String, String)> {
+        let lines: Vec<&str> = src.lines().collect();
+        let mut out: Vec<(String, String)> = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
+            let t = line.trim_start();
+            let after_vis = t
+                .strip_prefix("pub(crate) ")
+                .or_else(|| t.strip_prefix("pub "))
+                .unwrap_or(t);
+            // ① const/static 字符串定义
+            if let Some(rest) =
+                after_vis.strip_prefix("const ").or_else(|| after_vis.strip_prefix("static "))
+            {
+                let name: String =
+                    rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+                let tail = &rest[name.len()..];
+                let is_str = tail.contains(": &str") || tail.contains(": &'static str");
+                if !name.is_empty() && is_str && tail.contains('"') {
+                    let mut buf = String::new();
+                    let mut closed = false;
+                    for l in lines.iter().skip(i).take(60) {
+                        buf.push_str(l);
+                        buf.push('\n');
+                        let e = l.trim_end();
+                        if e.ends_with("\";") || e.ends_with("\",") || e.ends_with('"') {
+                            closed = true;
+                            break;
+                        }
+                    }
+                    if closed && has_cjk(&buf) {
+                        out.push((name, buf));
+                    }
+                }
+                continue;
+            }
+            // ② 无参、返回静态字符串的文案函数：只取**函数体**（剥注释/字符串后配平花括号，
+            //    否则紧邻的文档注释会被算进"载体文本"，把 knowledge_source 这类纯 ASCII 函数误判成散文）
+            if t.contains("fn ") && t.contains("() -> &'static str") {
+                let name: String = t
+                    .split("fn ")
+                    .nth(1)
+                    .unwrap_or("")
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect();
+                if !name.is_empty() {
+                    let mut buf = String::new();
+                    let mut depth = 0i32;
+                    let mut opened = false;
+                    for l in lines.iter().skip(i).take(200) {
+                        buf.push_str(l);
+                        buf.push('\n');
+                        let code = strip_code_noise(l);
+                        if code.contains('{') {
+                            opened = true;
+                        }
+                        depth += code.matches('{').count() as i32;
+                        depth -= code.matches('}').count() as i32;
+                        if opened && depth <= 0 {
+                            break;
+                        }
+                    }
+                    if opened && has_cjk(&buf) {
+                        out.push((name, buf));
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// 判定 `n` 的十进制写法在源码中作为**独立数字 token** 出现（前后紧邻字符都不是数字）。
@@ -1071,38 +1361,58 @@ mod tests {
         false
     }
 
-    /// D2 守护：注册表每条规则的执行器必须在 `RULE_EXECUTOR_FILES` 中**存在真实调用点**
-    /// （而非仅同名符号出现），且每个登记的消费符号在同一扫描面内有消费者——
-    /// 删掉执行点/只定义不接线即红，防止常量退化成"只有承诺没有执行"的死常量
+    /// D2 守护：注册表每条规则的执行器必须在 `RULE_EXECUTOR_FILES` 的**生产段**中
+    /// **存在真实调用点**（而非仅同名符号出现），且每个登记的消费符号在生产段中被当作
+    /// **独立标识符**使用——删掉执行点/只定义不接线/符号只剩注释提及即红，
+    /// 防止常量退化成"只有承诺没有执行"的死常量
     /// （诊断铁证：参数区间零执行；第三批铁证：style_prompt_max 在 C/D 无执行者、
     /// douyin_bpm_min 错挂不消费其常量的函数）。
     ///
     /// 第十三批 D1：扫描面由**测试内硬编码的两个文件**改为生产侧声明常量 `RULE_EXECUTOR_FILES`。
     /// 旧写法下新增执行者所在文件不会自动入网，规则注册了也照旧绿灯（准入限额族实测）；
     /// 现写法下"执行者不在扫描面"会直接报红，逼出登记动作——漏登记不再静默。
+    ///
+    /// 第二十批（假锁复核·红灯先行）：旧实现扫的是**整文件文本**，判据与声明不符——
+    /// ① executor 用 `has_call_site` 但未剔除测试模块：把 `valid_mode_b_text_with_params`
+    ///    （validator.rs `#[cfg(test)] mod tests` 内的夹具，生产段根本不存在该符号）登记为
+    ///    executor + symbols，本锁**全绿**——"只定义不接线"照样过关；
+    /// ② symbols 用 `src.contains(sym)`：注释里的提及、字符串、子串都算"真实消费者"。
+    /// 现改为**生产段扫描**（`production_segment` 剔除顶层测试模块）+ `has_symbol_use`
+    /// （标识符边界 + 注释行白名单）。
     #[test]
     fn rule_registry_symbols_have_executors() {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        // 扫描面 = 声明表的**生产段**：测试模块内的调用/提及不构成生产接线
         let files: Vec<(&str, String)> = RULE_EXECUTOR_FILES
             .iter()
             .map(|rel| {
                 let body = std::fs::read_to_string(src.join(rel))
                     .unwrap_or_else(|e| panic!("读扫描面文件 {} 失败（路径写错？）: {}", rel, e));
-                (*rel, body)
+                (*rel, production_segment(&body))
             })
             .collect();
+        // 扫描面自证：全空/全塌的扫描面会让下面两条断言集体空转成绿灯（同 RULE_REGISTRY 空表）
+        assert!(!files.is_empty(), "RULE_EXECUTOR_FILES 为空——本锁将空转成绿灯");
+        for (rel, prod) in &files {
+            assert!(
+                prod.lines().count() > 50,
+                "{} 生产段提取异常（{} 行）——提取逻辑可能剔多了，本锁会静默空转",
+                rel,
+                prod.lines().count()
+            );
+        }
         // 条目数 / id 唯一性 / 模式域取值由 `rule_registry_is_wellformed` 精确锁定。
         // 旧守卫 `len() >= 15` 已废（第十四批）：只设下限时删条目不会报红，等于给"静默删规则"留门。
         for rule in RULE_REGISTRY {
             assert!(
                 files.iter().any(|(_, s)| has_call_site(s, rule.executor)),
-                "规则 {} 的执行器 {} 在扫描面 {:?} 中无调用点（只定义不接线；若执行者在新文件，请登记进 rules::RULE_EXECUTOR_FILES）",
+                "规则 {} 的执行器 {} 在扫描面 {:?} 的生产段中无调用点（只定义不接线、或只在测试里被调用；若执行者在新文件，请登记进 rules::RULE_EXECUTOR_FILES）",
                 rule.id, rule.executor, RULE_EXECUTOR_FILES
             );
             for sym in rule.symbols {
                 assert!(
-                    files.iter().any(|(_, s)| s.contains(sym)),
-                    "死常量回归：{} 被规则 {} 注册但扫描面内无消费者",
+                    files.iter().any(|(_, s)| has_symbol_use(s, sym)),
+                    "死常量回归：{} 被规则 {} 注册但扫描面生产段内无消费者（仅注释提及/字符串/子串不算消费）",
                     sym, rule.id
                 );
             }
@@ -1272,6 +1582,163 @@ mod tests {
         assert!(has_call_site("fn foo() {}\nlet x = foo(1);", "foo"), "真实调用应为 true");
         assert!(has_call_site("async fn bar() { baz(1).await; }", "baz"), "普通调用应为 true");
         assert!(has_call_site("validator::foo(&x)", "foo"), "限定路径调用应为 true");
+    }
+
+    /// 生产段消费判定自检（第二十批·红灯先行）：注释提及不算消费、子串不算标识符使用、
+    /// 测试模块内的调用/使用不算生产接线——三条正是旧实现（整文件 `contains` + 未剔测试模块）
+    /// 的三个假绿入口。
+    #[test]
+    fn production_consumption_helpers_reject_test_and_comment_hits() {
+        let src = "\
+fn real() {}
+fn use_it() { real(1); }
+// real( 只是注释
+fn realer() {}
+#[cfg(test)]
+mod tests {
+    fn test_only() { helper(1); let _ = real(2); }
+}
+";
+        let prod = production_segment(src);
+        assert!(has_call_site(&prod, "real"), "生产段真实调用应为 true");
+        assert!(has_symbol_use(&prod, "real"), "生产段标识符使用应为 true");
+        assert!(!has_symbol_use(&prod, "rea"), "子串不得算标识符使用");
+        assert!(!has_call_site(&prod, "helper"), "测试模块内的调用不算生产接线");
+        assert!(!has_symbol_use(&prod, "helper"), "测试模块内的使用不算生产消费");
+        assert!(
+            !has_symbol_use("// fake_symbol 只是注释\nfn a() {}\n", "fake_symbol"),
+            "注释行里的提及不算消费"
+        );
+        assert!(
+            !has_symbol_use("let s = \"fake_symbol\";", "fake_symbol"),
+            "字符串里的同名文本不算消费（无标识符边界）"
+        );
+    }
+
+    /// 引用提取自检（第二十批·红灯先行）：带 `::tests::` 前缀才算"点名测试"，
+    /// 无前缀的裸名不算（否则 `mode_a` 这类取值名会被误判成幽灵锁）。
+    #[test]
+    fn test_reference_helpers_selfcheck() {
+        assert_eq!(
+            referenced_test_names("// 见 `a::tests::foo_bar` 锁定"),
+            vec!["foo_bar".to_string()]
+        );
+        assert!(
+            referenced_test_names("// 见 `a::tests 下的 foo_bar`").is_empty(),
+            "无 `::tests::` 前缀不算引用"
+        );
+        assert!(defined_fn_names("pub async fn foo_bar() {}").contains(&"foo_bar".to_string()));
+        assert!(
+            !defined_fn_names("let fn_marker = 1;").contains(&"marker".to_string()),
+            "非 `fn ` 形态不得误取函数名"
+        );
+    }
+
+    /// 注释里点名的测试必须真实存在（第二十批·红灯先行）。
+    ///
+    /// 背景：本文件曾把关键词表可达性守护写作 `keyword_table_keys_meet_reachability_policy`，
+    /// 该测试**不存在**（真名 `keyword_tables_have_no_structurally_unreachable_rows`）；
+    /// 第十九批也查出过同类"声明的锁并不存在"。文档承诺的守护若无对应实现，
+    /// 读者会以为已被覆盖——比没有守护更危险。
+    /// 判据：`src/` 下全部 `.rs` 中形如 `::tests::<名>` 的引用，必须能解析到某个 `fn <名>(`。
+    #[test]
+    fn comment_referenced_tests_exist() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        rust_sources_under(&root, &mut files);
+        let defined = all_defined_fn_names();
+        let mut missing: Vec<String> = Vec::new();
+        let mut seen = 0usize;
+        for f in &files {
+            let src = std::fs::read_to_string(f).unwrap_or_default();
+            for name in referenced_test_names(&src) {
+                seen += 1;
+                if !defined.contains(&name) {
+                    let rel = f.strip_prefix(&root).unwrap_or(f.as_path());
+                    missing.push(format!("{}: {}", rel.display(), name));
+                }
+            }
+        }
+        assert!(
+            seen >= 5,
+            "扫描面自证：全仓仅解析到 {} 处 `::tests::` 引用——本锁可能空转",
+            seen
+        );
+        assert!(missing.is_empty(), "注释点名的测试不存在（幽灵锁）：{:?}", missing);
+    }
+
+    /// 散文载体的**入网自证**（第二十批·红灯先行）。
+    ///
+    /// 声明口径（单源）：
+    /// - `PROSE_SOURCE_FILES` 里的文件 → 由逐行阈值扫描（`no_handwritten_rule_numbers_in_prompt_sources`）覆盖；
+    /// - 其余文件里的散文定义 → 必须登记进 `PROSE_CARRIERS`，或在 `PROSE_CARRIER_EXEMPT` 豁免（附理由）。
+    ///
+    /// 旧状态：两半的分工**只有注释描述、没有任何测试**——新增载体文件或新增散文常量即静默留在网外
+    /// （第八批"漏网载体"缺陷的复发口；红灯先行实测：往 rules.rs 加一个含手写阈值的新载体常量
+    /// `PRIMER_E`，`no_handwritten_rule_numbers_in_prose_carriers` 与 ..._in_prompt_sources 两条全绿）。
+    /// 本锁同时做**双向**：登记/豁免必须命中实际定义（无主条目即红），扫描面文件必须真有散文。
+    #[test]
+    fn prose_definitions_are_covered_by_scan_or_registry() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        rust_sources_under(&root, &mut files);
+        let mut discovered: Vec<String> = Vec::new();
+        let mut covered_files: Vec<String> = Vec::new();
+        let mut uncovered: Vec<String> = Vec::new();
+        for f in &files {
+            let rel =
+                f.strip_prefix(&root).unwrap_or(f.as_path()).to_string_lossy().replace('\\', "/");
+            let src = std::fs::read_to_string(f).unwrap_or_default();
+            for (name, _) in discover_prose_definitions(&production_segment(&src)) {
+                if PROSE_SOURCE_FILES.contains(&rel.as_str()) {
+                    covered_files.push(rel.clone());
+                } else if PROSE_CARRIERS.iter().any(|c| c.name == name.as_str()) {
+                } else if PROSE_CARRIER_EXEMPT.iter().any(|(n, _)| *n == name.as_str()) {
+                } else {
+                    uncovered.push(format!("{}::{}", rel, name));
+                }
+                discovered.push(name);
+            }
+        }
+        // 扫描面自证：发现逻辑失效（判据写错/被空串喂饱）时本锁会静默空转
+        assert!(discovered.len() >= 8, "散文定义发现数异常（{}）——发现逻辑可能已失效", discovered.len());
+        for known in ["CHECKLIST_A", "PRIMER_AB", "ENVELOPE_SPEC_BASE"] {
+            assert!(
+                discovered.iter().any(|n| n == known),
+                "发现逻辑漏掉了已知载体 {}（扫描面自证）",
+                known
+            );
+        }
+        assert!(
+            uncovered.is_empty(),
+            "以下散文定义既不在扫描面文件、也未登记/豁免（漏网载体）：{:?}\n\
+             进 LLM 上下文的登记进 PROSE_CARRIERS；不进上下文的在 PROSE_CARRIER_EXEMPT 写明理由",
+            uncovered
+        );
+        // 反向：登记与豁免都必须命中真实定义（无主条目即红，防登记表随时间腐化）
+        for c in PROSE_CARRIERS {
+            assert!(
+                discovered.iter().any(|n| n == c.name),
+                "PROSE_CARRIERS 登记了不存在的散文定义：{}",
+                c.name
+            );
+        }
+        for (n, reason) in PROSE_CARRIER_EXEMPT {
+            assert!(!reason.is_empty(), "豁免 {} 未写理由", n);
+            assert!(
+                discovered.iter().any(|d| d == n),
+                "PROSE_CARRIER_EXEMPT 豁免了不存在的定义：{}（无主豁免）",
+                n
+            );
+        }
+        // 声明的扫描面文件必须真的含散文（否则等于声明了一个空扫描面）
+        for rel in PROSE_SOURCE_FILES {
+            assert!(
+                covered_files.iter().any(|f| f == rel),
+                "PROSE_SOURCE_FILES 声明的 {} 未发现任何散文定义——扫描面名不副实",
+                rel
+            );
+        }
     }
 
     /// 生产段提取自证（第十三批 D5 红灯先行）：中段测试模块之后的生产代码必须保留，
