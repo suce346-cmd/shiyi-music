@@ -10,7 +10,6 @@ interface Props {
   status: LLMStatus;
   /** 双模式优化——feedback + 模式（fast=增量/full=全量） */
   onRefine: (feedback: string, refineMode: "fast" | "full") => void;
-  readOnly?: boolean;
   /** 预估展示用（当前模式；缺省不展示预估） */
   mode?: Mode;
   /** 界面语言（缺省中文） */
@@ -82,7 +81,7 @@ function EnergyBars({ sections }: { sections: EnergySection[] }) {
   );
 }
 
-export default function ResultPanel({ conversation, streamText, status, onRefine, readOnly, mode, locale }: Props) {
+export default function ResultPanel({ conversation, streamText, status, onRefine, mode, locale }: Props) {
   const [copied, setCopied] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [showRefine, setShowRefine] = useState(false);
@@ -111,6 +110,18 @@ export default function ResultPanel({ conversation, streamText, status, onRefine
     turns.push({ role: "assistant", content: streamText, timestamp: Date.now() });
   }
   if (turns.length === 0 && !streamText) return null;
+
+  // #10/#11 操作条的**唯一判定处**（此前散落写死 status === "done"，失败/取消时整条消失）：
+  // - hasOutput：有可复制/可优化的产出（含失败时固化的半成品 turn；流式中断留下的流式文本也算）
+  // - busy：生成/接收中——在途产出不提供操作（避免对旧结果误操作）
+  // - lastIsPartial：**最后一条** assistant 是半成品（后续成功优化会产生新的完整 turn，标记自然失效）
+  const hasOutput = conversation.some(t => t.role === "assistant") || streamText.trim() !== "";
+  const busy = status === "loading" || status === "streaming";
+  const lastAssistant = [...conversation].reverse().find(t => t.role === "assistant");
+  const lastIsPartial = lastAssistant?.partial === true;
+  /** 有产出 + 非在途 → 操作条（复制 + 优化）。历史条目同样可优化（#9 起）
+   *  ——旧的 readOnly 分支已下线：该 prop 早已无人传（历史也能反馈），留着只会误导"历史只读" */
+  const showActions = hasOutput && !busy;
 
   return (
     <div className="animate-[slideUp_300ms_ease] space-y-3">
@@ -155,6 +166,15 @@ export default function ResultPanel({ conversation, streamText, status, onRefine
               const { display, sections } = parseEnergy(turn.content);
               return (
                 <>
+                  {/* #10 半成品角标：生成中断固化下来的产出必须显式标注（内容可能被截断） */}
+                  {turn.partial && (
+                    <div className="flex items-center gap-1.5 mb-1 text-[10px] text-warning">
+                      <span className="px-1.5 py-0.5 rounded-md bg-warning/10 border border-warning/30 font-medium">
+                        {t(locale, "result.partial")}
+                      </span>
+                      <span className="text-text-muted">{t(locale, "result.partial.hint")}</span>
+                    </div>
+                  )}
                   <div className="rounded-2xl rounded-tl-md px-4 py-3 text-[13px] leading-relaxed
                     glass-panel border-l-2 border-brand-500/50 text-text-1 whitespace-pre-wrap
                     selection:bg-brand-500/20">
@@ -177,42 +197,56 @@ export default function ResultPanel({ conversation, streamText, status, onRefine
         );
       })}
 
-      {conversation.some(t => t.role === "assistant") && status === "done" && !readOnly && (
-        <div className="flex items-center gap-2 pt-1">
-          <button onClick={handleCopy}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] text-text-2
-              bg-surface-2/60 hover:bg-surface-3/80 border border-border/30 transition-all duration-150 active:scale-95">
-            {copied ? <IconCheck size={13} className="text-success" /> : <IconCopy size={13} />}
-            {copied ? t(locale, "result.copied") : t(locale, "result.copy")}
-          </button>
-          <button onClick={() => setShowRefine(!showRefine)}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] text-text-2
-              bg-surface-2/60 hover:bg-surface-3/80 border border-border/30 transition-all duration-150 active:scale-95">
-            <IconRefresh size={13} />
-            {t(locale, "result.refine")}
-            <IconChevronDown size={12} className={`transition-transform duration-150 ${showRefine ? "rotate-180" : ""}`} />
-          </button>
+      {/* #11 可发现性：操作条改为**滚动容器内的常驻条**（sticky bottom-0）——
+          此前它是结果流最后一个子元素，输出越长越"藏得深"（用户"找了八遍"）。
+          自带玻璃底 + brand 描边，滚动到任何位置都看得见，且一眼可辨"这里能操作"。 */}
+      {showActions && (
+        <div className="sticky bottom-0 z-10 pt-2 pb-0.5">
+          <div className="glass-panel rounded-xl border border-brand-500/40 bg-surface-1/85 backdrop-blur-md px-2 py-1.5
+            flex items-center gap-2 flex-wrap">
+            <button onClick={handleCopy}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] text-text-2
+                bg-surface-2/60 hover:bg-surface-3/80 border border-border/30 transition-all duration-150 active:scale-95">
+              {copied ? <IconCheck size={13} className="text-success" /> : <IconCopy size={13} />}
+              {copied ? t(locale, "result.copied") : t(locale, "result.copy")}
+            </button>
+            <button onClick={() => setShowRefine(!showRefine)}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] font-medium
+                border transition-all duration-150 active:scale-95
+                ${showRefine
+                  ? "bg-brand-500/20 border-brand-500/50 text-brand-400"
+                  : "bg-brand-500/12 hover:bg-brand-500/22 border-brand-500/35 text-brand-400"}`}>
+              <IconRefresh size={13} />
+              {lastIsPartial ? t(locale, "result.refine.partial") : t(locale, "result.refine")}
+              <IconChevronDown size={12} className={`transition-transform duration-150 ${showRefine ? "rotate-180" : ""}`} />
+            </button>
+            <span className="text-[10px] text-text-muted ml-auto pr-1">
+              {lastIsPartial ? t(locale, "result.partial.ready") : t(locale, "result.actions.hint")}
+            </span>
+          </div>
         </div>
       )}
 
-      {readOnly && conversation.some(t => t.role === "assistant") && (
-        <div className="flex items-center gap-2 pt-1">
-          <button onClick={handleCopy}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] text-text-2
-              bg-surface-2/60 hover:bg-surface-3/80 border border-border/30 transition-all duration-150 active:scale-95">
-            {copied ? <IconCheck size={13} className="text-success" /> : <IconCopy size={13} />}
-            {copied ? t(locale, "result.copied") : t(locale, "result.copy")}
-          </button>
+      {/* #10 无产出时的诚实说明：失败/取消且没有任何正文——不静默留白，明确指向重试 */}
+      {!hasOutput && !busy && (
+        <div className="text-[11px] text-text-muted px-1">
+          {t(locale, "result.none")}
         </div>
       )}
 
-      {showRefine && status === "done" && !readOnly && (
+      {showRefine && !busy && hasOutput && (
         <div className="glass-panel rounded-2xl border border-border/30 p-3.5 space-y-2.5 animate-[fade_200ms_ease]">
           <textarea value={feedback} onChange={e => setFeedback(e.target.value)}
             className="w-full h-16 bg-surface-1 border border-border/60 rounded-xl px-3 py-2.5 text-[13px]
               text-text-1 placeholder:text-text-muted/30 resize-y focus:outline-none
               focus:border-brand-500/40 focus:ring-1 focus:ring-brand-500/20 transition-all duration-150"
             placeholder="比如：唢呐不够炸、人声太软、洗脑循环不明显..." />
+          {/* #10 以半成品为基础时显式告知用户（内容可能被截断，后端也会收到同源告知） */}
+          {lastIsPartial && (
+            <p className="text-[10px] text-warning leading-relaxed">
+              {t(locale, "result.partial.panel")}
+            </p>
+          )}
           {/* 双模式优化——快速（增量）/深度（全量） */}
           <div className="flex gap-2">
             {(["fast", "full"] as const).map((m) => (

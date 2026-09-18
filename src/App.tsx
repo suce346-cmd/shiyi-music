@@ -11,6 +11,7 @@ import RoundtablePanel from "./components/RoundtablePanel";
 import { useSettingsWithSecrets } from "./hooks/useSettings";
 import { usePipeline, ROLE_NAMES, ROLE_EMOJIS, MODE_EXPERTS } from "./hooks/usePipeline";
 import { orderRoundSpeech, assembleFinalTurns } from "./utils/speechOrder";
+import { freezePartial } from "./utils/partialDraft";
 import { useQueue, queueLabel, dequeueNext } from "./hooks/useQueue";
 import QueuePanel from "./components/QueuePanel";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
@@ -52,6 +53,13 @@ export default function App() {
   const rosterRef = useRef<string[]>(MODE_EXPERTS["mode_d"].map((e) => e.id));
   const [status, setStatus] = useState<LLMStatus>("idle");
   const [streamText, setStreamText] = useState("");
+  /** #10 流式正文的**唯一写出口**：ref（catch 固化半成品读）与 state（渲染）同点更新。
+   *  分散写必然漏——漏一处就会把上一轮残留正文当本轮半成品固化（可见状态与固化内容背离）。 */
+  const streamTextRef = useRef("");
+  const writeStreamText = useCallback((v: string) => {
+    streamTextRef.current = v;
+    setStreamText(v);
+  }, []);
   const [errorMessage, setErrorMessage] = useState("");
   const [lastUserInput, setLastUserInput] = useState("");
   const [conversation, setConversation] = useState<ChatTurn[]>([]);
@@ -104,6 +112,8 @@ export default function App() {
     const token = runTokenRef.current; // 捕获当前 run（切模式/新 run 后过期 chunk 丢弃）
     const un = await listen<{ content: string }>("llm-chunk", (event) => {
       if (token !== runTokenRef.current) return; // 过期 run 的流式 chunk 丢弃
+      // #10：ref 与 state 同点更新——catch 里固化半成品读 ref（state 闭包停留在生成前的空串）
+      streamTextRef.current += event.payload.content;
       setStreamText((prev) => prev + event.payload.content);
       setStatus("streaming");
     });
@@ -358,7 +368,7 @@ export default function App() {
     extra?: { originalLyrics: string },
   ) => {
     const token = ++runTokenRef.current; // 作废旧 run
-    setStatus("loading"); setStreamText(""); setErrorMessage("");
+    setStatus("loading"); writeStreamText(""); setErrorMessage("");
     // mode_c 的 userInput 即新主题（原歌词走独立字段）；历史展示用拼接文本保留上下文
     const displayInput = runMode === "mode_c" && extra
       ? `原歌词：\n${extra.originalLyrics}\n\n新主题：\n${userInput}`
@@ -384,7 +394,7 @@ export default function App() {
         // 专家发言实时追加到对话流（记录进 speechLog，结束时合并，不进入 chatHistoryRef）
         onSpeech: (speech) => {
           // 阶段0流式结束后清空中间态流式文本（首个专家发言时），避免统领全文重复显示
-          if (speechLogRef.current.length === 0) setStreamText("");
+          if (speechLogRef.current.length === 0) writeStreamText("");
           speechLogRef.current.push(speech);
           // D-1（#13）：专家发言按模式阵容序稳定归位（#14 后端改串行后为幂等兜底）；
           // 作用域仅本轮（末尾连续 expert 段），上一轮 turns 不动——旧全局归位会跨轮重排
@@ -400,7 +410,7 @@ export default function App() {
         rosterRef.current,
       );
       setConversation(allTurns);
-      setStatus("done"); setStreamText("");
+      setStatus("done"); writeStreamText("");
       chatHistoryRef.current = [
         { role: "user", content: displayInput },
         { role: "assistant", content: raw },
@@ -429,6 +439,16 @@ export default function App() {
         setStatus("idle"); setErrorMessage("已取消");
       } else {
         setStatus("error"); setErrorMessage(errText(e));
+      }
+      // #10 固化半成品（判定单源在 utils/partialDraft::freezePartial）：失败/取消前已流出的正文
+      // 此前只活在 streamText 里（可见但不可用——无 assistant 轮就没有复制入口，chatHistoryRef
+      // 又在 run 开始被清空 → 优化必丢半成品）。固化成 partial 轮 + 同步会话历史（两处同形），
+      // 使"复制 / 基于半成品继续优化"两条路都有源可依；无正文则不固化（由操作条提示承担引导）。
+      const frozen = freezePartial(streamTextRef.current, displayInput);
+      if (frozen) {
+        setConversation((prev) => [...prev, frozen.turn]);
+        chatHistoryRef.current = frozen.history;
+        writeStreamText("");
       }
       // 队列项失败标记（用户可从队列点击查看错误态，点击删除清理）
       if (queue.peek().some((q) => q.id === runId)) {
@@ -465,7 +485,7 @@ export default function App() {
   const handleRefine = useCallback(async (feedback: string, refineMode: "fast" | "full" = "fast") => {
     if (!feedback.trim()) return;
     const token = ++runTokenRef.current; // 作废旧 run
-    setStatus("loading"); setStreamText(""); setErrorMessage("");
+    setStatus("loading"); writeStreamText(""); setErrorMessage("");
     setLastFeedback(feedback);
     speechLogRef.current = [];
     setHistoryView(null); // 优化时同样关闭历史面板（与 handleGenerate 一致）
@@ -487,7 +507,10 @@ export default function App() {
         }
       }
       // 取最后一条 assistant（重复 refine 时注入的是上一版而非初始版）
-      const lastOutput = [...currentHistory].reverse().find((m) => m.role === "assistant")?.content || "";
+      const lastMsg = [...currentHistory].reverse().find((m) => m.role === "assistant");
+      const lastOutput = lastMsg?.content || "";
+      // #10 上一版是否"生成中断的半成品"（由 catch 固化时打标）——透传给注入层附告知
+      const lastOutputPartial = lastMsg?.partial === true;
       // fast 增量时前端预估 targets 透传（无命中传空→后端自动路由；full 不传=全量）
       const { estimateRefineTargets } = await import("./utils/refineTargets");
       const estimated = refineMode === "fast" ? estimateRefineTargets(feedback, mode) : [];
@@ -500,10 +523,11 @@ export default function App() {
         extra: undefined,
         originalLyrics,
         refineMode,
+        lastOutputPartial,
         refineTargets: refineMode === "fast" && estimated.length > 0 ? estimated : undefined,
         onSpeech: (speech) => {
           // 阶段0流式结束后清空中间态流式文本（首个专家发言时）
-          if (speechLogRef.current.length === 0) setStreamText("");
+          if (speechLogRef.current.length === 0) writeStreamText("");
           speechLogRef.current.push(speech);
           // D-1（#13）：阵容序稳定归位，作用域仅本轮（同 handleGenerate）
           setConversation((prev) => orderRoundSpeech([...prev, speech], rosterRef.current));
@@ -532,7 +556,7 @@ export default function App() {
       rosterRef.current,
     );
     setConversation(allTurns);
-    setStatus("done"); setStreamText("");
+    setStatus("done"); writeStreamText("");
     chatHistoryRef.current = [
       ...currentHistory,
       { role: "user", content: feedback },
@@ -568,7 +592,7 @@ export default function App() {
   const handleResume = useCallback(async () => {
     if (status !== "error") return;
     const token = ++runTokenRef.current; // 作废旧 run
-    setStatus("loading"); setStreamText(""); setErrorMessage("");
+    setStatus("loading"); writeStreamText(""); setErrorMessage("");
     speechLogRef.current = [];
     try {
       await ensureLlmListener();
@@ -585,7 +609,7 @@ export default function App() {
         extra: undefined,
         originalLyrics,
         onSpeech: (speech) => {
-          if (speechLogRef.current.length === 0) setStreamText("");
+          if (speechLogRef.current.length === 0) writeStreamText("");
           speechLogRef.current.push(speech);
           // D-1（#13）：阵容序稳定归位，作用域仅本轮（同 handleGenerate）
           setConversation((prev) => orderRoundSpeech([...prev, speech], rosterRef.current));
@@ -600,7 +624,7 @@ export default function App() {
         rosterRef.current,
       );
       setConversation(allTurns);
-      setStatus("done"); setStreamText("");
+      setStatus("done"); writeStreamText("");
       chatHistoryRef.current = [
         ...chatHistoryRef.current,
         { role: "assistant", content: raw },
@@ -964,7 +988,7 @@ export default function App() {
                 if (llmUnlistenRef.current) { llmUnlistenRef.current(); llmUnlistenRef.current = null; }
                 setMode(m);
                 rosterRef.current = MODE_EXPERTS[m].map((e) => e.id); // D-1：阵容序同步
-                setStatus("idle"); setStreamText(""); setErrorMessage("");
+                setStatus("idle"); writeStreamText(""); setErrorMessage("");
                 setConversation([]); chatHistoryRef.current = [];
                 setLastUserInput(""); setLastFeedback("");
                 setHistoryView(null); setCurrentHistoryId(null);

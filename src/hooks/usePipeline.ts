@@ -12,6 +12,7 @@ import type {
 } from "../types";
 import { errText } from "../types";
 import { sanitizeStored } from "./useSettings";
+import { composeRefineInput } from "../utils/partialDraft";
 
 /** 各模式的流水线角色阵容（与后端 orchestrator.rs seats_for_mode 对齐：动态角色 + 主持 + 校验落座） */
 export const MODE_EXPERTS: Record<Mode, Omit<ExpertCard, "status" | "note">[]> = {
@@ -130,6 +131,9 @@ export interface PipelineRefineOptions {
   refineMode?: "fast" | "full";
   /** 显式增量目标（fast 且前端预估命中时透传；缺省由后端自动路由） */
   refineTargets?: PipelineRoleKey[];
+  /** #10 上一版是**生成中断的半成品**（内容可能被截断）：注入时附带告知，
+   *  否则模型会把截断处当完整方案继续加工 */
+  lastOutputPartial?: boolean;
   /** 角色发言回调（同上） */
   onSpeech?: (speech: ChatTurn) => void;
 }
@@ -490,7 +494,12 @@ export function usePipeline() {
       const request: PipelineRequest = {
         mode: opts.mode,
         user_input: isRefine && opts.lastOutput
-          ? `${opts.userInput}\n\n【上一版方案】\n${opts.lastOutput}`
+          // #10：拼接单源在 utils/partialDraft（标记 + 半成品告知 + 上一版正文一处成型）
+          ? composeRefineInput(
+              opts.userInput,
+              opts.lastOutput,
+              (opts as PipelineRefineOptions).lastOutputPartial === true,
+            )
           : opts.userInput,
         model: opts.settings.model,
         api_key: opts.settings.apiKey,

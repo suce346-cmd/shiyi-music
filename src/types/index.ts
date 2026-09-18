@@ -42,6 +42,8 @@ export interface GenerationConfig {
 export interface ChatMessage {
   role: string;
   content: string;
+  /** #10 该条 assistant 是生成中断的半成品（handleRefine 据此决定是否附带告知） */
+  partial?: boolean;
 }
 
 /** 单轮对话（用户输入 / AI 回复 / 专家发言） */
@@ -51,6 +53,9 @@ export interface ChatTurn {
   timestamp: number;
   /** 专家发言时：角色信息（气泡/对话流展示用） */
   speaker?: { id: string; emoji: string; name: string };
+  /** #10 半成品标记：生成中断（出错/取消）时固化的产出——
+   *  可能被截断，故对外显式标注，并在以其为基础优化时明确告知模型。旧记录无此字段 */
+  partial?: boolean;
 }
 
 export interface HistoryEntry {
