@@ -82,6 +82,51 @@ mod tests {
         assert_eq!(v["detail"], "硬校验打回耗尽");
     }
 
+    /// #12 轮间确认门事件 wire format 锁——前端 union 依赖 type 与字段名，改名即红。
+    /// 同时锁定 decision 取值与 `gate::GateDecision::as_str` 同源（协议单源）。
+    #[test]
+    fn round_gate_events_wire_format() {
+        let pending: Value = serde_json::to_value(PipelineEvent::RoundGatePending {
+            round: 1,
+            next_round: 2,
+            timeout_secs: 300,
+        })
+        .unwrap();
+        assert_eq!(pending["type"], "round_gate_pending", "snake_case tag: {}", pending);
+        assert_eq!(pending["round"], 1);
+        assert_eq!(pending["next_round"], 2);
+        assert_eq!(pending["timeout_secs"], 300);
+
+        for d in [
+            crate::commands::gate::GateDecision::Continue,
+            crate::commands::gate::GateDecision::Finalize,
+            crate::commands::gate::GateDecision::Timeout,
+        ] {
+            let resolved: Value = serde_json::to_value(PipelineEvent::RoundGateResolved {
+                round: 1,
+                decision: d.as_str().to_string(),
+            })
+            .unwrap();
+            assert_eq!(resolved["type"], "round_gate_resolved", "snake_case tag: {}", resolved);
+            assert_eq!(resolved["decision"], d.as_str());
+        }
+    }
+
+    /// #12 旧请求/旧前端无 round_gate 字段 → None（默认关闭，不擅自暂停）
+    #[test]
+    fn request_round_gate_defaults_none() {
+        let req: PipelineRequest = serde_json::from_str(
+            r#"{"mode":"mode_b","user_input":"x","model":"m","api_key":"k","base_url":"u","extra":null}"#,
+        )
+        .unwrap();
+        assert_eq!(req.round_gate, None, "缺省必须为关闭——暂停须由前端显式授权");
+        let on: PipelineRequest = serde_json::from_str(
+            r#"{"mode":"mode_b","user_input":"x","model":"m","api_key":"k","base_url":"u","extra":null,"round_gate":true}"#,
+        )
+        .unwrap();
+        assert_eq!(on.round_gate, Some(true));
+    }
+
     #[test]
     fn mode_to_str_name() {
         assert_eq!(Mode::ModeA.to_str_name(), "mode_a");
@@ -230,6 +275,7 @@ mod tests {
             refine_targets: None,
             generation: Some(GenerationConfig { temperature: Some(9.0), max_tokens: None }),
             run_id: None,
+            round_gate: None,
         };
         assert_eq!(validate_request(&req, None).unwrap_err().kind, ErrorKind::Validation);
         req.generation = None;
@@ -263,6 +309,7 @@ mod tests {
                 refine_targets: None,
                 generation: None,
                 run_id: None,
+                round_gate: None,
             }
         }
         use crate::errors::ErrorKind;
@@ -355,6 +402,7 @@ mod tests {
                 refine_targets: None,
                 generation: None,
                 run_id: None,
+                round_gate: None,
             }
         }
         use crate::errors::ErrorKind;
@@ -536,6 +584,10 @@ pub struct PipelineRequest {
     /// 任务归属 id（前端生成传入；缺省后端在 with_timeout 内生成）。
     #[serde(default)]
     pub run_id: Option<String>,
+    /// 轮间人工确认门（#12）：Some(true) = 每轮结束暂停等用户决断；None/false = 全自动推进。
+    /// **缺省关闭**——暂停必须由前端显式授权，后端不擅自挂住 headless/脚本调用方。
+    #[serde(default)]
+    pub round_gate: Option<bool>,
 }
 
 /// 生成参数（全字段可选，缺省=现行硬编码值，零行为变化）。
@@ -789,8 +841,15 @@ pub enum PipelineEvent {
     /// 单次调用的 token 用量（前端累计展示，不阻塞流程）
     StepUsage { role: PipelineRole, prompt_tokens: u32, completion_tokens: u32 },
     /// C5/ADR-3：降级标记（前端累积进 HistoryEntry.degraded → 导出完整度声明 + 历史徽章）。
-    /// flag ∈ call_degraded / budget_degraded / gate_degraded；detail 为人类可读明细。
+    /// flag ∈ call_degraded / budget_degraded / gate_degraded / pause_gate_degraded；
+    /// detail 为人类可读明细。
     Degraded { flag: String, detail: String },
+    /// #12 轮间确认门开启：第 round 轮已汇总完成，流水线**已暂停**等用户决断。
+    /// timeout_secs = 无人确认时的自动放行等待上限（前端据此显示倒计时提示）。
+    RoundGatePending { round: u32, next_round: u32, timeout_secs: u64 },
+    /// #12 门已解除（用户决断或等待超时）——前端据此撤下确认条。
+    /// decision ∈ continue / finalize / timeout（与 `gate::GateDecision::as_str` 同源）。
+    RoundGateResolved { round: u32, decision: String },
 }
 
 /// 事件信封——run_id 归属 + 事件本体（前端按 run_id 过滤，替代旧纯 token 补丁的后端原生支持）

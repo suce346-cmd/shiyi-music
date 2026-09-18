@@ -5,6 +5,7 @@ import ModeSelector from "./components/ModeSelector";
 import InputPanel from "./components/InputPanel";
 import ResultPanel from "./components/ResultPanel";
 import StatusIndicator from "./components/StatusIndicator";
+import RoundGateBar from "./components/RoundGateBar";
 import HistoryPanel from "./components/HistoryPanel";
 import RoundtablePanel from "./components/RoundtablePanel";
 import { useSettingsWithSecrets } from "./hooks/useSettings";
@@ -661,6 +662,22 @@ export default function App() {
     // 完成链由 runGenerateNow.finally 驱动（取消同样走 finally 继续队首）
   }, [pipeline, queue, runningQueueId]);
 
+  /** #12 轮间确认门决断（"继续下一轮" / "结束讨论出终稿"）；后端无门在等时抛错并显示 */
+  const handleGateDecide = useCallback(async (decision: "continue" | "finalize") => {
+    try {
+      await pipeline.decideGate(decision);
+    } catch {
+      // decideGate 已把错误写进 pipeline.error（状态条可见），此处无需二次提示
+    }
+  }, [pipeline]);
+
+  /** #12 一键关闭轮间确认：先放行当前这扇门，再落盘设置（此后全自动推进）。
+   *  顺序不可颠倒——先落盘会让"本次门"失去决策入口。 */
+  const handleGateAutoOff = useCallback(async () => {
+    await handleGateDecide("continue");
+    updateSettings({ roundGate: false });
+  }, [handleGateDecide, updateSettings]);
+
   const filteredHistory = historyFilter === "all" ? historyEntries : historyEntries.filter(e => e.mode === historyFilter);
 
   return (
@@ -734,6 +751,17 @@ export default function App() {
             </label>
             <input id="thinking-mode" type="checkbox" checked={settings.thinking}
               onChange={e => { updateSettings({ thinking: e.target.checked }); setTestResult(null); }}
+              className="w-4 h-4 accent-brand-500 cursor-pointer shrink-0" />
+          </div>
+          {/* #12 轮间确认门开关：默认开启（讨论轮之间必须给用户一次"继续/收工"的机会）；
+              关闭后全程自动推进（生成期间不暂停）。与后端 round_gate 字段同名单源。 */}
+          <div className="flex items-center justify-between gap-2 rounded-lg border border-border/40 bg-surface-0/40 px-3 py-2">
+            <label htmlFor="round-gate" className="text-[11px] text-text-2 cursor-pointer select-none">
+              {t(settings.language, "settings.roundGate")}
+              <span className="block text-[10px] text-text-muted font-normal">{t(settings.language, "settings.roundGate.desc")}</span>
+            </label>
+            <input id="round-gate" type="checkbox" checked={settings.roundGate ?? false}
+              onChange={e => { updateSettings({ roundGate: e.target.checked }); setTestResult(null); }}
               className="w-4 h-4 accent-brand-500 cursor-pointer shrink-0" />
           </div>
           {/* 高级参数（缺省走后端默认；temperature 0~2，max_tokens 1000~30000——F-1 与后端 MAX_TOKENS_CAP 对齐，32000 会被后端拒绝） */}
@@ -998,6 +1026,19 @@ export default function App() {
                   onRemove={(id) => queue.remove(id)}
                   onClear={() => queue.clearWaiting()}
                   onSelect={selectQueueItem}
+                />
+              </div>
+            )}
+
+            {/* #12 轮间确认门：流水线真的停在轮末等决断（不点就一直等，超时后端自动继续） */}
+            {pipeline.gate && (
+              <div className="shrink-0">
+                <RoundGateBar
+                  gate={pipeline.gate}
+                  onDecide={handleGateDecide}
+                  onAutoOff={handleGateAutoOff}
+                  getRunId={pipeline.getRunId}
+                  locale={settings.language}
                 />
               </div>
             )}

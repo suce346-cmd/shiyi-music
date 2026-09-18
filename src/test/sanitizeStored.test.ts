@@ -82,4 +82,14 @@ describe("sanitizeStored", () => {
     );
     expect(drop.roleOverrides?.auditor?.api_key).toBeUndefined();
   });
+
+  // #12 轮间确认门：布尔原样保留（关闭必须能落盘，否则"以后自动推进"下次启动失效）；
+  // 坏类型/旧数据无字段 → 回退默认（默认开启：讨论轮之间必须给用户一次决断机会）
+  it("#12 轮间确认门清洗——布尔保留，坏类型/缺字段回退默认开启", () => {
+    const G = JSON.parse('{"g":"roundGate"}').g;
+    expect(sanitizeStored(JSON.parse(`{"${G}":false}`)).roundGate).toBe(false);
+    expect(sanitizeStored(JSON.parse(`{"${G}":true}`)).roundGate).toBe(true);
+    expect(sanitizeStored(JSON.parse(`{"${G}":"yes"}`)).roundGate).toBe(true);
+    expect(sanitizeStored({}).roundGate).toBe(true);
+  });
 });

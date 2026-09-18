@@ -16,6 +16,9 @@ const defaultSettings: AppSettings = {
   thinking: false,
   // 角色级 API 覆盖默认空：所有角色共用全局配置
   roleOverrides: {},
+  // #12 轮间人工确认门：**默认开启**——讨论轮之间必须给用户一次"继续/收工"的机会
+  // （问题的本体就是"等不到你"）；不想被打断可在门条上一键关闭，此后全自动推进。
+  roundGate: true,
 };
 
 /** 清洗 localStorage 旧数据：坏类型字段回退默认值，防透传后端 serde 反序列化失败。
@@ -34,6 +37,8 @@ export function sanitizeStored(raw: unknown): AppSettings {
   if (o.theme === "light" || o.theme === "dark" || o.theme === "system") base.theme = o.theme;
   // language 清洗（非法值回退中文）
   if (o.language === "zh" || o.language === "en") base.language = o.language;
+  // #12 轮间确认门清洗（非布尔回退默认；旧数据无此字段 → 默认开启）
+  if (typeof o.roundGate === "boolean") base.roundGate = o.roundGate;
   // generation 清洗（数值范围收敛，坏值丢弃走后端默认）
   if (typeof o.generation === "object" && o.generation !== null && !Array.isArray(o.generation)) {
     const g = o.generation as Record<string, unknown>;

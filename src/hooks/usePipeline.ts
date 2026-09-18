@@ -144,6 +144,8 @@ interface PipelineState {
   doneStages: string[];
   /** 本轮累计 token 用量（step_usage 事件累加，startRun 时清零） */
   usage: { prompt_tokens: number; completion_tokens: number };
+  /** #12 轮间确认门：非 null = 流水线已暂停，等用户决断（null = 未在等待） */
+  gate: { round: number; nextRound: number; timeoutSecs: number } | null;
 }
 
 /** 用量零值（startRun/reset 时复位） */
@@ -185,6 +187,7 @@ export function usePipeline() {
     currentStage: null,
     doneStages: [],
     usage: { ...ZERO_USAGE },
+    gate: null,
   });
 
   const unlistenRef = useRef<UnlistenFn | null>(null);
@@ -374,8 +377,8 @@ export function usePipeline() {
           break;
         }
         case "cancelled":
-          // 用户取消——回到空闲，不标红为错误
-          setState((prev) => ({ ...prev, error: null, phase: "done", active: false, currentStage: null }));
+          // 用户取消——回到空闲，不标红为错误（#12：暂停中取消同样要撤下确认条）
+          setState((prev) => ({ ...prev, error: null, phase: "done", active: false, currentStage: null, gate: null }));
           break;
         case "step_usage": {
           // 累计本轮 token 用量（过期 run 的事件已在顶部丢弃）。
@@ -398,9 +401,32 @@ export function usePipeline() {
           ));
           break;
         }
+        case "round_gate_pending":
+          // #12：流水线已暂停——撤下"进行中"观感靠本轮确认条（App 层渲染 gate）
+          setState((prev) => ({
+            ...prev,
+            phase: "discussing",
+            currentStage: null,
+            gate: { round: e.round, nextRound: e.next_round, timeoutSecs: e.timeout_secs },
+          }));
+          speechCbRef.current?.(makeSpeech(
+            "host",
+            `第 ${e.round} 轮讨论完成，已暂停等你确认是否继续第 ${e.next_round} 轮`,
+          ));
+          break;
+        case "round_gate_resolved": {
+          setState((prev) => ({ ...prev, gate: null }));
+          const text = e.decision === "finalize"
+            ? "已确认：结束讨论，直接出终稿"
+            : e.decision === "timeout"
+              ? `等待确认超时（${e.round} 轮），已自动继续下一轮`
+              : "已确认：继续下一轮讨论";
+          speechCbRef.current?.(makeSpeech("host", text));
+          break;
+        }
         case "failed":
           // active:false + 清 currentStage：防后端只发 Failed 不返回 Err 时 UI 永久卡"进行中"
-          setState((prev) => ({ ...prev, error: e.error, phase: "done", active: false, currentStage: null }));
+          setState((prev) => ({ ...prev, error: e.error, phase: "done", active: false, currentStage: null, gate: null }));
           break;
         default: {
           // C5/D6 兜底：未知事件类型显式忽略（后端只增枚举值时旧前端不崩）
@@ -413,7 +439,8 @@ export function usePipeline() {
   }, [cleanup, updateExpert]);
 
   const finishRun = useCallback(() => {
-    setState((prev) => ({ ...prev, active: false, phase: "done", error: null }));
+    // #12：收尾一律撤下确认条（正常结束/异常结束都不留悬挂的门条）
+    setState((prev) => ({ ...prev, active: false, phase: "done", error: null, gate: null }));
     cleanup();
   }, [cleanup]);
 
@@ -440,6 +467,7 @@ export function usePipeline() {
         currentStage: null,
         doneStages: [],
         usage: { ...ZERO_USAGE },
+        gate: null,
       });
       usageRef.current = { ...ZERO_USAGE };
       degradedRef.current = [];
@@ -477,8 +505,10 @@ export function usePipeline() {
         // 生成参数（缺省后端用默认）——F-1 根治：跨入后端前过同一清洗函数，
         // 运行期输入的越界值（如 max_tokens 32000）在此收敛，后端 validate 不再整请求拒绝
         generation: sanitizeStored(opts.settings).generation,
-        // 任务归属 id（后端 envelope/取消/插话定向）
+        // 任务归属 id（后端 envelope/取消/插话/确认门定向）
         run_id: runId,
+        // #12 轮间确认门：用户设置显式透传（缺省/旧数据 → false，后端不擅自暂停）
+        round_gate: opts.settings.roundGate ?? false,
       };
 
       try {
@@ -547,6 +577,8 @@ export function usePipeline() {
         currentStage: null,
         doneStages: [],
         usage: { ...ZERO_USAGE },
+        // #12：切模式/重置一律撤下确认条（旧 run 的门已随 cancel 作废）
+        gate: null,
       });
       usageRef.current = { ...ZERO_USAGE };
       degradedRef.current = [];
@@ -588,6 +620,9 @@ export function usePipeline() {
         // 后端 validate 不再整请求拒绝）——读写请求三个边界共用 sanitizeStored 单源
         generation: sanitizeStored(opts.settings).generation,
         run_id: runId,
+        // #12 轮间确认门：续跑直接进终稿（无讨论轮），确认门不适用——显式关闭，
+        // 不随设置开启（否则后端虽不触发，语义上也该钉死"此路径无门"）
+        round_gate: false,
       };
       try {
         const text = await invoke<string>("pipeline_resume", { request, runId });
@@ -603,7 +638,22 @@ export function usePipeline() {
     [startListening, finishRun, cleanup]
   );
 
+  /** #12 轮间确认门决断（"继续下一轮" / "结束讨论直接出终稿"）。
+   * 后端无门在等时返回 Validation 错误（本轮尚未结束或已超时自动继续）——上抛并显示，不静默。 */
+  const decideGate = useCallback(async (decision: "continue" | "finalize"): Promise<void> => {
+    const runId = runIdRef.current;
+    if (!runId) throw new Error("无可决断的任务（run_id 为空）");
+    try {
+      await invoke("round_gate_decide", { runId, decision });
+      // 乐观撤条（round_gate_resolved 事件也会撤）——双保险，防事件丢失留下悬挂门条
+      setState((prev) => ({ ...prev, gate: null }));
+    } catch (e) {
+      setState((prev) => ({ ...prev, error: errText(e) }));
+      throw e;
+    }
+  }, []);
+
   // 保留 run/refine/reset 命名（App 调用不变）+ B3 的 cancel + A9 的 getRunId + R3 的 resume
   // C5：degradedRef / validationRef 与 usageRef 同模式——历史保存同源读取（ref 不受闭包定格影响）
-  return { ...state, run, refine, reset, cancel, getRunId, resume, usageRef, degradedRef, validationRef };
+  return { ...state, run, refine, reset, cancel, getRunId, resume, decideGate, usageRef, degradedRef, validationRef };
 }

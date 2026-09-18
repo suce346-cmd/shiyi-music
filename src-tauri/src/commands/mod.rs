@@ -5,6 +5,7 @@ pub mod orchestrator;
 pub mod validator;
 pub mod cancel;
 pub mod interject;
+pub mod gate;
 pub mod keychain;
 pub mod history;
 pub mod logdir;

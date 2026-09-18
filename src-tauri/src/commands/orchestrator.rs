@@ -8,7 +8,7 @@
 //!   全角色与校验员无异议或满 3 轮收敛
 //! - 阶段 2：校验员按标准格式输出最终提示词包；代码硬校验兜底（失败打回重格式化）
 
-use crate::commands::{cancel, interject, llm, prompts, roles, validator};
+use crate::commands::{cancel, gate, interject, llm, prompts, roles, validator};
 use crate::energy::plan_energy_range;
 use crate::errors::AppError;
 use crate::knowledge::KnowledgeBase;
@@ -1858,6 +1858,19 @@ const MAX_DISCUSSION_ROUNDS: u32 = 3;
 /// 流水线整体超时（防静默挂死兜底：所有模式正常 10 分钟内完成）
 pub(crate) const PIPELINE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
+/// #12 轮间确认门：单轮等待上限。无人确认即按"超时"自动放行——
+/// 绝不因用户离开而把流水线挂死到超时强杀。
+pub(crate) const ROUND_GATE_MAX_WAIT: Duration = Duration::from_secs(5 * 60);
+
+/// #12 门的最大道数 = 轮数 - 1（门开在"轮与轮之间"，末轮之后无下一轮可确认）。
+/// 与 `MAX_DISCUSSION_ROUNDS` 同源派生——改轮数自动跟随，不另立数字。
+pub(crate) const ROUND_GATE_COUNT: u32 = MAX_DISCUSSION_ROUNDS.saturating_sub(1);
+
+/// #12 开启确认门时对整体超时的补偿额度：用户的思考时间**不计入生成预算**，
+/// 否则暂停会挤掉终稿阶段、或被 `spawn_guarded` 的硬超时整条强杀。
+pub(crate) const ROUND_GATE_TIMEOUT_ALLOWANCE: Duration =
+    Duration::from_secs(ROUND_GATE_MAX_WAIT.as_secs() * ROUND_GATE_COUNT as u64);
+
 /// spawn + 超时守卫的结果
 enum GuardOutcome {
     /// 正常完成（含业务 Err）
@@ -1897,7 +1910,15 @@ pub async fn run_pipeline<R: Runtime>(app: AppHandle<R>, request: PipelineReques
     let rid = request.run_id.clone().unwrap_or_default();
     cancel::reset(&rid);
     interject::reset(&rid);
-    run_pipeline_with_timeout(app, request, PIPELINE_TIMEOUT).await
+    gate::reset(&rid);
+    // #12：开启确认门时整体超时（= 预算）加补偿额度——暂停等待不吞生成预算。
+    // 缺省关闭（None）走原超时，headless/脚本调用方不受影响。
+    let timeout = if request.round_gate == Some(true) {
+        PIPELINE_TIMEOUT + ROUND_GATE_TIMEOUT_ALLOWANCE
+    } else {
+        PIPELINE_TIMEOUT
+    };
+    run_pipeline_with_timeout(app, request, timeout).await
 }
 
 /// run_pipeline 的可测形态：超时时长参数化（生产 15 分钟，测试注入极小值）
@@ -2020,7 +2041,14 @@ async fn run_pipeline_inner<R: Runtime>(
     }
     // C5/ADR-3：收敛观测——循环走满未 break = 轮次上限强制收敛（budget_degraded 源）
     let mut converged = false;
+    // #12 轮间人工确认门：仅当请求显式开启（后端不擅自暂停）。
+    let gate_enabled = request.round_gate == Some(true);
+    // 用户在第几轮的确认门选择了"结束讨论"（None = 未提前收工）
+    let mut stop_at_user_gate: Option<u32> = None;
+    // 实际走到的轮次（含收敛/上限/提前收工三种终局）——检查点与降级声明同源读取
+    let mut last_round: u32 = 0;
     for round in 1..=MAX_DISCUSSION_ROUNDS {
+        last_round = round;
         let mut all_agree = true;
         // 三元组 =（角色, 修订片段, 角色总体意见）——异议必达，无具体修订的意见也要汇总
         let mut round_changes: Vec<(PipelineRole, Vec<ReviewChange>, String)> = Vec::new();
@@ -2140,9 +2168,76 @@ async fn run_pipeline_inner<R: Runtime>(
                 tracing::warn!(error = %e.message, "检查点落盘失败（不阻断）");
             }
         }
+        // ④ #12 轮间人工确认门（路线图 §修复包 C）：本轮已汇总并落盘 → 暂停等用户决断。
+        //    仅在请求显式开启、且**确实还有下一轮**时开（末轮之后无讨论可确认，开则纯属空等）。
+        //    暂停期间提交的意见由**下一轮开头**的 interject::drain 消费——只有"继续"才有下一轮，
+        //    故语义自洽；选"结束讨论"时残留意见在循环外向用户显式交待（不静默丢失）。
+        //    取消优先：等待循环轮询取消位，用户在暂停中点"停止"立即终止。
+        if gate_enabled && round < MAX_DISCUSSION_ROUNDS {
+            let timeout_secs = ROUND_GATE_MAX_WAIT.as_secs();
+            let _ = emit(PipelineEvent::RoundGatePending {
+                round,
+                next_round: round + 1,
+                timeout_secs,
+            });
+            let _ = emit(PipelineEvent::StepDone {
+                role: PipelineRole::Host,
+                summary: format!(
+                    "第 {} 轮已完成并汇总（已存检查点），等待你确认是否继续第 {} 轮",
+                    round,
+                    round + 1
+                ),
+            });
+            checkpoint()?;
+            let decision = gate::wait(&run_id, ROUND_GATE_MAX_WAIT).await?;
+            let _ = emit(PipelineEvent::RoundGateResolved {
+                round,
+                decision: decision.as_str().to_string(),
+            });
+            match decision {
+                gate::GateDecision::Finalize => {
+                    // 用户主动收工：不是缺陷，但产出非全体共识——按"诚实降级"声明（见循环外）
+                    stop_at_user_gate = Some(round);
+                    break;
+                }
+                gate::GateDecision::Timeout => {
+                    let _ = emit(PipelineEvent::Degraded {
+                        flag: "pause_gate_degraded".into(),
+                        detail: format!(
+                            "第 {} 轮确认门等待超时（{} 秒无人确认），已自动继续下一轮",
+                            round, timeout_secs
+                        ),
+                    });
+                }
+                gate::GateDecision::Continue => {
+                    let _ = emit(PipelineEvent::StepDone {
+                        role: PipelineRole::Host,
+                        summary: format!("已确认继续第 {} 轮讨论", round + 1),
+                    });
+                }
+            }
+        }
     }
     // C5/ADR-3：budget_degraded——轮次上限强制收敛（非全体共识下的产出）
-    if !converged {
+    // #12：用户主动收工与"走满上限"是两种不同终局，必须分别声明，不得混用同一措辞。
+    if let Some(r) = stop_at_user_gate {
+        let _ = emit(PipelineEvent::Degraded {
+            flag: "pause_gate_degraded".into(),
+            detail: format!(
+                "用户在第 {} 轮确认门选择结束讨论，提前进入终稿（非全体共识产出）",
+                r
+            ),
+        });
+        // 暂停期间提交、但因"不再有下一轮"而无人消费的意见：显式记账 + 明确告知未被采纳
+        for note in interject::drain(&run_id) {
+            let preview: String = note.chars().take(60).collect();
+            revisions_log.push(("用户插话（讨论已结束·未进入讨论轮）".to_string(), note.clone()));
+            let _ = emit(PipelineEvent::StepDone {
+                role: PipelineRole::Host,
+                summary: format!("讨论已结束，此条意见未进入讨论轮（不会影响本次终稿）：{}", preview),
+            });
+        }
+    } else if !converged {
         let _ = emit(PipelineEvent::Degraded {
             flag: "budget_degraded".into(),
             detail: format!("讨论轮次上限（{} 轮）强制收敛，非全体共识产出", MAX_DISCUSSION_ROUNDS),
@@ -2159,7 +2254,9 @@ async fn run_pipeline_inner<R: Runtime>(
             user_input: request.user_input.clone(),
             current_plan: current_plan.clone(),
             revisions_log: revisions_log.clone(),
-            round: MAX_DISCUSSION_ROUNDS,
+            // #12 修正：记录**实际走到**的轮次（收敛轮/上限轮/用户提前收工轮），
+            // 旧规则写死 MAX——用户在门里"结束讨论"时会留下"跑了 3 轮"的假记录。
+            round: last_round,
             next_tasks: next_tasks.clone(),
             updated_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -2309,11 +2406,40 @@ pub async fn interject_feedback(run_id: Option<String>, note: String) -> Result<
             refine_targets: None,
             generation: None,
             run_id: None,
+            round_gate: None,
         },
         Some(&note),
     )?;
     interject::push(&rid, note);
     Ok(())
+}
+
+/// #12 轮间确认门决断（前端确认条调）：`continue` = 继续下一轮；`finalize` = 结束讨论直接出终稿。
+/// 只接受这两种（`timeout` 由后端自产，不接受外部注入——见 `gate::GateDecision::parse`）。
+/// 无门在等 → Validation 错误，前端据此提示"当前没有等待确认的轮次"，不静默丢弃。
+#[tauri::command]
+pub async fn round_gate_decide(run_id: Option<String>, decision: String) -> Result<(), AppError> {
+    let rid = run_id.unwrap_or_default();
+    if rid.trim().is_empty() {
+        return Err(crate::errors::AppError::new(
+            crate::errors::ErrorKind::Validation,
+            "缺少 run_id，决断无法定向到任务",
+        ));
+    }
+    let d = gate::GateDecision::parse(&decision).ok_or_else(|| {
+        crate::errors::AppError::new(
+            crate::errors::ErrorKind::Validation,
+            format!("未知的决断 \"{}\"（只接受 continue / finalize）", decision),
+        )
+    })?;
+    if gate::resolve(&rid, d) {
+        Ok(())
+    } else {
+        Err(crate::errors::AppError::new(
+            crate::errors::ErrorKind::Validation,
+            "当前没有等待确认的讨论轮（本轮可能尚未结束，或已等待超时自动继续）",
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3363,6 +3489,7 @@ mod tests {
             refine_targets: None,
             generation: None,
             run_id: None,
+            round_gate: None,
         }
     }
 
@@ -3459,6 +3586,89 @@ mod tests {
         assert!(
             !strip(prod).contains("join_all"),
             "orchestrator.rs 生产代码仍含 join_all——并发机制应已彻底退役"
+        );
+    }
+
+    // ---- #12 轮间人工确认门 ----
+
+    /// 门的道数与超时补偿必须由轮数**同源派生**——改 `MAX_DISCUSSION_ROUNDS` 即自动跟随，
+    /// 不允许出现"轮数改了、补偿没改"的静默漂移（改常量即红）。
+    #[test]
+    fn round_gate_allowance_derives_from_discussion_rounds() {
+        assert_eq!(
+            ROUND_GATE_COUNT,
+            MAX_DISCUSSION_ROUNDS - 1,
+            "门开在轮与轮之间，道数必须 = 轮数 - 1"
+        );
+        assert_eq!(
+            ROUND_GATE_TIMEOUT_ALLOWANCE,
+            ROUND_GATE_MAX_WAIT * ROUND_GATE_COUNT,
+            "超时补偿 = 单轮等待上限 × 门道数（用户思考时间不计入生成预算）"
+        );
+        assert!(
+            ROUND_GATE_MAX_WAIT < PIPELINE_TIMEOUT,
+            "单轮等待上限不得吞掉整条流水线的生成预算"
+        );
+        // 红灯先行暴露的盲区：值断言挡不住"恰好相等的硬编码"（本轮 3-1 == 2，
+        // 把 ROUND_GATE_COUNT 改成字面量 2 时值断言依然绿）。故再锁**定义式源码形状**：
+        // 两项必须写成对上游常量的派生，改轮数时自动跟随，不另立数字。
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/commands/orchestrator.rs");
+        let src = std::fs::read_to_string(&path).unwrap();
+        let prod = &src[..src.find("mod tests").expect("找不到测试模块标记")];
+        assert!(
+            prod.contains("const ROUND_GATE_COUNT: u32 = MAX_DISCUSSION_ROUNDS.saturating_sub(1)"),
+            "#12 门道数未与轮数同源派生（写成字面量会在改轮数时静默失配）"
+        );
+        assert!(
+            prod.contains("const ROUND_GATE_TIMEOUT_ALLOWANCE: Duration =\n    Duration::from_secs(ROUND_GATE_MAX_WAIT.as_secs() * ROUND_GATE_COUNT as u64)")
+                || prod.contains("Duration::from_secs(ROUND_GATE_MAX_WAIT.as_secs() * ROUND_GATE_COUNT as u64)"),
+            "#12 超时补偿未由（单轮上限 × 门道数）派生"
+        );
+    }
+
+    /// #12 接线锁（源码形状）：门必须开在**轮末**、只在**还有下一轮**时开、
+    /// 用**有上限的等待**（无上限 = 挂死到超时强杀）、两种决断都要落到编排分支。
+    #[test]
+    fn round_gate_is_wired_between_rounds_with_bounded_wait() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/commands/orchestrator.rs");
+        let src = std::fs::read_to_string(&path).unwrap();
+        let start = src.find("④ #12 轮间人工确认门").expect("找不到确认门接线起点标记");
+        let end = src.find("// #12：用户主动收工与").expect("找不到确认门接线终点标记");
+        assert!(start < end, "确认门接线区标记顺序异常");
+        let strip = |s: &str| -> String {
+            s.lines().map(|l| l.split("//").next().unwrap_or("")).collect::<Vec<_>>().join("\n")
+        };
+        let region = strip(&src[start..end]);
+        for want in [
+            // 仅当显式开启
+            "gate_enabled",
+            // 只在还有下一轮时开（末轮开 = 空等 5 分钟）
+            "round < MAX_DISCUSSION_ROUNDS",
+            // 通知前端（含超时上限，前端可显示倒计时提示）
+            "RoundGatePending",
+            "timeout_secs",
+            // 有上限的等待（传常量，而非无界）
+            "gate::wait(&run_id, ROUND_GATE_MAX_WAIT)",
+            // 解除通知 + 两种用户决断 + 超时放行
+            "RoundGateResolved",
+            "GateDecision::Finalize",
+            "GateDecision::Continue",
+            "GateDecision::Timeout",
+        ] {
+            assert!(region.contains(want), "#12 接线区缺要素 `{}`：\n{}", want, region);
+        }
+        // 开启门必须补偿整体超时——否则暂停把流水线顶到硬超时被强杀
+        let prod = &src[..src.find("mod tests").expect("找不到测试模块标记")];
+        let prod_code = strip(prod);
+        assert!(
+            prod_code.contains("PIPELINE_TIMEOUT + ROUND_GATE_TIMEOUT_ALLOWANCE"),
+            "开启确认门时整体超时未加补偿额度：暂停等待会吞掉终稿预算"
+        );
+        assert!(
+            prod_code.contains("gate::reset(&rid)"),
+            "run 入口未清门槽——上一轮残留的门会污染新任务"
         );
     }
 
@@ -3725,6 +3935,7 @@ mod tests {
                 model: "x".into(), api_key: "x".into(), base_url: "https://example.invalid".into(),
                 extra: None, original_lyrics: None, role_overrides: None,
                 thinking: false, refine_targets: None, generation: None, run_id: Some("audit".into()),
+                round_gate: None,
             };
             w(&format!("{}_summarize_user", name), &build_summarize_user_prompt("（当前方案占位）", &changes, req.original_lyrics_text()));
 

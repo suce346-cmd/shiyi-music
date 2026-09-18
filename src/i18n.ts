@@ -13,6 +13,8 @@ const zh: Strings = {
   "settings.baseurl": "API 地址",
   "settings.thinking": "思考模式",
   "settings.thinking.desc": "先推理再回答，质量更稳但更慢；自动适配模型能力",
+  "settings.roundGate": "轮间确认门",
+  "settings.roundGate.desc": "每轮讨论结束暂停，等你决定继续或直接出终稿（超时自动继续）",
   "settings.advanced.temp": "温度",
   "settings.advanced.temp.desc": "低=稳定，高=发散（默认 0.6/0.7）",
   "settings.advanced.maxtokens": "输出上限",
@@ -79,6 +81,13 @@ const zh: Strings = {
   "interject.send": "发送",
   "interject.ph": "比如：副歌再炸一点…（下一轮讨论纳入，不中断当前）",
   "interject.hint": "专家讨论中，可随时插话",
+  // #12 轮间确认门（流程真的停下等你决断）
+  "gate.title": "第 {round} 轮讨论已完成 — 是否继续第 {next} 轮？",
+  "gate.timeout": "若 {secs} 秒内未确认，将自动继续下一轮",
+  "gate.continue": "继续下一轮",
+  "gate.finalize": "结束讨论，直接出终稿",
+  "gate.autoOff": "以后自动推进（关闭轮间确认）",
+  "gate.interject.hint": "意见将在下一轮纳入；若选择结束讨论则不纳入",
   "empty.hint": "输入内容开始生成，专家接力协作后出方案",
   "empty.flow": "🪑 流水线流程",
   "empty.s1": "主持人全局统领产出方案（各模式完整指令）",
@@ -125,6 +134,8 @@ const en: Strings = {
   "settings.baseurl": "Base URL",
   "settings.thinking": "Thinking mode",
   "settings.thinking.desc": "Reason first, slower but steadier; auto-adapts to model",
+  "settings.roundGate": "Round confirm gate",
+  "settings.roundGate.desc": "Pause after each round so you decide: continue or finalize (auto-continues on timeout)",
   "settings.advanced.temp": "Temperature",
   "settings.advanced.temp.desc": "Low=stable, high=diverse (default 0.6/0.7)",
   "settings.advanced.maxtokens": "Max tokens",
@@ -191,6 +202,13 @@ const en: Strings = {
   "interject.send": "Send",
   "interject.ph": "e.g. make the chorus hit harder… (next round, non-blocking)",
   "interject.hint": "experts debating — interject anytime",
+  // #12 round confirm gate (pipeline really stops for your decision)
+  "gate.title": "Round {round} done — continue to round {next}?",
+  "gate.timeout": "If not confirmed within {secs}s, the next round starts automatically",
+  "gate.continue": "Continue next round",
+  "gate.finalize": "Stop here and finalize",
+  "gate.autoOff": "Always auto-continue (turn off the gate)",
+  "gate.interject.hint": "Notes are used in the next round; skipped if you finalize",
   "empty.hint": "Type something to generate; experts collaborate into a plan",
   "empty.flow": "🪑 Pipeline",
   "empty.s1": "Host drafts the plan (per-mode instructions)",
@@ -234,6 +252,19 @@ const DICTS: Record<Locale, Strings> = { zh, en };
 export function t(locale: Locale | undefined, key: string): string {
   const l: Locale = locale === "en" ? "en" : "zh";
   return DICTS[l][key] ?? zh[key] ?? key;
+}
+
+/** 带占位符取文案：把 {name} 换成 params[name]（未提供的占位符原样保留，不抛错）。
+ *  用途——含数字的句子在中英里语序不同（"第 1 轮" / "Round 1"），
+ *  拆成前后缀再拼接会破坏语序，故用整句 + 占位符单源。 */
+export function tf(
+  locale: Locale | undefined,
+  key: string,
+  params: Record<string, string | number>,
+): string {
+  return t(locale, key).replace(/\{(\w+)\}/g, (m, k) =>
+    Object.prototype.hasOwnProperty.call(params, k) ? String(params[k]) : m,
+  );
 }
 
 /** 字典完整性：en 与 zh key 集合一致（单测锁定） */

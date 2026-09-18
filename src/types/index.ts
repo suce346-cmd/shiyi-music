@@ -23,6 +23,9 @@ export interface AppSettings {
   theme?: ThemeMode;
   /** 界面语言（缺省中文；旧数据无此字段） */
   language?: Locale;
+  /** #12 轮间人工确认门：每轮结束暂停等用户决断。
+   *  设置默认开启（旧数据无此字段 → 视为开启）；请求缺省 false = 后端不暂停。 */
+  roundGate?: boolean;
 }
 
 /** 主题模式 */
@@ -100,6 +103,13 @@ export interface RoleApiOverride {
 /** 主持人阶段（与 Rust HostStage 对齐）：initial=阶段0统领初稿 / summarize=阶段1汇总分发 */
 export type HostStage = "initial" | "summarize";
 
+/**
+ * #12 轮间确认门决断（与 Rust `gate::GateDecision::as_str` 同源，wire format 由
+ * `models::tests::round_gate_events_wire_format` 锁定）。
+ * 前端只可提交 `continue` / `finalize`；`timeout` 由后端在等待超时后自产。
+ */
+export type GateDecision = "continue" | "finalize" | "timeout";
+
 /** 流水线进度事件 */
 export type PipelineEvent =
   | { type: "step_start"; role: PipelineRoleKey }
@@ -113,7 +123,11 @@ export type PipelineEvent =
   | { type: "failed"; error: string }
   | { type: "cancelled" }
   | { type: "step_usage"; role: PipelineRoleKey; prompt_tokens: number; completion_tokens: number }
-  | { type: "degraded"; flag: string; detail: string };
+  | { type: "degraded"; flag: string; detail: string }
+  /** #12 轮间确认门开启：流水线已暂停，等用户决断（timeout_secs 后自动继续） */
+  | { type: "round_gate_pending"; round: number; next_round: number; timeout_secs: number }
+  /** #12 门已解除（decision ∈ continue / finalize / timeout） */
+  | { type: "round_gate_resolved"; round: number; decision: GateDecision };
 
 /** 事件信封（后端统一包 envelope 传输；run_id 归属，旧裸事件不再出现） */
 export interface PipelineEnvelope {
@@ -163,4 +177,6 @@ export interface PipelineRequest {
   run_id?: string;
   /** 生成参数覆盖（缺省走后端默认；旧后端忽略） */
   generation?: GenerationConfig;
+  /** #12 轮间人工确认门：true = 每轮结束暂停等用户决断；缺省/旧后端 = 全自动推进 */
+  round_gate?: boolean;
 }

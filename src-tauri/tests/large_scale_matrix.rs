@@ -53,6 +53,8 @@ fn make_request(cfg: &TestConfig, mode: Mode, user_input: &str, original_lyrics:
         generation: None,
         run_id: Some(format!("lsm-{}-{}", tag, std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0))),
+        // #12 确认门：矩阵为无人值守压测，必须**保持关闭**（开则每轮停 5 分钟等确认）
+        round_gate: None,
     }
 }
 
