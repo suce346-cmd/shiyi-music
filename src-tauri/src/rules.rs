@@ -179,8 +179,12 @@ pub const RULE_REGISTRY: &[RuleSpec] = &[
     // D-Envelope：方案信封契约——解析器是"方案是否符合结构"的唯一执行者（2026-09-09）
     RuleSpec { id: "plan_envelope_contract", modes: &["mode_a", "mode_b", "mode_c", "mode_d"], symbols: &["parse_plan_sections", "envelope_spec"], executor: "enforce_envelope" },
     // -----------------------------------------------------------------------
-    // 准入限额族（第十三批 D1 补登记）：与上面 16 条"产出硬门"不同，这三条是**请求准入硬门**
+    // 准入限额族（第十三批 D1 补登记）：与上面的**产出硬门族**不同，这三条是**请求准入硬门**
     // （§6.4 验收口径是"每条参数/格式规则恰有一个执行点"，未按产出/准入分类豁免）。
+    // 此处**故意不写"上面 N 条"**——注释里的手写条数是无法机检的第二真源，且产出硬门族内
+    // 混有放宽口（`minimal_section_exemption` 极简段豁免、`lyric_fill_tail_allow` 尾部允许），
+    // 口径一含糊就会数出 17/16/15 三个答案（第十四批核实：原文写 16，逐行实数为 17）。
+    // 条数与唯一性一律由 `rule_registry_is_wellformed` 断言，注释只描述结构、不报数。
     // 不登记 = 规则表里没有它们，删掉执行点/换掉常量都不会有守护测试报红。
     // 执行者在 `models`/`commands::interject`（非 validator），故 `RULE_EXECUTOR_FILES` 已扩至这两个文件。
     // modes 取全模式：准入限额与模式无关（任何模式的请求都过同一道闸）。
@@ -1070,7 +1074,8 @@ mod tests {
                 (*rel, body)
             })
             .collect();
-        assert!(RULE_REGISTRY.len() >= 15, "注册表条目数异常: {}", RULE_REGISTRY.len());
+        // 条目数 / id 唯一性 / 模式域取值由 `rule_registry_is_wellformed` 精确锁定。
+        // 旧守卫 `len() >= 15` 已废（第十四批）：只设下限时删条目不会报红，等于给"静默删规则"留门。
         for rule in RULE_REGISTRY {
             assert!(
                 files.iter().any(|(_, s)| has_call_site(s, rule.executor)),
@@ -1082,6 +1087,54 @@ mod tests {
                     files.iter().any(|(_, s)| s.contains(sym)),
                     "死常量回归：{} 被规则 {} 注册但扫描面内无消费者",
                     sym, rule.id
+                );
+            }
+        }
+    }
+
+    /// 第十四批：注册表**自身**的良构锁（与 `rule_registry_symbols_have_executors` 正交——
+    /// 那条锁"注册表 → 代码"的接线，这条锁注册表自身的准确性与唯一性）。
+    ///
+    /// 旧守卫只有 `RULE_REGISTRY.len() >= 15` 一个下限，三个失败模式都不报红：
+    /// ① 删条目（如 20 → 16）——只设下限，静默通过；
+    /// ② id 重复——`iter().find(|r| r.id == …)` 静默取第一条，注册表出现"影子条目"；
+    /// ③ modes 写错模式名（`mode_e` 之类 typo）——规则静默变成"任何模式都不适用"，
+    ///    与第七批确立的"域取值真实"口径（`craft_trigger_vocabulary_has_consumers_and_real_scope`）同类。
+    #[test]
+    fn rule_registry_is_wellformed() {
+        // ① 精确条数：这是**绊线**不是真源（真源是上面的数组本身）——数字变化必须是有意为之。
+        //    新增规则时同步改本断言（并登记执行器 + 扫描面 + 清单文档改动面）；删除规则时
+        //    必须先确认无执行点残留。
+        const EXPECTED_RULES: usize = 20;
+        assert_eq!(
+            RULE_REGISTRY.len(),
+            EXPECTED_RULES,
+            "注册表条数由 {} 变为 {}：增删规则必须显式同步本断言（原 `>= 15` 下限守卫已废，\
+             删条目不再静默通过）",
+            EXPECTED_RULES,
+            RULE_REGISTRY.len()
+        );
+        // ② id 唯一 + snake_case（id 是清单文档与各断言的检索键，重名会让断言静默查错条目）
+        let mut seen: Vec<&str> = Vec::with_capacity(RULE_REGISTRY.len());
+        for rule in RULE_REGISTRY {
+            assert!(!rule.id.is_empty(), "规则 id 不得为空");
+            assert!(
+                rule.id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+                "规则 id `{}` 须为 snake_case（检索键形态）",
+                rule.id
+            );
+            assert!(!seen.contains(&rule.id), "规则 id 重复登记：{}", rule.id);
+            seen.push(rule.id);
+        }
+        // ③ 模式域取值真实：空域 = 规则永不适用；未登记模式名 = 同样永不适用，且无人察觉
+        for rule in RULE_REGISTRY {
+            assert!(!rule.modes.is_empty(), "规则 {} 模式域为空——该规则永不适用", rule.id);
+            for m in rule.modes {
+                assert!(
+                    ALL_MODES.contains(m),
+                    "规则 {} 的模式域含未登记模式名 `{}`（取值域单源 = ALL_MODES；typo 会让规则静默永不适用）",
+                    rule.id,
+                    m
                 );
             }
         }
