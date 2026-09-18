@@ -560,6 +560,28 @@ fn inject_knowledge(
             "注入总量超封顶"
         );
     }
+    // Q2（第二十五批）：注入结果可观测——命中/未命中表名直接落 INFO（成功路径此前无任何记录，
+    // "style_genre 是否命中"只能靠"无休眠告警"倒推）。段首行形如「## 表名 知识库（按需命中 N 条）」。
+    {
+        let mut hit_tables: Vec<&str> = Vec::new();
+        let mut empty_tables: Vec<&str> = Vec::new();
+        for seg in out.split("## ").skip(1) {
+            let head = seg.lines().next().unwrap_or("");
+            let name = head.split(' ').next().unwrap_or("");
+            if head.contains("按需命中") {
+                hit_tables.push(name);
+            } else if head.contains("未命中") {
+                empty_tables.push(name);
+            }
+        }
+        tracing::info!(
+            role = role.unwrap_or("host"),
+            chars = out.chars().count(),
+            hit = %hit_tables.join(","),
+            empty = %empty_tables.join(","),
+            "知识注入完成"
+        );
+    }
     out
 }
 
@@ -1038,7 +1060,14 @@ async fn run_host_initial<R: Runtime>(
     emit_usage(app, PipelineRole::Host, &resp, run_id);
     // D-Envelope：信封门——不合契约带纠错重写一次（独立额度，不占校验员打回）；
     // 说明行超长同门处理（写入点前置，链路最左修最便宜）
-    enforce_envelope(app, resp.raw, system, user, req, budget, run_id).await
+    let plan = enforce_envelope(app, resp.raw, system, user, req, budget, run_id).await?;
+    // Q2（第二十五批）：阶段0 落 INFO（成功路径此前零记录）
+    tracing::info!(
+        mode = %req.mode.to_str_name(),
+        chars = plan.chars().count(),
+        "阶段0 初稿完成"
+    );
+    Ok(plan)
 }
 
 /// D-Envelope 信封门：解析失败或缺契约 → 带具体纠错清单重写一次（独立额度）；
@@ -2087,6 +2116,17 @@ async fn run_pipeline_inner<R: Runtime>(
     } else {
         steps_for_mode(mode).iter().map(|s| s.role).collect()
     };
+    // Q2（第二十五批）：运行期可观测性——成功路径此前**零 INFO 日志**（日志里只有异常告警），
+    // 四模式 GUI 目测跑完后日志无任何运行记录，排障只能靠 UI/history。关键节点补 INFO（见
+    // `pipeline_logging_nodes_are_present` 源码锁）。
+    tracing::info!(
+        mode = %mode.to_str_name(),
+        roles = roles.len(),
+        incremental,
+        input_chars = request.user_input.chars().count(),
+        has_original_lyrics = request.original_lyrics.is_some(),
+        "流水线开始"
+    );
 
     // ---- 阶段 0：主持人统领（增量模式跳过——上一版方案即起步，上一版格式已注入 user_input）----
     checkpoint()?;
@@ -2203,8 +2243,10 @@ async fn run_pipeline_inner<R: Runtime>(
         }
         if all_agree {
             converged = true;
+            tracing::info!(round, roles_changed = round_changes.len(), all_agree, "讨论轮完成：全体无异议，收敛");
             break; // 动态角色 + 校验员全部无异议 → 收敛
         }
+        tracing::info!(round, roles_changed = round_changes.len(), all_agree, "讨论轮完成：进入汇总");
         // ③ 主持人汇总修订 + 校验员观点 → 新版完整方案 + 下轮任务分发
         let (new_plan, tasks) = run_host_summarize(&app, &current_plan, &round_changes, &request, &budget, &run_id).await?;
         current_plan = new_plan;
@@ -2291,6 +2333,12 @@ async fn run_pipeline_inner<R: Runtime>(
     }
     // C5/ADR-3：budget_degraded——轮次上限强制收敛（非全体共识下的产出）
     // #12：用户主动收工与"走满上限"是两种不同终局，必须分别声明，不得混用同一措辞。
+    tracing::info!(
+        rounds = last_round,
+        converged,
+        stopped_by_user = stop_at_user_gate.is_some(),
+        "讨论收敛"
+    );
     if let Some(r) = stop_at_user_gate {
         let _ = emit(PipelineEvent::Degraded {
             flag: "pause_gate_degraded".into(),
@@ -2350,6 +2398,14 @@ async fn run_pipeline_inner<R: Runtime>(
     }
     // R3：终稿成功（即使降级也是产出）→ 删除检查点，不留残留
     crate::commands::checkpoint::clear(&app, &run_id);
+    // Q2（第二十五批）：流水线终局落 INFO——此前成功路径零记录，日志里看不出"跑过一次"
+    tracing::info!(
+        mode = %mode.to_str_name(),
+        chars = final_text.chars().count(),
+        issues = issues.len(),
+        rounds = last_round,
+        "流水线完成"
+    );
 
     Ok(final_text)
 }
@@ -3632,6 +3688,47 @@ mod tests {
         assert_eq!(folded[0].0, "早期修订");
         assert!(folded[0].1.contains("等 6 条早期修订已折叠"), "got: {}", folded[0].1);
         assert_eq!(folded.len(), 25, "1 摘要 + 最近 24 条");
+    }
+
+    /// 第二十五批 Q2 修复锁（运行期可观测性，源码形状）：流水线关键节点的 INFO 日志必须存在。
+    /// 历史缺口：四模式 GUI 目测跑完后日志除告警外**零运行记录**——"跑过几次 / 收敛几轮 /
+    /// 哪张关键词表命中"全不可见，排障只能靠 UI/history；`orchestrator` 里日志调用清一色
+    /// warn!/error!（成功路径静默）。
+    /// 锁定面 = 6 个节点锚点必须出现在**生产段**且位于 `tracing::info!` 调用内（防被挪进注释冒充）。
+    /// 边界声明（诚实）：本锁只保证"日志调用点存在"，不保证"运行必被执行"——后者由实跑复测
+    /// （GUI/无头日志出现对应 INFO 行）承担，二者缺一不可。
+    #[test]
+    fn pipeline_logging_nodes_are_present() {
+        let src = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/commands/orchestrator.rs"),
+        )
+        .expect("读 orchestrator.rs 失败");
+        let production = crate::rules::production_segment(&src);
+        let anchors = [
+            ("流水线开始", "run_pipeline_inner 入口"),
+            ("阶段0 初稿完成", "run_host_initial 出口"),
+            ("讨论轮完成", "阶段1 轮末"),
+            ("讨论收敛", "阶段1 收敛判定"),
+            ("知识注入完成", "inject_knowledge 出口"),
+            ("流水线完成", "run_pipeline_inner 终局"),
+        ];
+        for (anchor, where_) in anchors {
+            let pos = production
+                .find(anchor)
+                .unwrap_or_else(|| panic!("关键节点 INFO 日志缺失：{}（{}）", anchor, where_));
+            // 取锚点前 240 个**字符**（按字节切会命中多字节字符内部 panic）
+            let mut head_chars: Vec<char> = production[..pos].chars().collect();
+            let head: String = head_chars
+                .split_off(head_chars.len().saturating_sub(240))
+                .into_iter()
+                .collect();
+            assert!(
+                head.contains("tracing::info!"),
+                "锚点 {:?}（{}）不在 tracing::info! 调用内——可能被挪进注释/文案冒充",
+                anchor,
+                where_
+            );
+        }
     }
 
     /// 注入量规范：每个角色用"最坏情况方案"（命中所有关键词表 + 全能量区间）注入，

@@ -226,7 +226,7 @@ ${VOCAL_DIM_COUNT_CN}维思考检查表（音域/音色/发声/颤音/咬字/节
 
 规则：
 - 结构标签用英文方括号单独成行：[Verse] [Chorus] [Bridge] [Intro] [Outro] [Pre-Chorus] [Interlude] [Build Up] [Breakdown] [Drop] [Hook]
-- 说明行也在方括号内，跟在结构标签下一行，格式：[乐器1+行为, 乐器2+行为, ..., 空间/力度, 人声状态]
+- 说明行也在方括号内，跟在结构标签下一行，格式：[乐器1+行为, 乐器2+行为, ..., ${DESC_LINE_SPACE_SLOT}, 人声状态]
 - 乐器必须逐个列出具体名称+行为动词，按在本段中的比重从前到后排列。禁止用"full band""all instruments"等笼统词
 - 示例：稀疏段 `[solo piano low sparse notes, tense intimate room, voice hesitant close-mic]`
 - 示例：饱满段 `[acoustic guitar fingerpicked, cello dark bowing, warm piano cushions, light brushed drums, intimate room, voice open earnest]`
@@ -763,7 +763,7 @@ ${VOCAL_DIM_COUNT_CN}维思考检查表（音域/音色/发声/颤音/咬字/节
 
 规则：
 - 结构标签单独成行：[Hook] [Verse] [Chorus] [Intro] [Outro] [Build Up] [Drop] [Bridge] [Beat Switch]
-- 说明行在标签下一行，格式：[乐器1+行为, 乐器2+行为, ..., 空间/力度, 人声状态]，整行含方括号 ≤${DESC_LINE_MAX} 字符（上限内须保乐器+行为动词，不得为缩短删乐器）
+- 说明行在标签下一行，格式：[乐器1+行为, 乐器2+行为, ..., ${DESC_LINE_SPACE_SLOT}, 人声状态]，整行含方括号 ≤${DESC_LINE_MAX} 字符（上限内须保乐器+行为动词，不得为缩短删乐器）
 - 乐器必须逐个列出具体名称+行为动词，按在本段中的比重排列。禁止用"full band""all instruments"
 - 三要素（配器+动态+人声）必须完整，配器按段落功能起伏（参考"逐段动态参考"，抖音模式无逐段件数硬门），乐器逐个列名+行为动词
 - 歌词正文用中文，每行<=${DOUYIN_LINE_MAX}字
@@ -1022,7 +1022,7 @@ ${VOCAL_DIM_COUNT_CN}维思考检查表（音域/音色/发声/颤音/咬字/节
 
 规则：
 - 结构标签用英文方括号单独成行：[Verse] [Chorus] [Bridge] [Intro] [Outro] [Pre-Chorus] [Interlude] [Build Up] [Breakdown] [Drop] [Hook]
-- 说明行在标签下一行，格式：[乐器1+行为, 乐器2+行为, ..., 空间/力度, 人声状态]
+- 说明行在标签下一行，格式：[乐器1+行为, 乐器2+行为, ..., ${DESC_LINE_SPACE_SLOT}, 人声状态]
 - 乐器必须逐个列出具体名称+行为动词，按在本段中的比重从前到后排列。禁止用"full band""all instruments"等笼统词
 - 三要素（配器+动态+人声）必须完整，配器部分：${MINIMAL_SECTION_EXEMPT}
 - 歌词正文用用户原始语言（中文歌词就写中文）

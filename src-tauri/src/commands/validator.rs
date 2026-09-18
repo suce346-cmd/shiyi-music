@@ -459,12 +459,17 @@ fn is_bare_package_line(l: &str) -> bool {
 /// 歌词行判定的排除前缀表（单源）：抖音逐行字数门与 C2 保真校验共用同一分类。
 /// '（' 与「注：」「结构归类」开头的方案元信息行同样不算歌词（两侧对称排除，保真比对不受干扰）；
 /// TRANSCRIPTION_ISSUE 标记行不算歌词（P4 实网防御：标记若残留在任何输出中，不得按歌词计字数）。
+/// `<<<` 信封标记形态同样排除（第二十五批 Q3 实网修复）：主持人可能把标记**错写**成
+/// `<<<STYLE>>`/`<<<PARAMS>>`（少一个 `>`）——错写行不被 `rules::parse_plan_sections` 识别为
+/// 节边界 → 落进 LYRICS 节 → 被当歌词行 → 保真校验报"收敛方案第 N 行歌词「<<<STYLE>>」缺失"
+/// → 打回耗尽降级（2026-09-19 实跑复现，validation_passed=false）。信封标记（含一切 `<<<` 变体）
+/// 都不是歌词，两侧对称排除。
 /// Suno 终稿行型解析（非"猜"）：终稿格式由转写契约明确定义——结构标签 `[X]`（无逗号）、
 /// 说明行 `[乐器, ...]`（含逗号）、歌词行（其余）。本函数只在这类格式已定义的场合使用
 /// （终稿侧行提取 / 信封 LYRICS 节内部分行型）；主持人自由文本上禁止使用（D-Envelope 已除）。
 const LYRIC_LINE_EXCLUDED_PREFIXES: &[&str] = &[
     "[", "#", "-", "*", "（", "注：", "结构归类", "Style", "风格", "参数", "Weirdness",
-    "TRANSCRIPTION_ISSUE",
+    "TRANSCRIPTION_ISSUE", "<<<",
 ];
 
 /// 歌词行判定（单源）：排除空行/结构标签/说明行/元信息/Style Prompt/参数行/裸包装行。
@@ -548,6 +553,16 @@ fn check_transcription_fidelity_impl(converged_plan: &str, final_text: &str, mod
         return Vec::new();
     }
     if envelope {
+        // Q3（第二十五批）语义精确化：`envelope` 参数是**信封门开关**，不等于"本方案实际合规信封"。
+        // 实网复现：主持人两次未过信封契约 → `envelope_fallback` 回退自由格式，但开关仍开 →
+        // 旧实现直接走信封闭环，`parse_plan_sections` 因残留 `<<<LYRICS>>>` 返回 Some，
+        // 把错写标记（`<<<STYLE>>`）划入 LYRICS 节 → 误报"缺失" → 打回耗尽降级
+        // （2026-09-19 实跑：validation_passed=false / 终稿 612 字）。
+        // 现前置**合规判定**（单源 `envelope_defect_mode`，与信封门同一判据）：不合规即跳过保真，
+        // 与函数文档"方案不合信封 → 跳过保真，不制造启发式噪音"的声明严格一致。
+        if crate::rules::envelope_defect_mode(converged_plan, mode).is_some() {
+            return Vec::new();
+        }
         return match crate::rules::parse_plan_sections(converged_plan) {
             Some(sections) => {
                 let plan_lines: Vec<(usize, String)> = sections
@@ -988,6 +1003,42 @@ mod tests {
     }
 
     // ---- C2/ADR-1：转写保真校验（红灯先行——桩返回空时篡改/增删用例必须失败） ----
+
+    /// 第二十五批 Q3 修复锁（实网降级根治，红灯先行）：
+    /// ① 信封标记形态（含主持人**错写变体** `<<<STYLE>>`/`<<<PARAMS>>`——少一个 `>`）在任何一侧
+    ///    都不得被当歌词行。实网：错写标记不被 `parse_plan_sections` 识别为节边界 → 落进 LYRICS 节
+    ///    → 保真报"收敛方案第 5 行歌词「<<<STYLE>>」在终稿中缺失" → 打回耗尽降级
+    ///    （2026-09-19 实跑复现：validation_passed=false，终稿 612 字）。
+    /// ② 自由格式/信封回退方案（标记错写、节序错乱）→ 保真必须**跳过**（返回空）：不得在自由文本上
+    ///    跑行型启发式（81% 噪音史），更不得把节外散文行当歌词制造冤案挤占打回额度。
+    /// ③ 合规信封方案仍照常保真（不得为修 ①② 而误杀真缺陷）。
+    #[test]
+    fn fidelity_skips_freeform_plan_and_ignores_envelope_marks() {
+        // ① 标记形态（正确 + 错写）都不是歌词行；真歌词行不被误杀
+        for l in ["<<<LYRICS>>>", "<<<STYLE>>>", "<<<STYLE>>", "<<<PARAMS>>", "<<<NOTES>>>"] {
+            assert!(!is_lyric_line(l), "{:?} 不得按歌词行计（信封标记及其错写变体）", l);
+        }
+        for l in ["凌晨 两点半", "我不睡 我不退", "深夜 灯亮 键盘响"] {
+            assert!(is_lyric_line(l), "{:?} 必须仍是歌词行（防误杀）", l);
+        }
+        // ② 自由格式（错写标记 + LYRICS 节内混入节外散文）→ 跳过保真
+        let freeform = "<<<LYRICS>>>\n凌晨 两点半\n这里是分析散文的续行内容\n<<<STYLE>>\nStyle Prompt: x\n<<<PARAMS>>\nW=1";
+        let final_ok = "Style Prompt: x\n[Verse]\n[pad, close room, voice hushed, 能量:2]\n凌晨 两点半\n参数: Weirdness=18 | Style Influence=82 | Audio Influence=0";
+        assert!(
+            crate::rules::envelope_defect_mode(freeform, "mode_a").is_some(),
+            "fixture 必须是不合规信封（错写标记）"
+        );
+        assert!(
+            check_transcription_fidelity_impl(freeform, final_ok, "mode_a", true).is_empty(),
+            "自由格式/信封回退方案必须跳过保真（否则散文行/错写标记被当歌词 → 冤案降级）"
+        );
+        // ③ 合规信封仍照常抓真缺陷（篡改歌词必须报）
+        let ok_plan = "<<<LYRICS>>>\n[Verse]\n[pad, close room, voice hushed, 能量:2]\n凌晨 两点半\n<<<STYLE>>>\nStyle Prompt: x\n<<<PARAMS>>>\nW=1";
+        let tampered = "Style Prompt: x\n[Verse]\n[pad, close room, voice hushed, 能量:2]\n凌晨 三点半\n参数: Weirdness=18 | Style Influence=82 | Audio Influence=0";
+        let issues = check_transcription_fidelity_impl(ok_plan, tampered, "mode_a", true);
+        assert!(!issues.is_empty(), "合规信封下篡改歌词必须被抓（不得误杀真缺陷）");
+        assert!(issues[0].contains("凌晨三点半"), "报错须含终稿行原文（去空白口径）: {:?}", issues);
+    }
 
     /// 收敛方案 fixture：A 模式完整方案（歌词行 5 行：oom + 4 正文行）
     fn fidelity_plan() -> String {

@@ -668,10 +668,10 @@ pub fn checklist(mode: &str) -> String {
 /// 由 `no_handwritten_rule_numbers_in_prose_carriers` 扫描 `PROSE_CARRIERS` 锁定）——
 /// 旧实现手写全文数字，与常量/`ARC_PARAMS` 脱钩（#21 家族残留：`CHECKLIST_A` 的
 /// 10 条弧线区间整段复刻 `ARC_PARAMS`、`CHECKLIST_D` 的抖音区间无常量锁）。
-const CHECKLIST_A: &str = "【校验清单 A·单源】Style Prompt≤${STYLE_PROMPT_MAX}字符且≥${STYLE_PROMPT_MIN}字符；结构标签≥${MIN_SECTION_TAGS}段；能量差≥${MIN_ENERGY_GAP}级（${ENERGY_SCALE}）；配器差≥${MIN_INSTRUMENT_GAP}件、单段${INSTRUMENT_RANGE}件（最弱段即下限${MIN_INSTRUMENT_WEAK}件，声明'极简段'的段落豁免下限）、最强段≥${MIN_INSTRUMENT_STRONG}件；说明行≤${DESC_LINE_MAX}字符（含方括号整行计，上限内须保乐器+行为动词）；弧线参数：${ARC_INLINE}；Audio Influence=0；断句单空格、禁/与、标点全半角。";
-const CHECKLIST_B: &str = "【校验清单 B·单源】Style Prompt≤${STYLE_PROMPT_MAX}字符且≥${STYLE_PROMPT_MIN}字符；结构标签≥${MIN_SECTION_TAGS}段；能量差≥${MIN_ENERGY_GAP}级（${ENERGY_SCALE}）；配器差≥${MIN_INSTRUMENT_GAP}件、单段${INSTRUMENT_RANGE}件（最弱段即下限${MIN_INSTRUMENT_WEAK}件，声明'极简段'的段落豁免下限）、最强段≥${MIN_INSTRUMENT_STRONG}件；说明行≤${DESC_LINE_MAX}字符（含方括号整行计，上限内须保乐器+行为动词）；参数固定区间：Weirdness ${MODE_B_WEIRD_RANGE}、Style Influence ${MODE_B_STYLE_RANGE}（B 专属区间为准，弧线区间不适用 B）；Audio Influence=0；断句单空格、禁/与、标点全半角。";
-const CHECKLIST_C: &str = "【校验清单 C·单源】逐行等字数（差一字即失败，尾部≤${LYRIC_FILL_TAIL}行收尾）；行数与原歌词一致；段落结构与原歌词一致（禁新增Hook/Chorus段）；韵脚位置与模式保留；说明行带方括号且≤${DESC_LINE_MAX}字符（整行计）；Style Prompt≤${STYLE_PROMPT_MAX}字符；断句单空格、禁/与、标点全半角。";
-const CHECKLIST_D: &str = "【校验清单 D·单源】Hook≥${HOOK_MIN}次；单段Verse≤${VERSE_MAX_LINES}行；每行≤${DOUYIN_LINE_MAX}字；结尾骤停（一刀切，含abruptly/cut标识）；BPM≥${DOUYIN_BPM_MIN}；Style Prompt≤${STYLE_PROMPT_MAX}字符且≥${STYLE_PROMPT_MIN}字符；说明行≤${DESC_LINE_MAX}字符（含方括号整行计，上限内须保乐器+行为动词）；参数抖音${DOUYIN_WEIRD_RANGE}/${DOUYIN_STYLE_RANGE}（仅当含≥${NARRATIVE_SECTIONS_MIN}叙事段Verse/Pre-Chorus/Bridge且方案写明'叙事型'归类，方可回落A/B弧线区间，二者缺一打回）；Audio Influence=0；断句单空格、禁/与、标点全半角。";
+const CHECKLIST_A: &str = "【校验清单 A·单源】Style Prompt≤${STYLE_PROMPT_MAX}字符且≥${STYLE_PROMPT_MIN}字符；结构标签≥${MIN_SECTION_TAGS}段；能量差≥${MIN_ENERGY_GAP}级（${ENERGY_SCALE}）；配器差≥${MIN_INSTRUMENT_GAP}件、单段${INSTRUMENT_RANGE}件（最弱段即下限${MIN_INSTRUMENT_WEAK}件，声明'极简段'的段落豁免下限）、最强段≥${MIN_INSTRUMENT_STRONG}件；说明行≤${DESC_LINE_MAX}字符（含方括号整行计，须含${DESC_LINE_SPACE_SLOT}与人声状态槽位；上限内须保乐器+行为动词）；弧线参数：${ARC_INLINE}；Audio Influence=0；断句单空格、禁/与、标点全半角。";
+const CHECKLIST_B: &str = "【校验清单 B·单源】Style Prompt≤${STYLE_PROMPT_MAX}字符且≥${STYLE_PROMPT_MIN}字符；结构标签≥${MIN_SECTION_TAGS}段；能量差≥${MIN_ENERGY_GAP}级（${ENERGY_SCALE}）；配器差≥${MIN_INSTRUMENT_GAP}件、单段${INSTRUMENT_RANGE}件（最弱段即下限${MIN_INSTRUMENT_WEAK}件，声明'极简段'的段落豁免下限）、最强段≥${MIN_INSTRUMENT_STRONG}件；说明行≤${DESC_LINE_MAX}字符（含方括号整行计，须含${DESC_LINE_SPACE_SLOT}与人声状态槽位；上限内须保乐器+行为动词）；参数固定区间：Weirdness ${MODE_B_WEIRD_RANGE}、Style Influence ${MODE_B_STYLE_RANGE}（B 专属区间为准，弧线区间不适用 B）；Audio Influence=0；断句单空格、禁/与、标点全半角。";
+const CHECKLIST_C: &str = "【校验清单 C·单源】逐行等字数（差一字即失败，尾部≤${LYRIC_FILL_TAIL}行收尾）；行数与原歌词一致；段落结构与原歌词一致（禁新增Hook/Chorus段）；韵脚位置与模式保留；说明行带方括号且≤${DESC_LINE_MAX}字符（整行计，须含${DESC_LINE_SPACE_SLOT}与人声状态槽位）；Style Prompt≤${STYLE_PROMPT_MAX}字符；断句单空格、禁/与、标点全半角。";
+const CHECKLIST_D: &str = "【校验清单 D·单源】Hook≥${HOOK_MIN}次；单段Verse≤${VERSE_MAX_LINES}行；每行≤${DOUYIN_LINE_MAX}字；结尾骤停（一刀切，含abruptly/cut标识）；BPM≥${DOUYIN_BPM_MIN}；Style Prompt≤${STYLE_PROMPT_MAX}字符且≥${STYLE_PROMPT_MIN}字符；说明行≤${DESC_LINE_MAX}字符（含方括号整行计，须含${DESC_LINE_SPACE_SLOT}与人声状态槽位；上限内须保乐器+行为动词）；参数抖音${DOUYIN_WEIRD_RANGE}/${DOUYIN_STYLE_RANGE}（仅当含≥${NARRATIVE_SECTIONS_MIN}叙事段Verse/Pre-Chorus/Bridge且方案写明'叙事型'归类，方可回落A/B弧线区间，二者缺一打回）；Audio Influence=0；断句单空格、禁/与、标点全半角。";
 
 /// 阶段 0 地基 primer（模式专属，每模式≤800字；M9 顺序：受众→物件→约束→旋律）。
 /// 定位 = **工序顺序锚点**（primer 独有内容：意象家族/声学映射/Verse2 新增信息/借体覆盖/弧线能量标尺），
@@ -755,6 +755,9 @@ pub const PROSE_CARRIERS: &[ProseCarrier] = &[
     // 说明行契约正文（第二十三批）：旧实现是 `desc_line_contract()` 的 format! 局部手写，
     // 既不进扫描面也不被入网自证发现——改常量不联动它。现为注册载体。
     ProseCarrier { name: "DESC_LINE_CONTRACT", text: DESC_LINE_CONTRACT, csv_locked: &[] },
+    // 说明行「空间/力度」槽位名（第二十五批 Q1）：进 LLM 上下文（经 ${DESC_LINE_SPACE_SLOT}
+    // 插值进四清单/契约/制作人与校验员核查项）——登记即受扫描网与入网自证覆盖。
+    ProseCarrier { name: "DESC_LINE_SPACE_SLOT", text: DESC_LINE_SPACE_SLOT, csv_locked: &[] },
     // 打回 issue 文案（第二十批补登记）：随【格式问题】清单进 LLM 上下文（orchestrator 打回循环），
     // 此前既不在两个源文件里也没登记——同样是发现网暴露的漏网载体。为此把常量放开为 `pub(crate)`。
     ProseCarrier {
@@ -807,6 +810,7 @@ fn placeholder_pairs() -> Vec<(&'static str, String)> {
         ("${MODE_B_WEIRD_RANGE}", format!("{}-{}", MODE_B_WEIRD_MIN, MODE_B_WEIRD_MAX)),
         ("${MODE_B_STYLE_RANGE}", format!("{}-{}", MODE_B_STYLE_MIN, MODE_B_STYLE_MAX)),
         ("${DESC_LINE_MAX}", DESC_LINE_MAX_CHARS.to_string()),
+        ("${DESC_LINE_SPACE_SLOT}", DESC_LINE_SPACE_SLOT.to_string()),
         ("${DOUYIN_LINE_MAX}", DOUYIN_LINE_MAX_CHARS.to_string()),
         ("${LYRIC_CHARS_VERSE}", format!("{}-{}", LYRIC_LINE_VERSE_MIN, LYRIC_LINE_VERSE_MAX)),
         ("${LYRIC_CHARS_CHORUS}", format!("{}-{}", LYRIC_LINE_CHORUS_MIN, LYRIC_LINE_CHORUS_MAX)),
@@ -2503,6 +2507,62 @@ mod tests {
         assert_eq!((*smin, *smax), (csv_min, csv_max), "全程高能须与 CSV style_arc_high 同源");
     }
 
+    /// 第二十五批 Q1 修复锁（跨载体）：说明行「空间/力度」槽位必须**既有告知、又有核查者**。
+    /// 历史缺口（第二十四批 GUI 四模式目测暴露）：该槽位只出现在模式 prompt 的格式行与说明行
+    /// 契约里，**四模式 checklist 与制作人/校验员的核查项零覆盖**——D 产物 3 个 Hook 段
+    /// 2 段缺该项而四门全绿（"上游告知有、核查者缺位"族）。
+    /// 锁定面（任一缺失即红）：① 四模式 checklist 渲染后含槽位名（核查依据）；
+    /// ② 制作人 prompt 含槽位核查项；③ 两版校验员 prompt 含槽位补齐项；
+    /// ④ 说明行契约渲染后含槽位名且零占位符残留；⑤ 模式 prompt 源文本恰有
+    /// `prompts.rs` 的三处格式行引用（删一处＝上游告知缺口）。
+    #[test]
+    fn desc_line_space_slot_declared_across_carriers() {
+        // ① 四模式清单（渲染后必须出现槽位名，作为审改/校验的核对依据）
+        for m in ALL_MODES {
+            let cl = checklist(m);
+            assert!(
+                cl.contains(DESC_LINE_SPACE_SLOT),
+                "{} 清单未覆盖说明行槽位 {:?}（核查依据缺位＝产物缺项无人把关）",
+                m,
+                DESC_LINE_SPACE_SLOT
+            );
+        }
+        // ② 制作人（R-4 说明行终裁）：必须逐段核对槽位
+        let producer = crate::commands::roles::producer().system_prompt;
+        assert!(
+            producer.contains("${DESC_LINE_SPACE_SLOT}"),
+            "制作人 prompt 未引用槽位占位符（说明行终裁者不看槽位）"
+        );
+        assert!(
+            producer.contains("逐段核对说明行槽位齐全"),
+            "制作人 prompt 缺槽位核查项（只说'保乐器'不够——缺空间/力度/人声项也要抓）"
+        );
+        // ③ 两版校验员（终稿格式端口）：缺槽位必须补齐
+        let auditor = crate::commands::roles::auditor().system_prompt;
+        assert!(auditor.contains("${DESC_LINE_SPACE_SLOT}"), "校验员 prompt 未引用槽位");
+        assert!(auditor.contains("必须补齐后再输出"), "校验员 prompt 缺补齐语义（只说上限不管缺项）");
+        let auditor_c = crate::commands::roles::auditor_format_prompt_mode_c();
+        assert!(auditor_c.contains("${DESC_LINE_SPACE_SLOT}"), "Mode C 校验员 prompt 未引用槽位");
+        assert!(auditor_c.contains("必须补齐后再输出"), "Mode C 校验员 prompt 缺补齐语义");
+        // ④ 说明行契约（渲染后含槽位名，零残留）
+        let contract = desc_line_contract();
+        assert!(contract.contains(DESC_LINE_SPACE_SLOT), "说明行契约缺槽位名");
+        assert!(!contract.contains("${"), "说明行契约渲染后残留占位符");
+        // ⑤ 模式 prompt 源文本引用数（上游告知面；prompts.rs 是声明式扫描面文件）
+        let src = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/commands/prompts.rs"),
+        )
+        .expect("读 prompts.rs 失败");
+        let n = src.matches("${DESC_LINE_SPACE_SLOT}").count();
+        assert_eq!(
+            n, 3,
+            "prompts.rs 说明行格式行应恰有 3 处引用槽位占位符（实际 {}）——删一处即上游告知缺口",
+            n
+        );
+        // 异常面自证：槽位名本身不得是空串/占位符形态（防"声明强于实现"式假锁）
+        assert!(!DESC_LINE_SPACE_SLOT.is_empty() && !DESC_LINE_SPACE_SLOT.contains("${"));
+    }
+
     /// R1 真源锁：suno_rules.csv 的 desc_line_max 结构化值必须与 DESC_LINE_MAX_CHARS 一致。
     /// CSV 会渲染进校验员/制作人提示词——它是同一个上限的第三处载体，
     /// 不同步即复发"上游告知 80 / 下游门 200"的必然降级。
@@ -2614,11 +2674,23 @@ pub fn desc_line_contract() -> String {
     interpolate(DESC_LINE_CONTRACT)
 }
 
+/// 说明行「空间/力度」槽位名（单源，第二十五批 Q1）：
+/// 说明行 = 乐器集 + **本槽位** + 人声状态（A/B 模式另加能量标注）。
+/// 判定口径：一个逗号段，描述**声场**（如 close room / wide hall / 空旷）或**力度动态**
+/// （如 突转 / 一刀切）；不得省略，也不得并进乐器段或人声段。
+/// 历史缺口（第二十四批 GUI 四模式目测暴露）：该槽位在模式 prompt 的格式告知里有、
+/// 在**四模式 checklist 与制作人/校验员的核查项里都没有**——D 产物 3 个 Hook 段 2 段缺项而四门全绿。
+/// 消费点（缺一处即"上游告知有、核查者缺位"复发）：四模式 checklist + 说明行契约 +
+/// 模式 prompt 格式行 + 制作人核查项 + 校验员打回项；由
+/// `desc_line_space_slot_declared_across_carriers` 跨载体锁定。
+pub const DESC_LINE_SPACE_SLOT: &str = "空间/力度";
+
 /// 说明行契约正文（单源：本文件唯一一份；数值一律 `${占位符}`）。
-const DESC_LINE_CONTRACT: &str = "【说明行契约（全模式统一）】每段说明行形如 [乐器1+行为, 乐器2+行为, …, 空间/力度, 人声状态]（A/B 模式另在行尾标 能量:X），整行含方括号 ≤${DESC_LINE_MAX} 字符。上限宽松：不得为缩短而删乐器或行为动词（最强段 ≥${MIN_INSTRUMENT_STRONG} 件、单段 ${INSTRUMENT_RANGE} 件照常执行），也不得靠堆修饰词占满；超过上限的说明行会被信封门与终稿硬校验拦下。\n\
+const DESC_LINE_CONTRACT: &str = "【说明行契约（全模式统一）】每段说明行形如 [乐器1+行为, 乐器2+行为, …, ${DESC_LINE_SPACE_SLOT}, 人声状态]（A/B 模式另在行尾标 能量:X），整行含方括号 ≤${DESC_LINE_MAX} 字符。上限宽松：不得为缩短而删乐器或行为动词（最强段 ≥${MIN_INSTRUMENT_STRONG} 件、单段 ${INSTRUMENT_RANGE} 件照常执行），也不得靠堆修饰词占满；超过上限的说明行会被信封门与终稿硬校验拦下。\n\
 1. 乐器主次：乐器逐个列名 + 行为动词，按主次排列（主奏在前、支撑次之、色彩点缀最后）；禁 full band 等笼统写法。\n\
-2. 人声映射：每段说明行的人声状态必须能映射到 Style Prompt 的人声描述序列（高能段用开放真声形态、低能段用气声/假声形态），不得自造与 Style Prompt 无关的人声描述。\n\
-3. 能量标注：A/B 模式每段说明行末尾必须标 能量:X（${ENERGY_SCALE}）——必须用中文'能量:X'格式、X 为 ${ENERGY_SCALE} 单值，禁英文 energy、禁区间写法（如 8-9）。";
+2. 槽位齐全：每段说明行必须同时含乐器集、${DESC_LINE_SPACE_SLOT}（声场或力度动态，如 close room / wide hall / 突转）、人声状态——缺任一槽位即格式缺陷（制作人逐段核对，校验员在终稿端口补齐）。\n\
+3. 人声映射：每段说明行的人声状态必须能映射到 Style Prompt 的人声描述序列（高能段用开放真声形态、低能段用气声/假声形态），不得自造与 Style Prompt 无关的人声描述。\n\
+4. 能量标注：A/B 模式每段说明行末尾必须标 能量:X（${ENERGY_SCALE}）——必须用中文'能量:X'格式、X 为 ${ENERGY_SCALE} 单值，禁英文 energy、禁区间写法（如 8-9）。";
 
 /// 极简段豁免条款（单源；**仅 A/B 适用**）：下游执行者 = `validator::declared_minimal_sections`
 /// 过滤 + `validate_production` 的 mode_a/mode_b 最弱段下限检查。
