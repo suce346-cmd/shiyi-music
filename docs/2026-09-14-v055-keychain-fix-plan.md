@@ -243,6 +243,7 @@ B3 说明：三处 `Command::new("/usr/bin/security").args([...]).output()` 同�
 - 本地 dmg 打包失败（bundle_dmg.sh）：基线既有，CI 负责 dmg 产物
 - 用户真实 API key 已在历史数据丢失事件中损失，需重新输入一次（输入后 keychain_set -U 写入，配合本次修复不再丢失）
 - Mimosa 完整安全扫描未出最终结论（本次工具误报 Command.args 为注入已记录，实为参数向量 exec 无 shell）
+  - **更正注记（第二十二批，2026-09-18）**："未出最终结论"的根因已查明为**工具覆盖缺口**（四次扫描 `runStatus` 全 `inconclusive`、`completeness` 全 `partial`、`gaps` 逐字同一句「调用图部分不完整…动态派发…」），**不是待办缺口**；push 前置已改为**可满足判据**（`totals.high == 0` 且残缺已被 `gaps` 解释），并修正归因：**Mimosa 是 ZCode 内建扫描器**（重扫入口 = 在 ZCode 中打开本项目）。见 `docs/2026-09-14-问题总清单-重构输入.md` 的"第二十二批"段。
 
 ---
 

@@ -58,6 +58,8 @@
 | 信任边界 | 本地 App + 远端网关；key 不进仓库 | 架构事实 | CONFIRMED |
 | 审计 | tracing 日志 + StepUsage token 事件 | llm.rs + usePipeline | CONFIRMED |
 
+> **更正注记（第二十二批，2026-09-18）**：上表"push 前扫描"作为 push 前置判据，已重定义为**可满足判据**——`findings.totals.high == 0` 且残缺已被 `gaps` 解释（**不要求** `runStatus: conclusive`）；并修正归因：**Mimosa 是 ZCode 内建扫描器**（无独立 CLI；重扫入口 = 在 ZCode 中打开本项目）。判据单源与一键核验命令见 `docs/2026-09-14-问题总清单-重构输入.md` 的"第二十二批"段。
+
 ### 6. 运维与经济
 
 | 指标 | 内容 | 来源 | 状态 |
