@@ -26,6 +26,9 @@ export interface AppSettings {
   /** #12 轮间人工确认门：每轮结束暂停等用户决断。
    *  设置默认开启（旧数据无此字段 → 视为开启）；请求缺省 false = 后端不暂停。 */
   roundGate?: boolean;
+  /** 产出语言（"zh"/"en"）：en 时流水线产出物（方案/歌词/最终提示词包）以英文输出，
+   *  界面语言与讨论层指令语言不变。缺省 "zh"（旧数据无此字段 → 现状行为零漂移）。 */
+  outputLang?: "zh" | "en";
 }
 
 /** 主题模式 */
@@ -220,4 +223,7 @@ export interface PipelineRequest {
   generation?: GenerationConfig;
   /** #12 轮间人工确认门：true = 每轮结束暂停等用户决断；缺省/旧后端 = 全自动推进 */
   round_gate?: boolean;
+  /** 产出语言（"zh"/"en"）：en 时流水线产出物（方案/歌词/最终提示词包）以英文输出。
+   *  缺省/旧后端 = "zh"（现状行为，零漂移）；未知值后端保守按中文。 */
+  output_lang?: string;
 }
