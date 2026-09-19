@@ -486,6 +486,19 @@ fn load_embedded_internal() -> Result<KnowledgeBase, String> {
     Ok(kb)
 }
 
+/// 场景列与模式匹配单源（用户拍板 2026-09-19）：suno_rules 的 scenario 列
+/// （"all"/"抖音"/"中文"）决定规则行注入哪个模式——根治 D 模式作词人同时被喂
+/// "≤12 字"（抖音）与"6-13 字"（普通模式）的矛盾输入（全链路核查 发现 1）。
+/// "all" 恒注入；"抖音" 仅 mode_d；"中文"（普通模式）仅 mode_a/b/c；
+/// 未知场景保守注入（宁可多给知识，不静默丢失；调用方打日志）。
+pub fn scenario_allows_mode(scenario: &str, mode: &str) -> bool {
+    match scenario {
+        "抖音" => mode == "mode_d",
+        "中文" => mode != "mode_d",
+        _ => true,
+    }
+}
+
 
 impl KnowledgeBase {
     /// 从目录加载所有 `.csv` 文件（测试与动态加载场景用；生产走 load_embedded）。
@@ -1073,14 +1086,39 @@ impl KnowledgeBase {
             .ok_or_else(|| format!("知识库中没有表: {}（可用: {:?}）", name, self.tables.keys().collect::<Vec<_>>()))
     }
 
-    /// 渲染整张表（cols：列投影，None=全列）
+    /// 渲染整张表（cols：列投影，None=全列；mode：Some=按 scenario 列过滤规则行）。
+    /// 产出语言三态配套（全链路核查 发现 1 根治）：mode_d 只注入场景="抖音"的行，
+    /// mode_a/b/c 只注入场景="中文"（普通模式）的行——矛盾规则不再同时进 prompt。
+    /// 无 scenario 列的表不受影响；未知场景保守注入。
     pub fn render_table(
         &self,
         name: &str,
         cols: Option<&[&str]>,
         max_rows: Option<usize>,
+        mode: Option<&str>,
     ) -> Result<String, String> {
-        let table = self.table(name)?;
+        let owned: Table;
+        let table: &Table = match mode {
+            Some(m) => {
+                let t = self.table(name)?;
+                owned = match t.header_index("scenario") {
+                    Some(idx) => Table {
+                        rows: t
+                            .rows
+                            .iter()
+                            .filter(|r| {
+                                scenario_allows_mode(r.get(idx).map(|s| s.as_str()).unwrap_or("all"), m)
+                            })
+                            .cloned()
+                            .collect(),
+                        ..t.clone()
+                    },
+                    None => t.clone(),
+                };
+                &owned
+            }
+            None => self.table(name)?,
+        };
         let (headers, rows_all) = project_table(table, cols)?;
         let mut out = String::new();
         out.push_str(&format!("## {} 知识库\n\n", table.name));
@@ -1287,7 +1325,7 @@ mod tests {
     fn render_produces_markdown_table() {
         let t = parse_csv("test", "a,b\n1,2\n").unwrap();
         let kb = KnowledgeBase { tables: [("test".to_string(), t)].into_iter().collect() };
-        let out = kb.render_table("test", None, None).unwrap();
+        let out = kb.render_table("test", None, None, None).unwrap();
         assert!(out.contains("| 1 | 2 |"));
         assert!(out.contains("---|"));
     }
@@ -1321,7 +1359,7 @@ mod tests {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("knowledge");
         let kb = KnowledgeBase::load(&dir).unwrap();
         assert!(kb.table("nope").is_err());
-        assert!(kb.render_table("nope", None, None).is_err());
+        assert!(kb.render_table("nope", None, None, None).is_err());
     }
 
     #[test]
@@ -1417,7 +1455,7 @@ mod tests {
     fn render_truncates_with_max_rows() {
         let t = parse_csv("t", "a,b\nx,1\ny,2\nz,3\n").unwrap();
         let kb = KnowledgeBase { tables: [("t".to_string(), t)].into_iter().collect() };
-        let out = kb.render_table("t", None, Some(2)).unwrap();
+        let out = kb.render_table("t", None, Some(2), None).unwrap();
         assert!(out.contains("| x | 1 |"));
         assert!(!out.contains("| z | 3 |"));
         assert!(out.contains("共 3 条，以上展示前 2 条"), "应有截断标注: {}", out);
@@ -1516,6 +1554,27 @@ mod tests {
         assert!(has_core, "emotions 无 core 标注");
         let has_douyin = hooks.rows.iter().any(|r| r.get(10).map(|v| v == "douyin").unwrap_or(false));
         assert!(has_douyin, "hooks 无 douyin 标注");
+    }
+
+    /// 产出语言三态配套（全链路核查 发现 1 根治）：suno_rules 场景过滤——
+    /// mode_d 只吃"抖音"行（line_max_chars ≤12），mode_b 只吃"中文"行（line_chars 6-13），
+    /// 矛盾规则不再同时进同一 prompt。
+    #[test]
+    fn rules_injection_respects_scenario_mode() {
+        let t = parse_csv("suno_rules", "rule,scenario,value_min,value_max,unit,description\n\
+            line_max_chars,抖音,0,12,字,抖音每行不超过 12 字：短行易跟唱卡点清晰\n\
+            line_chars_verse,中文,6,13,字,普通模式 Verse 每行 6-13 字：太短信息量不足，太长难唱\n").unwrap();
+        let kb = KnowledgeBase { tables: [("suno_rules".to_string(), t)].into_iter().collect() };
+        let d = kb
+            .render_table("suno_rules", None, None, Some("mode_d"))
+            .unwrap();
+        assert!(d.contains("line_max_chars"), "mode_d 须含抖音行字数规则");
+        assert!(!d.contains("line_chars_verse"), "mode_d 不得注入普通模式行字数规则: {}", d);
+        let b = kb
+            .render_table("suno_rules", None, None, Some("mode_b"))
+            .unwrap();
+        assert!(b.contains("line_chars_verse"), "mode_b 须含普通模式行字数规则");
+        assert!(!b.contains("line_max_chars"), "普通模式不得注入抖音行字数规则: {}", b);
     }
 
     /// 微观②：render_filtered_any 任一候选命中即保留（OR 语义）

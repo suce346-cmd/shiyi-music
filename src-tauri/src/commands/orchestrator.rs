@@ -508,7 +508,7 @@ fn inject_knowledge(
             "suno_rules" => {
                 if subset.is_empty() {
                     // 校验员：全量（规则必须全见）
-                    kb.render_table(t, proj, Some(INJECT_MAX_FULL_ROWS))
+                    kb.render_table(t, proj, Some(INJECT_MAX_FULL_ROWS), Some(mode))
                 } else {
                     // 其他角色：按规则名子集过滤（rule 列 contains 匹配）
                     kb.render_filtered_any(t, &[("rule", subset)], proj, plan, None, &[])
@@ -538,7 +538,7 @@ fn inject_knowledge(
             // rules::KEYWORD_TABLES——**新增关键词表只改单源**（此处无需改动）；未登记的表保守全量。
             _ => match crate::rules::keyword_table(t) {
                 Some(_) => keyword_table_render(kb, t, proj, plan),
-                None => kb.render_table(t, proj, Some(INJECT_MAX_FULL_ROWS)),
+                None => kb.render_table(t, proj, Some(INJECT_MAX_FULL_ROWS), Some(mode)),
             },
         };
         match rendered {
@@ -824,7 +824,7 @@ async fn execute_audit_review<R: Runtime>(
     // C3：角色提示词过数值单源插值
     system.push_str(&crate::rules::interpolate(roles::auditor_review_prompt()));
     system.push('\n');
-    if let Ok(rendered) = kb.render_table("suno_rules", None, Some(INJECT_MAX_FULL_ROWS)) {
+    if let Ok(rendered) = kb.render_table("suno_rules", None, Some(INJECT_MAX_FULL_ROWS), Some(req.mode.to_str_name())) {
         system.push_str(&rendered);
         system.push('\n');
     }
@@ -1319,7 +1319,7 @@ fn auditor_format_system(req: &PipelineRequest, plan: Option<&str>) -> Result<St
     } else {
         crate::rules::interpolate(auditor.system_prompt)
     };
-    if let Ok(rules) = kb.render_table("suno_rules", None, Some(INJECT_MAX_FULL_ROWS)) {
+    if let Ok(rules) = kb.render_table("suno_rules", None, Some(INJECT_MAX_FULL_ROWS), Some(req.mode.to_str_name())) {
         system.push_str(&rules);
         system.push('\n');
     }
