@@ -683,21 +683,34 @@ pub struct PipelineRequest {
     /// **缺省关闭**——暂停必须由前端显式授权，后端不擅自挂住 headless/脚本调用方。
     #[serde(default)]
     pub round_gate: Option<bool>,
-    /// 产出语言（"zh"/"en"）：en 时流水线产出物（方案、歌词、最终提示词包）以英文输出，
+    /// 产出语言三态（"zh" 全中文 / "mix" 中文歌词+英文 Style / "en" 全英文）：
     /// 讨论层指令语言与结构标签约定不变。旧前端无此字段 → "zh"（现状行为，零漂移）。
+    /// 未知值 → 保守按 "zh" 处理（不做静默猜测）。
     #[serde(default = "default_output_lang")]
     pub output_lang: String,
 }
 
-/// output_lang 缺省值：中文（现状行为）。
+/// output_lang 缺省值：全中文（现状行为）。
 fn default_output_lang() -> String {
     "zh".into()
 }
 
 impl PipelineRequest {
-    /// 是否要求英文产出。未知值一律按中文处理（保守降级，不做静默猜测）。
-    pub fn output_lang_is_en(&self) -> bool {
+    /// 全英文产出（含歌词正文）——阶段 0/汇总/专家修订注入英文指令。
+    pub fn wants_all_en(&self) -> bool {
         self.output_lang.eq_ignore_ascii_case("en")
+    }
+
+    /// 仅 Style 层英文（Style Prompt/音色描述），歌词正文保持原语言——
+    /// 阶段 2 转写/格式注入 STYLE 节英文指令。
+    pub fn wants_style_en(&self) -> bool {
+        self.wants_all_en() || self.output_lang.eq_ignore_ascii_case("mix")
+    }
+
+    /// 【废弃·过渡期保留】旧二值语义助读，orchestrator 调用点切换至
+    /// wants_all_en/wants_style_en 后由清理提交删除。
+    pub fn output_lang_is_en(&self) -> bool {
+        self.wants_all_en()
     }
 }
 
@@ -1005,24 +1018,36 @@ impl PipelineEnvelope {
 mod output_lang_tests {
     use super::*;
 
-    /// 旧前端请求（无 output_lang 字段）→ 缺省 "zh"，行为零漂移。
+    /// 旧前端请求（无 output_lang 字段）→ 缺省 "zh"（全中文），行为零漂移。
     #[test]
     fn missing_field_defaults_to_zh() {
         let json = r#"{"mode":"mode_b","user_input":"雨天","model":"m1","api_key":"k1","base_url":"u1"}"#;
         let req: PipelineRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.output_lang, "zh");
-        assert!(!req.output_lang_is_en());
+        assert!(!req.wants_all_en());
+        assert!(!req.wants_style_en());
     }
 
-    /// 显式 "en" → is_en 成立；未知值保守按中文。
+    /// 三态显式值：en = 全英文；mix = 仅 Style 层英文；未知值保守按中文。
     #[test]
     fn explicit_en_and_unknown_values() {
         let json = r#"{"mode":"mode_b","user_input":"雨天","model":"m1","api_key":"k1","base_url":"u1","output_lang":"en"}"#;
         let req: PipelineRequest = serde_json::from_str(json).unwrap();
-        assert!(req.output_lang_is_en());
+        assert!(req.wants_all_en());
+        assert!(req.wants_style_en());
 
         let json = r#"{"mode":"mode_b","user_input":"雨天","model":"m1","api_key":"k1","base_url":"u1","output_lang":"fr"}"#;
         let req: PipelineRequest = serde_json::from_str(json).unwrap();
-        assert!(!req.output_lang_is_en());
+        assert!(!req.wants_all_en());
+        assert!(!req.wants_style_en());
+    }
+
+    /// mix = 仅 Style 层英文，歌词正文保持原语言。
+    #[test]
+    fn mix_wants_style_en_only() {
+        let json = r#"{"mode":"mode_b","user_input":"雨天","model":"m1","api_key":"k1","base_url":"u1","output_lang":"mix"}"#;
+        let req: PipelineRequest = serde_json::from_str(json).unwrap();
+        assert!(!req.wants_all_en());
+        assert!(req.wants_style_en());
     }
 }
