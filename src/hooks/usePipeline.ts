@@ -541,6 +541,8 @@ export function usePipeline() {
         run_id: runId,
         // #12 轮间确认门：用户设置显式透传（缺省/旧数据 → false，后端不擅自暂停）
         round_gate: opts.settings.roundGate ?? false,
+        // 产出语言开关：用户设置显式透传（缺省/旧数据 → "zh"，后端现状行为零漂移）
+        output_lang: opts.settings.outputLang ?? "zh",
       };
 
       try {
