@@ -677,6 +677,8 @@ async fn execute_review<R: Runtime>(
     system.push('\n');
     system.push_str("\n输出 JSON（严格符合格式，不输出其他内容）：\n");
     system.push_str(&crate::rules::interpolate(r.output_schema));
+    // 产出语言开关：en 时追加英文产出指令（zh = 空串，零漂移）
+    system.push_str(output_lang_directive(req.output_lang_is_en()));
 
     // #14：同轮可见性由纯函数单源构建（本轮同轮修订块 + 往轮日志块严格分工）
     let user = build_role_review_user_prompt(current_plan, round_peers, history_log, next_tasks, req);
@@ -971,6 +973,17 @@ fn host_summarize_system(mode: &Mode, kb: &KnowledgeBase, plan: &str) -> String 
     host_system_with(&crate::rules::interpolate(roles::host().system_prompt), mode, kb, plan)
 }
 
+/// 产出语言指令（产出语言开关 2/6）：en = 追加英文产出指令；zh = 空串（现状行为零漂移）。
+/// 注入点三处、全在产出侧：execute_review（专家修订含歌词文本）、阶段0 统领、阶段1 汇总。
+/// 讨论层指令语言不变；结构标签约定（[Verse] 等）与数值参数不受影响。
+fn output_lang_directive(en: bool) -> &'static str {
+    if en {
+        "\n\n【输出语言】本轮你的全部产出文字（方案、修订内容、歌词正文、风格与音色描述）一律使用英文输出；结构标签约定（如 [Verse]）与数值参数保持原样，不受影响。"
+    } else {
+        ""
+    }
+}
+
 /// 阶段 0：主持人用该模式的完整指令产出方案初稿（流式）
 async fn run_host_initial<R: Runtime>(
     app: &AppHandle<R>,
@@ -990,6 +1003,8 @@ async fn run_host_initial<R: Runtime>(
     // 相关性排序基准 = 用户输入（初稿阶段还没有方案文本）
     let kb = load_knowledge()?;
     let system = host_initial_system(&req.mode, &kb, &req.user_input);
+    // 产出语言开关：en 时追加英文产出指令（zh = 空串，零漂移）
+    let system = format!("{}{}", system, output_lang_directive(req.output_lang_is_en()));
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Host);
     let mut user = format!("用户输入：\n{}\n\n请按上述方法论直接输出完整方案。", req.user_input);
     // Mode C：原歌词在 extra，指令期望"原歌词 + 新主题"
@@ -1232,6 +1247,8 @@ async fn run_host_summarize<R: Runtime>(
     // #23：阶段0 思维资产相关性排序基准 = 当前方案（汇总期手里有方案文本）
     let kb = load_knowledge()?;
     let host_system = host_summarize_system(&req.mode, &kb, current_plan);
+    // 产出语言开关：en 时追加英文产出指令（zh = 空串，零漂移）
+    let host_system = format!("{}{}", host_system, output_lang_directive(req.output_lang_is_en()));
     let messages = vec![
         json!({"role":"system","content":host_system}),
         json!({"role":"user","content":user}),
@@ -3802,6 +3819,14 @@ mod tests {
             );
             }
         }
+    }
+
+    /// 产出语言开关：zh = 空串（零漂移）；en = 含英文产出指令。
+    #[test]
+    fn output_lang_directive_is_empty_for_zh_and_nonempty_for_en() {
+        assert_eq!(output_lang_directive(false), "");
+        assert!(output_lang_directive(true).contains("英文"));
+        assert!(output_lang_directive(true).starts_with("\n\n【输出语言】"));
     }
 
     fn make_request(overrides: Option<std::collections::HashMap<PipelineRole, crate::models::RoleApiOverride>>) -> PipelineRequest {
