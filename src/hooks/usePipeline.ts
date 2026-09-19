@@ -158,6 +158,25 @@ interface PipelineState {
 /** 用量零值（startRun/reset 时复位） */
 const ZERO_USAGE = { prompt_tokens: 0, completion_tokens: 0 };
 
+/** Degraded flag → 中文类型标签（呈现层分型，用户拍板 2026-09-19）：
+ *  门决策记录/解析降级/格式降级/预算降级；未知 flag 原样显示（旧记录/新增类型兜底）。
+ *  export 供单测（纯函数，无 Tauri 依赖）。 */
+export const degradedFlagLabel = (flag: string): string => {
+  switch (flag) {
+    case "pause_gate_degraded":
+    case "gate_degraded":
+      return "门决策记录";
+    case "call_degraded":
+      return "解析降级";
+    case "envelope_fallback":
+      return "格式降级";
+    case "budget_degraded":
+      return "预算降级";
+    default:
+      return flag;
+  }
+};
+
 /** 组装角色级 API 覆盖：过滤全空/全空格条目 + 非法角色 key（无覆盖的角色的不传给后端）
  * export 供单测（纯函数，无 Tauri 依赖） */
 export const buildRoleOverrides = (settings: AppSettings): PipelineRequest["role_overrides"] => {
@@ -401,8 +420,10 @@ export function usePipeline() {
           break;
         }
         case "degraded": {
-          // C5/ADR-3：降级标记累积（历史保存同源读 degradedRef；对话流同步可见）
-          degradedRef.current = [...degradedRef.current, `${e.flag}：${e.detail}`];
+          // C5/ADR-3：降级标记累积（历史保存同源读 degradedRef；对话流同步可见）。
+          // 分型呈现（用户拍板 2026-09-19）：flag → 中文类型标签，
+          // 区分"门决策记录/解析降级/格式降级/预算降级"，未知 flag 原样兜底。
+          degradedRef.current = [...degradedRef.current, `${degradedFlagLabel(e.flag)}：${e.detail}`];
           speechCbRef.current?.(makeSpeech(
             "auditor",
             `⚠️ 降级记录：${e.detail}`,
