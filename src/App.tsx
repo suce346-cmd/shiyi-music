@@ -833,6 +833,20 @@ export default function App() {
               onChange={e => { updateSettings({ roundGate: e.target.checked }); setTestResult(null); }}
               className="w-4 h-4 accent-brand-500 cursor-pointer shrink-0" />
           </div>
+          {/* 产出语言开关：en 时流水线产出物（方案/歌词/最终提示词包）以英文输出；
+              专家讨论与界面语言不变。与后端 output_lang 字段同名单源。 */}
+          <div className="flex items-center justify-between gap-2 rounded-lg border border-border/40 bg-surface-0/40 px-3 py-2">
+            <label htmlFor="output-lang" className="text-[11px] text-text-2 cursor-pointer select-none">
+              {t(settings.language, "settings.outputLang")}
+              <span className="block text-[10px] text-text-muted font-normal">{t(settings.language, "settings.outputLang.desc")}</span>
+            </label>
+            <select id="output-lang" value={settings.outputLang ?? "zh"}
+              onChange={e => { updateSettings({ outputLang: e.target.value as "zh" | "en" }); setTestResult(null); }}
+              className="text-[11px] bg-surface-1 border border-border/40 rounded-md px-1.5 py-1 cursor-pointer">
+              <option value="zh">{t(settings.language, "settings.outputLang.zh")}</option>
+              <option value="en">{t(settings.language, "settings.outputLang.en")}</option>
+            </select>
+          </div>
           {/* 高级参数（缺省走后端默认；temperature 0~2，max_tokens 1000~30000——F-1 与后端 MAX_TOKENS_CAP 对齐，32000 会被后端拒绝） */}
           <div className="rounded-lg border border-border/40 bg-surface-0/40 px-3 py-2 space-y-2">
             <div className="flex items-center justify-between gap-2">
