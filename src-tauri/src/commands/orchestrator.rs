@@ -678,7 +678,7 @@ async fn execute_review<R: Runtime>(
     system.push_str("\n输出 JSON（严格符合格式，不输出其他内容）：\n");
     system.push_str(&crate::rules::interpolate(r.output_schema));
     // 产出语言开关：en 时追加英文产出指令（zh = 空串，零漂移）
-    system.push_str(output_lang_directive(req.output_lang_is_en()));
+    system.push_str(discussion_lang_directive(req));
 
     // #14：同轮可见性由纯函数单源构建（本轮同轮修订块 + 往轮日志块严格分工）
     let user = build_role_review_user_prompt(current_plan, round_peers, history_log, next_tasks, req);
@@ -973,12 +973,23 @@ fn host_summarize_system(mode: &Mode, kb: &KnowledgeBase, plan: &str) -> String 
     host_system_with(&crate::rules::interpolate(roles::host().system_prompt), mode, kb, plan)
 }
 
-/// 产出语言指令（产出语言开关 2/6）：en = 追加英文产出指令；zh = 空串（现状行为零漂移）。
-/// 注入点三处、全在产出侧：execute_review（专家修订含歌词文本）、阶段0 统领、阶段1 汇总。
-/// 讨论层指令语言不变；结构标签约定（[Verse] 等）与数值参数不受影响。
-fn output_lang_directive(en: bool) -> &'static str {
-    if en {
+/// 讨论层产出指令（阶段 0 统领 / 阶段 1 汇总 / 专家修订）：en = 全英文产出（含歌词）；
+/// zh/mix = 空串（mix 态歌词保持中文，语言指令延迟到阶段 2 转写层，见 final_pack_lang_directive）。
+fn discussion_lang_directive(req: &PipelineRequest) -> &'static str {
+    if req.wants_all_en() {
         "\n\n【输出语言】本轮你的全部产出文字（方案、修订内容、歌词正文、风格与音色描述）一律使用英文输出；结构标签约定（如 [Verse]）与数值参数保持原样，不受影响。"
+    } else {
+        ""
+    }
+}
+
+/// 阶段 2 最终包语言指令：mix = STYLE 节描述译英文、LYRICS 节逐字保留原语言；
+/// en = 整包英文兜底（方案在讨论层已英文，此处防回退）；zh = 空串。
+fn final_pack_lang_directive(req: &PipelineRequest) -> &'static str {
+    if req.wants_style_en() && !req.wants_all_en() {
+        "\n\n【STYLE 节语言覆盖】STYLE Prompt 中的风格、流派、乐器、音色、人声描述一律以英文排版（仅语言转换，内容语义与条目不变）；歌词正文保持原语言，不得翻译或改写。"
+    } else if req.wants_all_en() {
+        "\n\n【输出语言】最终提示词包全文以英文输出。"
     } else {
         ""
     }
@@ -1004,7 +1015,7 @@ async fn run_host_initial<R: Runtime>(
     let kb = load_knowledge()?;
     let system = host_initial_system(&req.mode, &kb, &req.user_input);
     // 产出语言开关：en 时追加英文产出指令（zh = 空串，零漂移）
-    let system = format!("{}{}", system, output_lang_directive(req.output_lang_is_en()));
+    let system = format!("{}{}", system, discussion_lang_directive(req));
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Host);
     let mut user = format!("用户输入：\n{}\n\n请按上述方法论直接输出完整方案。", req.user_input);
     // Mode C：原歌词在 extra，指令期望"原歌词 + 新主题"
@@ -1248,7 +1259,7 @@ async fn run_host_summarize<R: Runtime>(
     let kb = load_knowledge()?;
     let host_system = host_summarize_system(&req.mode, &kb, current_plan);
     // 产出语言开关：en 时追加英文产出指令（zh = 空串，零漂移）
-    let host_system = format!("{}{}", host_system, output_lang_directive(req.output_lang_is_en()));
+    let host_system = format!("{}{}", host_system, discussion_lang_directive(req));
     let messages = vec![
         json!({"role":"system","content":host_system}),
         json!({"role":"user","content":user}),
@@ -1324,6 +1335,9 @@ fn auditor_format_system(req: &PipelineRequest, plan: Option<&str>) -> Result<St
     if envelope_ok {
         system.push_str("\n\n【信封转写规则（覆盖格式化冲动）】方案已按信封分节：\n1. <<<LYRICS>>> 节：逐字转写为终稿歌词区（结构标签/说明行/歌词行，行序字数不变）\n2. <<<STYLE>>> 节：排版为终稿的 Style Prompt 行（不得增删内容）\n3. <<<PARAMS>>> 节：排版为终稿末尾参数行\n4. <<<NOTES>>> 节：元信息，整节丢弃，任何内容不得进入终稿\n除上述四条外，方案的其余部分（如存在）一律忽略。\n");
     }
+    // 产出语言三态：mix = STYLE 节描述译英文（覆盖上方"不得增删内容"的语言部分），
+    // LYRICS 节逐字保留；en = 整包英文兜底；zh = 空串零漂移。
+    system.push_str(final_pack_lang_directive(req));
     Ok(system)
 }
 
@@ -3821,12 +3835,23 @@ mod tests {
         }
     }
 
-    /// 产出语言开关：zh = 空串（零漂移）；en = 含英文产出指令。
+    /// 产出语言三态指令：zh = 双层全空（零漂移）；mix = 仅阶段 2 注入 STYLE 节英文、
+    /// 讨论层空；en = 讨论层与阶段 2 均注入。
     #[test]
-    fn output_lang_directive_is_empty_for_zh_and_nonempty_for_en() {
-        assert_eq!(output_lang_directive(false), "");
-        assert!(output_lang_directive(true).contains("英文"));
-        assert!(output_lang_directive(true).starts_with("\n\n【输出语言】"));
+    fn output_lang_directives_follow_three_states() {
+        let mut req = make_request(None);
+        // zh：双层全空
+        assert_eq!(discussion_lang_directive(&req), "");
+        assert_eq!(final_pack_lang_directive(&req), "");
+        // mix：讨论层空、阶段 2 注入 STYLE 节英文指令
+        req.output_lang = "mix".into();
+        assert_eq!(discussion_lang_directive(&req), "");
+        assert!(final_pack_lang_directive(&req).contains("STYLE"));
+        assert!(final_pack_lang_directive(&req).contains("原语言"));
+        // en：双层均注入
+        req.output_lang = "en".into();
+        assert!(discussion_lang_directive(&req).contains("英文"));
+        assert!(final_pack_lang_directive(&req).contains("英文"));
     }
 
     fn make_request(overrides: Option<std::collections::HashMap<PipelineRole, crate::models::RoleApiOverride>>) -> PipelineRequest {
