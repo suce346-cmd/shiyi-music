@@ -107,7 +107,7 @@ export default function App() {
   const [showApiKey, setShowApiKey] = useState(false);
   const [testingApi, setTestingApi] = useState(false);
   const [testResult, setTestResult] = useState<"ok" | "fail" | null>(null);
-  const [showRoleApi, setShowRoleApi] = useState(true); // 默认展开角色级 API（用户反馈看不到）
+  const [showRoleApi, setShowRoleApi] = useState(false); // 默认收起（一页化：长度是主要痛点；头部"展开▼"保持可发现性）
   const [expandedRole, setExpandedRole] = useState<PipelineRoleKey | null>(null);
   const { settings, updateSettings, showSettings, setShowSettings, secretsReady } = useSettingsWithSecrets();
   const pipeline = usePipeline();
@@ -764,11 +764,13 @@ export default function App() {
         </div>
       </header>
 
-      {/* Settings dropdown */}
+      {/* Settings dropdown：一页化（#28 用户反馈）——面板加宽 + 主体两列网格，
+          角色级 API 默认收起；max-h 兜底防极小窗口溢出 */}
       {showSettings && (
-        <div className="absolute right-4 top-14 z-40 w-80 p-3.5 glass-panel rounded-2xl border border-border/40
-                        animate-[fade_200ms_ease] space-y-3">
+        <div className="absolute right-4 top-14 z-40 w-[600px] p-4 glass-panel rounded-2xl border border-border/40
+                        animate-[fade_200ms_ease] space-y-3 max-h-[calc(100vh-4.5rem)] overflow-y-auto">
           <h3 className="text-[13px] font-medium text-text-1">{t(settings.language, "settings.title")}</h3>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-3 items-start">
           <div>
             <div className="flex items-center justify-between mb-1">
               <label className="text-[11px] text-text-muted">{t(settings.language, "settings.apikey")}</label>
@@ -789,7 +791,7 @@ export default function App() {
           {/* #27-a 厂商模板卡片：点击 = 写入该厂商 baseUrl + 默认模型（不动 API Key） */}
           <ProviderTemplates baseUrl={settings.baseUrl} locale={settings.language}
             onApply={(p) => { updateSettings({ baseUrl: p.baseUrl, model: p.defaultModel }); setTestResult(null); }} />
-          <div className="flex gap-2">
+          <div className="flex gap-2 col-span-2">
             <div className="flex-1">
               <label className="text-[11px] text-text-muted block mb-1">{t(settings.language, "settings.model")}</label>
               {/* #27-b 可搜索模型下拉：候选来自当前 baseUrl 命中的厂商模板，自由输入实时透传（不锁死） */}
@@ -841,9 +843,10 @@ export default function App() {
               <span className="block text-[10px] text-text-muted font-normal">{t(settings.language, "settings.outputLang.desc")}</span>
             </label>
             <select id="output-lang" value={settings.outputLang ?? "zh"}
-              onChange={e => { updateSettings({ outputLang: e.target.value as "zh" | "en" }); setTestResult(null); }}
+              onChange={e => { updateSettings({ outputLang: e.target.value as "zh" | "mix" | "en" }); setTestResult(null); }}
               className="text-[11px] bg-surface-1 border border-border/40 rounded-md px-1.5 py-1 cursor-pointer">
               <option value="zh">{t(settings.language, "settings.outputLang.zh")}</option>
+              <option value="mix">{t(settings.language, "settings.outputLang.mix")}</option>
               <option value="en">{t(settings.language, "settings.outputLang.en")}</option>
             </select>
           </div>
@@ -904,6 +907,8 @@ export default function App() {
             {testResult === "fail" && t(settings.language, "settings.fail")}
             {testResult === null && (testingApi ? t(settings.language, "settings.testing") : t(settings.language, "settings.test"))}
           </button>
+          {/* 日志/配置目录：两个低频入口堆叠成一列，与"测试连接"同排（一页化） */}
+          <div className="space-y-1.5">
           {/* 打开日志目录（诊断用，失败提示路径） */}
           <button onClick={handleOpenLogDir}
             className="w-full py-1.5 rounded-lg text-[11px] text-text-muted hover:text-text-2
@@ -918,6 +923,8 @@ export default function App() {
                        transition-all duration-150 active:scale-[0.98]">
             {configDirMsg || t(settings.language, "settings.configdir")}
           </button>
+          </div>
+          </div>
 
           {/* 角色级 API 覆盖（可选）：不配置 = 所有角色共用全局；配置了生效单独 */}
           <div className="border-t border-border/40 pt-3">
