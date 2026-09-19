@@ -706,12 +706,6 @@ impl PipelineRequest {
     pub fn wants_style_en(&self) -> bool {
         self.wants_all_en() || self.output_lang.eq_ignore_ascii_case("mix")
     }
-
-    /// 【废弃·过渡期保留】旧二值语义助读，orchestrator 调用点切换至
-    /// wants_all_en/wants_style_en 后由清理提交删除。
-    pub fn output_lang_is_en(&self) -> bool {
-        self.wants_all_en()
-    }
 }
 
 /// 生成参数（全字段可选，缺省=现行硬编码值，零行为变化）。
