@@ -330,6 +330,7 @@ mod tests {
         assert!(edge.validate().is_ok());
         // generation 越界经 validate_request 透出
         let mut req = PipelineRequest {
+            output_lang: "zh".into(),
             mode: Mode::ModeB,
             user_input: "雨天".into(),
             model: "m".into(),
@@ -364,6 +365,7 @@ mod tests {
     fn validate_request_rejects_bad_input() {
         fn good() -> PipelineRequest {
             PipelineRequest {
+                output_lang: "zh".into(),
                 mode: Mode::ModeB,
                 user_input: "雨天".into(),
                 model: "m".into(),
@@ -482,6 +484,7 @@ mod tests {
     fn validate_request_rejects_role_override_internal_url() {
         fn good() -> PipelineRequest {
             PipelineRequest {
+                output_lang: "zh".into(),
                 mode: Mode::ModeB,
                 user_input: "雨天".into(),
                 model: "m".into(),
