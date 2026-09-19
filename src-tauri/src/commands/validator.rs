@@ -434,10 +434,32 @@ fn parse_weird_style(text: &str) -> Option<(u32, u32)> {
     Some((parse_after("Weirdness")?, parse_after("Style Influence")?))
 }
 
-/// Mode C 字数计数：去空白 + 去标点（Q2：与 prompts.rs“标点不计入字数”同口径；
+/// 和音虚词单源（用户拍板 2026-09-19）：纯英文虚词 token 不计入歌词行字数。
+/// 根治："(ooh~) 一半是你 一半是我" 剥标点后 ooh 三字母被计入=11 字误判超限。
+/// 扩充规则：只收公认无实义的拟声/和音词，小写匹配；实义词（baby 等）不得收入。
+const LYRIC_VOCABLES: [&str; 9] = ["ooh", "oh", "yeah", "ah", "la", "hey", "woah", "woo", "hmm"];
+
+/// 通用歌词行计数：按空白分词 → 每 token 剥标点 → 剔除和音虚词（纯 ASCII 字母且
+/// 小写 ∈ LYRIC_VOCABLES）→ 汇总字数。分词在剥标点之前，保证 "(ooh~)" 整体识别为虚词。
+fn count_line_chars_excluding_vocables(s: &str, is_punct: fn(char) -> bool) -> usize {
+    s.split_whitespace()
+        .filter_map(|t| {
+            let stripped: String = t.chars().filter(|c| !is_punct(*c) && !c.is_whitespace()).collect();
+            if stripped.is_empty() {
+                return None;
+            }
+            let lower = stripped.to_ascii_lowercase();
+            let is_vocable = stripped.bytes().all(|b| b.is_ascii_alphabetic())
+                && LYRIC_VOCABLES.contains(&lower.as_str());
+            if is_vocable { None } else { Some(stripped.chars().count()) }
+        })
+        .sum()
+}
+
+/// Mode C 字数计数：去空白 + 去标点 + 去和音虚词（Q2：与 prompts.rs“标点不计入字数”同口径；
 /// 此前仅去空白，带问号/感叹号的行会被误报字数不符）。
 fn count_lyric_chars(s: &str) -> usize {
-    s.chars().filter(|c| !c.is_whitespace() && !is_lyric_punct(*c)).count()
+    count_line_chars_excluding_vocables(s, is_lyric_punct)
 }
 
 /// 歌词标点表（半角标点 + 中日韩常用标点；断句空格已由空白分支处理）。
@@ -738,12 +760,8 @@ pub fn validate_douyin(text: &str) -> ValidationResult {
     let lyric_lines: Vec<&str> = text.lines().map(|l| l.trim()).filter(|l| is_lyric_line(l)).collect();
     let mut overlong = 0usize;
     for line in lyric_lines {
-        // 去掉半角标点与空白（断句空格不计入字数，历史修复）
-        let chars: String = line
-            .chars()
-            .filter(|c| !c.is_ascii_punctuation() && !c.is_whitespace())
-            .collect();
-        let count = chars.chars().count();
+        // 去掉半角标点与空白（断句空格不计入字数，历史修复），再剔除和音虚词 token
+        let count = count_line_chars_excluding_vocables(line, |c| c.is_ascii_punctuation());
         if count > rules::DOUYIN_LINE_MAX_CHARS {
             overlong += 1;
             if overlong <= 3 {
@@ -808,6 +826,19 @@ pub fn validate_for_mode(mode: &str, text: &str, extra: Option<&str>) -> Validat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 和音虚词豁免：count_line_chars_excluding_vocables 对 (ooh~) 类虚词不计入
+    #[test]
+    fn count_line_chars_exempts_vocables() {
+        // 全角标点 + 半角括号混合："(ooh~)" 整体识别为虚词剔除
+        assert_eq!(count_lyric_chars("(ooh~) 一半是你 一半是我"), 8);
+        // 纯虚词行 = 0（不崩溃、不算超限）
+        assert_eq!(count_lyric_chars("oh oh yeah"), 0);
+        // 实义词不豁免（baby 不在虚词名单）
+        assert_eq!(count_lyric_chars("baby 一半是你"), 8);
+        // 粘连 token 保守不豁免：ooh你 整体计入
+        assert_eq!(count_lyric_chars("ooh你"), 4);
+    }
 
     // ---- C1/ADR-2：参数区间硬门（红灯先行——实现前这些用例必须失败） ----
 
@@ -1520,13 +1551,22 @@ TRANSCRIPTION_ISSUE: 收敛方案含 ``` 围栏与参数行格式错误，需主
         assert!(r.issues.iter().any(|i| i.contains("配器过多")));
     }
 
-    /// 每行歌词 >10 字应被 Mode D 揪出
+    /// 每行歌词超上限（12 字）应被 Mode D 揪出
     #[test]
-    fn douyin_line_over_10_chars_fails() {
+    fn douyin_line_over_limit_fails() {
         let text = "[Hook]\n我 真的 会谢\n[Hook]\n我 真的 会谢\n[Verse]\n这一行歌词实在是太长了超过了十个字\n[Hook]\n[all instruments cut abruptly]";
         let r = validate_douyin(text);
         assert!(!r.passed);
-        assert!(r.issues.iter().any(|i| i.contains("超 10 字")));
+        assert!(r.issues.iter().any(|i| i.contains("超 12 字")));
+    }
+
+    /// 和音虚词豁免："(ooh~) 一半是你 一半是我" 剥标点后 ooh 不计 = 8 字（≤12 合法，不打回）
+    #[test]
+    fn douyin_vocable_tokens_exempt_from_count() {
+        let text = "[Hook]\n我 真的 会谢\n[Hook]\n我 真的 会谢\n[Hook]\n(ooh~) 一半是你 一半是我\n[Hook]\n[all instruments cut abruptly]";
+        let r = validate_douyin(text);
+        assert!(r.passed, "issues: {:?}", r.issues);
+        assert!(!r.issues.iter().any(|i| i.contains("超 12 字")));
     }
 
     /// 能量值解析：只在含能量标记的行提取
@@ -1675,7 +1715,7 @@ TRANSCRIPTION_ISSUE: 收敛方案含 ``` 围栏与参数行格式错误，需主
         }
         let r = validate_douyin(&text);
         assert!(!r.passed);
-        assert!(r.issues.iter().any(|i| i.contains("超 10 字")));
+        assert!(r.issues.iter().any(|i| i.contains("超 12 字")));
     }
 
     // ---- 最后 4 行边界 ----
@@ -1794,15 +1834,15 @@ TRANSCRIPTION_ISSUE: 收敛方案含 ``` 围栏与参数行格式错误，需主
         // (a) 含逗号 >15 字裸行被忽略（Style Prompt 裸行）
         let text = "黑色幽默喜剧, 120BPM 4/4拍, 滑音合成器+808底鼓+细碎hi-hat+人声采样, 30岁男声痞气半说半唱, 拥挤商场混响+窃窃私语底噪, 高开骤停两连击, 抖音神曲魔性\n[Hook]\n[suona blast, 808 slide bass, full energy, aggressive male voice]\n我 真的 会谢\n我 真的 会谢\n[Hook]\n我 真的 会谢\n[all instruments cut abruptly]\n参数: Weirdness=15 | Style Influence=90 | Audio Influence=0";
         let r = validate_douyin(text);
-        assert!(!r.issues.iter().any(|i| i.contains("超 10 字")), "issues: {:?}", r.issues);
+        assert!(!r.issues.iter().any(|i| i.contains("超 12 字")), "issues: {:?}", r.issues);
         // (b) 含逗号 ≤15 字行仍按歌词检查（"妈妈，好吗" 4 字合法）
         let text2 = "[Hook]\n我 真的 会谢\n[Hook]\n我 真的 会谢\n[Verse]\n妈妈，好吗\n[Hook]\n[all instruments cut abruptly]";
         let r2 = validate_douyin(text2);
-        assert!(!r2.issues.iter().any(|i| i.contains("超 10 字")), "issues2: {:?}", r2.issues);
-        // (c) 无逗号超长行仍报超 10 字（不被裸行规则豁免）
+        assert!(!r2.issues.iter().any(|i| i.contains("超 12 字")), "issues2: {:?}", r2.issues);
+        // (c) 无逗号超长行仍报超 12 字（不被裸行规则豁免）
         let text3 = "[Hook]\n我 真的 会谢\n[Hook]\n我 真的 会谢\n[Verse]\n这一行歌词实在是太长了超过了十个字\n[Hook]\n[all instruments cut abruptly]";
         let r3 = validate_douyin(text3);
-        assert!(r3.issues.iter().any(|i| i.contains("超 10 字")), "issues3: {:?}", r3.issues);
+        assert!(r3.issues.iter().any(|i| i.contains("超 12 字")), "issues3: {:?}", r3.issues);
     }
 
     /// Style Prompt 行 / 参数行不得计入歌词行（Mode D ≤10 字检查误杀修复）
@@ -1816,7 +1856,7 @@ TRANSCRIPTION_ISSUE: 收敛方案含 ``` 围栏与参数行格式错误，需主
 参数: Weirdness=25 | Style Influence=80 | Audio Influence=0";
         let r = validate_douyin(text);
         // 歌词行 4 字/6 字都不超长；Style/参数行不再被误计
-        assert!(!r.issues.iter().any(|i| i.contains("超 10 字")), "issues: {:?}", r.issues);
+        assert!(!r.issues.iter().any(|i| i.contains("超 12 字")), "issues: {:?}", r.issues);
 }
 
 /// D-Envelope 保真回归（40 例实测 81% 误报的死刑验证）：

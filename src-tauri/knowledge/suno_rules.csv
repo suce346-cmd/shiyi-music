@@ -10,7 +10,7 @@ min_instrument_weak,all,3,,件,最弱段至少 3 件（与单段 3-7 件下限�
 min_instrument_strong,all,5,,件,最强段至少 5 件：少于 5 件撑不起高潮密度
 hook_min_count,抖音,2,,次,D 模式至少 2 个 Hook：抖音传播需要多点记忆
 verse_max_lines,抖音,0,4,行,抖音 Verse 上限 4 行：前奏短进副歌快
-line_max_chars,抖音,0,10,字,抖音每行不超过 10 字：短行易跟唱卡点清晰
+line_max_chars,抖音,0,12,字,抖音每行不超过 12 字：短行易跟唱卡点清晰
 line_chars_verse,中文,6,13,字,普通模式 Verse 每行 6-13 字：太短信息量不足，太长难唱
 line_chars_chorus,中文,4,9,字,Chorus 4-9 字更短更易记：副歌短句加重复等于记忆点
 style_arc_dry,叙事,78,83,,标准叙事型 Style 引导度：配合 Weirdness 22-28 给足引导但留创作空间

@@ -30,7 +30,7 @@ pub const HOOK_MIN_COUNT: usize = 2;
 /// D 模式单段 Verse 上限行数
 pub const VERSE_MAX_LINES: usize = 4;
 /// D 模式每行歌词上限字数（去空白与半角标点后计数）
-pub const DOUYIN_LINE_MAX_CHARS: usize = 10;
+pub const DOUYIN_LINE_MAX_CHARS: usize = 12;
 /// 中文歌词 Verse 每行字数区间（与 suno_rules.csv `line_chars_verse` 同源，由
 /// `lyric_chars_match_csv_structured_value` 锁定）。旧实现把 6-13 手写在 roles.rs/prompts.rs
 /// 共 4 处，与 CSV 脱钩——改 CSV 值提示词不联动（审计 #21）。
@@ -1553,10 +1553,10 @@ mod tests {
     /// 且 `PRIMER_AB` 的 CSV 同源豁免必须恰好覆盖「≥5件」而不掩盖其他数字。
     #[test]
     fn prose_carrier_guard_catches_handwritten_restore() {
-        // 模拟"回退到旧写法"：抖音区间 + Hook/Verse 阈值全部手写
-        let legacy = "Hook≥2次；单段Verse≤4行；每行≤10字；BPM≥90；参数抖音12-20/85-95；说明行≤200字符。";
+        // 模拟"回退到旧写法"：抖音区间 + Hook/Verse 阈值全部手写（上限已改 12，手写 12 同样须被网住）
+        let legacy = "Hook≥2次；单段Verse≤4行；每行≤12字；BPM≥90；参数抖音12-20/85-95；说明行≤200字符。";
         let hits = handwritten_rule_number_hits(legacy);
-        for want in ["≤200", "12-20", "85-95", "2次", "4行", "10字", "BPM≥90"] {
+        for want in ["≤200", "12-20", "85-95", "2次", "4行", "12字", "BPM≥90"] {
             assert!(hits.iter().any(|h| h == want), "红灯先行：旧写法 {} 未被网住（命中 {:?}）", want, hits);
         }
         // 现役 CHECKLIST_D 已全部占位符化：原文不得有命中
@@ -2398,7 +2398,7 @@ mod tests {
         let d = checklist("mode_d");
         assert!(d.contains(&format!("≥{}次", HOOK_MIN_COUNT)), "缺Hook2");
         assert!(d.contains(&format!("≤{}行", VERSE_MAX_LINES)), "缺Verse4");
-        assert!(d.contains(&format!("≤{}字", DOUYIN_LINE_MAX_CHARS)), "缺10字");
+        assert!(d.contains(&format!("≤{}字", DOUYIN_LINE_MAX_CHARS)), "缺行字上限");
         assert!(d.contains(&format!("≥{}", DOUYIN_BPM_MIN)), "缺BPM90");
         let c = checklist("mode_c");
         assert!(c.contains(&format!("≤{}行", LYRIC_FILL_TAIL_ALLOW)), "缺尾部2行");
@@ -2619,6 +2619,23 @@ mod tests {
                 row[desc_idx]
             );
         }
+        // 抖音行字数上限单源锁：CSV value_max ↔ DOUYIN_LINE_MAX_CHARS（12），
+        // 有人手改 CSV 忘了改常量、或反之，都红。desc 格式不同（"不超过 N 字"），单独断言。
+        let douyin_row = table
+            .rows
+            .iter()
+            .find(|r| r.get(rule_idx).map(|s| s.as_str()) == Some("line_max_chars"))
+            .unwrap_or_else(|| panic!("suno_rules 缺 line_max_chars 行"));
+        assert_eq!(
+            douyin_row[max_idx].parse::<usize>().unwrap(),
+            DOUYIN_LINE_MAX_CHARS,
+            "line_max_chars value_max 须与 DOUYIN_LINE_MAX_CHARS 同源"
+        );
+        assert!(
+            douyin_row[desc_idx].contains(&format!("不超过 {} 字", DOUYIN_LINE_MAX_CHARS)),
+            "line_max_chars 描述须写明上限: {}",
+            douyin_row[desc_idx]
+        );
         // 占位符渲染值 = CSV 区间（有人手改 CSV 忘了改常量，或反之，都红）
         let rendered = interpolate("${LYRIC_CHARS_VERSE}|${LYRIC_CHARS_CHORUS}|${LYRIC_LINE_VERSE_MAX}|${DOUYIN_LINE_MAX}");
         assert_eq!(
