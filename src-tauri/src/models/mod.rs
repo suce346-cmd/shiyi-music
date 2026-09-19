@@ -680,6 +680,22 @@ pub struct PipelineRequest {
     /// **缺省关闭**——暂停必须由前端显式授权，后端不擅自挂住 headless/脚本调用方。
     #[serde(default)]
     pub round_gate: Option<bool>,
+    /// 产出语言（"zh"/"en"）：en 时流水线产出物（方案、歌词、最终提示词包）以英文输出，
+    /// 讨论层指令语言与结构标签约定不变。旧前端无此字段 → "zh"（现状行为，零漂移）。
+    #[serde(default = "default_output_lang")]
+    pub output_lang: String,
+}
+
+/// output_lang 缺省值：中文（现状行为）。
+fn default_output_lang() -> String {
+    "zh".into()
+}
+
+impl PipelineRequest {
+    /// 是否要求英文产出。未知值一律按中文处理（保守降级，不做静默猜测）。
+    pub fn output_lang_is_en(&self) -> bool {
+        self.output_lang.eq_ignore_ascii_case("en")
+    }
 }
 
 /// 生成参数（全字段可选，缺省=现行硬编码值，零行为变化）。
@@ -979,5 +995,31 @@ pub struct PipelineEnvelope {
 impl PipelineEnvelope {
     pub fn new(run_id: impl Into<String>, event: PipelineEvent) -> Self {
         Self { run_id: run_id.into(), event }
+    }
+}
+
+#[cfg(test)]
+mod output_lang_tests {
+    use super::*;
+
+    /// 旧前端请求（无 output_lang 字段）→ 缺省 "zh"，行为零漂移。
+    #[test]
+    fn missing_field_defaults_to_zh() {
+        let json = r#"{"mode":"mode_b","user_input":"雨天","model":"m1","api_key":"k1","base_url":"u1"}"#;
+        let req: PipelineRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.output_lang, "zh");
+        assert!(!req.output_lang_is_en());
+    }
+
+    /// 显式 "en" → is_en 成立；未知值保守按中文。
+    #[test]
+    fn explicit_en_and_unknown_values() {
+        let json = r#"{"mode":"mode_b","user_input":"雨天","model":"m1","api_key":"k1","base_url":"u1","output_lang":"en"}"#;
+        let req: PipelineRequest = serde_json::from_str(json).unwrap();
+        assert!(req.output_lang_is_en());
+
+        let json = r#"{"mode":"mode_b","user_input":"雨天","model":"m1","api_key":"k1","base_url":"u1","output_lang":"fr"}"#;
+        let req: PipelineRequest = serde_json::from_str(json).unwrap();
+        assert!(!req.output_lang_is_en());
     }
 }

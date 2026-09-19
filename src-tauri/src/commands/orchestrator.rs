@@ -3806,6 +3806,7 @@ mod tests {
 
     fn make_request(overrides: Option<std::collections::HashMap<PipelineRole, crate::models::RoleApiOverride>>) -> PipelineRequest {
         PipelineRequest {
+            output_lang: "zh".into(),
             mode: Mode::ModeB,
             user_input: "雨天".into(),
             model: "global-model".into(),
@@ -4260,6 +4261,7 @@ mod tests {
                 }], "审计样例 reason".into()),
             ];
             let req = PipelineRequest {
+                output_lang: "zh".into(),
                 mode: m.clone(),
                 user_input: "审计样例输入：深夜加班打工人的心酸".into(),
                 model: "x".into(), api_key: "x".into(), base_url: "https://example.invalid".into(),
