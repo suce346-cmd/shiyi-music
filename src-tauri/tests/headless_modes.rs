@@ -34,6 +34,7 @@ fn make_request(cfg: &TestConfig, mode: Mode, user_input: &str, original_lyrics:
     let tag = match_mode(&mode);
     PipelineRequest {
         mode,
+        output_lang: "zh".into(),
         user_input: user_input.to_string(),
         model: cfg.model.clone(),
         api_key: cfg.api_key.clone(),
