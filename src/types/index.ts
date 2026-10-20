@@ -26,8 +26,7 @@ export interface AppSettings {
   /** #12 轮间人工确认门：每轮结束暂停等用户决断。
    *  设置默认开启（旧数据无此字段 → 视为开启）；请求缺省 false = 后端不暂停。 */
   roundGate?: boolean;
-  /** 产出语言三态（"zh" 全中文 / "mix" 中文歌词+英文 Style / "en" 全英文）：
-   *  界面语言与专家讨论始终为中文。缺省 "zh"（旧数据无此字段 → 现状行为零漂移）。 */
+  /** 歌词语言（§3.8）：仅 zh | en。Style 恒英文（§3.7）。缺省 zh；旧 mix 由 sanitizeStored 归一为 zh。 */
   outputLang?: OutputLang;
   /** P1-2 结构化能力探测缓存（键 = capKey(baseUrl, model)；测试连接成功后写入） */
   structuredCaps?: Record<string, StructuredMode>;
@@ -35,8 +34,8 @@ export interface AppSettings {
   textEvalJudge?: boolean;
 }
 
-/** 产出语言值域（单源；请求与设置共用）。BLUEPRINT_v2 §3.8 将收敛为 zh/en（另批执行）。 */
-export type OutputLang = "zh" | "mix" | "en";
+/** 歌词语言值域（单源；§3.8）。Style 恒英文，不再有 mix。 */
+export type OutputLang = "zh" | "en";
 
 /** 主题模式 */
 export type ThemeMode = "system" | "light" | "dark";
@@ -266,10 +265,8 @@ export interface PipelineRequest {
   generation?: GenerationConfig;
   /** #12 轮间人工确认门：true = 每轮结束暂停等用户决断；缺省/旧后端 = 全自动推进 */
   round_gate?: boolean;
-  /** 产出语言（"zh" 全中文 / "mix" 中文歌词+英文 Style / "en" 全英文）：
-   *  en 时流水线产出物（方案/歌词/最终提示词包）以英文输出；mix 仅 STYLE 层英文、歌词保持原语言。
-   *  C-04：**必填**——请求统一由 usePipeline.buildPipelineRequest 组装（run/refine/resume 单源），
-   *  任何路径漏传即 TS 编译失败（旧 resume 漏传 → 后端缺省 zh，en/mix 设置在续跑被静默忽略）。 */
+  /** 歌词语言（§3.8）：仅 zh | en。Style 恒英文（§3.7）。
+   *  C-04：**必填**——请求统一由 usePipeline.buildPipelineRequest 组装（run/refine/resume 单源）。 */
   output_lang: OutputLang;
   /** P1-2 结构化能力探测缓存透传（旧后端忽略） */
   structured_caps?: Record<string, StructuredMode>;

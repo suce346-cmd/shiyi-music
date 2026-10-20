@@ -1003,25 +1003,25 @@ fn host_summarize_system(mode: &Mode, kb: &KnowledgeBase, plan: &str) -> String 
     host_system_with(&crate::rules::interpolate(roles::host().system_prompt), mode, kb, plan)
 }
 
-/// 讨论层产出指令（阶段 0 统领 / 阶段 1 汇总 / 专家修订）：en = 全英文产出（含歌词）；
-/// zh/mix = 空串（mix 态歌词保持中文，语言指令延迟到阶段 2 转写层，见 final_pack_lang_directive）。
+/// 讨论层产出指令（§3.8）：en = 歌词与方案英文；zh = 空串。Style 恒英文（§3.7），不由此分支控制。
 fn discussion_lang_directive(req: &PipelineRequest) -> &'static str {
-    if req.wants_all_en() {
-        "\n\n【输出语言】本轮你的全部产出文字（方案、修订内容、歌词正文、风格与音色描述）一律使用英文输出；结构标签约定（如 [Verse]）与数值参数保持原样，不受影响。"
-    } else {
-        ""
+    match req.lyric_lang() {
+        crate::models::LyricLang::En => {
+            "
+
+【输出语言】本轮你的全部产出文字（方案、修订内容、歌词正文）一律使用英文输出；Style/Exclude 标签与数值参数保持英文约定。"
+        }
+        crate::models::LyricLang::Zh => "",
     }
 }
 
-/// 阶段 2 最终包语言指令：mix = STYLE 节描述译英文、LYRICS 节逐字保留原语言；
-/// en = 整包英文兜底（方案在讨论层已英文，此处防回退）；zh = 空串。
+/// 阶段 2 语言指令（§3.8）：en = 终稿歌词英文兜底；zh = 空串。不再有 mix/STYLE 覆盖分支。
 fn final_pack_lang_directive(req: &PipelineRequest) -> &'static str {
-    if req.wants_style_en() && !req.wants_all_en() {
-        "\n\n【STYLE 节语言覆盖】STYLE Prompt 中的风格、流派、乐器、音色、人声描述一律以英文排版（仅语言转换，内容语义与条目不变）；歌词正文保持原语言，不得翻译或改写。"
-    } else if req.wants_all_en() {
-        "\n\n【输出语言】最终提示词包全文以英文输出。"
-    } else {
-        ""
+    match req.lyric_lang() {
+        crate::models::LyricLang::En => "
+
+【输出语言】最终提示词包歌词正文以英文输出；Style/Exclude 恒英文。",
+        crate::models::LyricLang::Zh => "",
     }
 }
 
@@ -3064,18 +3064,12 @@ mod tests {
     /// 产出语言三态指令：zh = 双层全空（零漂移）；mix = 仅阶段 2 注入 STYLE 节英文、
     /// 讨论层空；en = 讨论层与阶段 2 均注入。
     #[test]
-    fn output_lang_directives_follow_three_states() {
+    fn output_lang_directives_follow_two_states() {
         let mut req = make_request(None);
-        // zh：双层全空
+        req.output_lang = crate::models::LyricLang::Zh;
         assert_eq!(discussion_lang_directive(&req), "");
         assert_eq!(final_pack_lang_directive(&req), "");
-        // mix：讨论层空、阶段 2 注入 STYLE 节英文指令
-        req.output_lang = "mix".into();
-        assert_eq!(discussion_lang_directive(&req), "");
-        assert!(final_pack_lang_directive(&req).contains("STYLE"));
-        assert!(final_pack_lang_directive(&req).contains("原语言"));
-        // en：双层均注入
-        req.output_lang = "en".into();
+        req.output_lang = crate::models::LyricLang::En;
         assert!(discussion_lang_directive(&req).contains("英文"));
         assert!(final_pack_lang_directive(&req).contains("英文"));
     }
@@ -3084,7 +3078,7 @@ mod tests {
         PipelineRequest { structured_caps: None,
         douyin_scene: None,
         text_eval_judge: None,
-            output_lang: "zh".into(),
+            output_lang: crate::models::LyricLang::Zh,
             mode: Mode::ModeB,
             user_input: "雨天".into(),
             model: "global-model".into(),
@@ -3432,6 +3426,8 @@ mod tests {
             ["transcription", "_fidelity"], ["<<<", "LYRICS>>>"], ["方案", "信封"], ["转写", "契约"],
             // 第二批：旧定稿措辞 + 前端降级标签（用户裁定旧历史不兼容回放）
             ["格式", "端口"], ["输出", "端口"], ["终稿", "端口"], ["最终格式", "输出"], ["格式", "降级"], ["格式", "输出中"], ["格式输出", "完成"], ["按标准格式", "输出"],
+            // §5.1#14 / §3.8：三态 helper（validate_for_mode 由 validator::no_legacy_text_terminal_validators 守护）
+            ["wants_", "style_en"], ["wants_", "all_en"],
         ]
         .iter()
         .map(|p| p.concat())
@@ -3457,6 +3453,44 @@ mod tests {
             }
         }
         assert!(hits.is_empty(), "旧信封/转写保真残留：\n{}", hits.join("\n"));
+    }
+
+    /// §5.1#14 / §3.8：output_lang 值域不得再出现 mix；前端 OutputLang 类型亦不得含 mix。
+    #[test]
+    fn no_mix_output_lang() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        // 禁用针以拼接构造，避免本测试自匹配。
+        let needles: Vec<String> = [
+            ["output_lang: \"", "mix\""],
+            ["output_lang:\"", "mix\""],
+            ["outputLang: \"", "mix\""],
+            ["value=\"", "mix\""],
+            ["\"mix\" | \"", "en\""],
+            ["\"zh\" | \"", "mix\""],
+            ["settings.outputLang.", "mix"],
+        ]
+        .iter()
+        .map(|p| p.concat())
+        .collect();
+        let mut hits = Vec::new();
+        for rel in [
+            "src/models/mod.rs",
+            "../src/types/index.ts",
+            "../src/App.tsx",
+            "../src/i18n.ts",
+            "../src/hooks/usePipeline.ts",
+            "../src/hooks/useSettings.ts",
+        ] {
+            let p = root.join(rel);
+            let s = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {}: {}", p.display(), e));
+            for n in &needles {
+                if s.contains(n.as_str()) {
+                    hits.push(format!("{}: {}", p.display(), n));
+                }
+            }
+        }
+        // sanitizeStored 允许字面量 "mix" 作为归一输入（读旧设置 → zh），但不得出现在类型/下拉/i18n 键。
+        assert!(hits.is_empty(), "§3.8 mix 残留：\n{}", hits.join("\n"));
     }
 
     /// C3 快照：四模式 prompt 渲染输出须与改前快照逐字节一致（占位符恰好还原当日数字）。

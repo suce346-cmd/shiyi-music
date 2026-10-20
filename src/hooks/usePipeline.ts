@@ -186,7 +186,7 @@ export const degradedFlagLabel = (flag: string): string => {
 export type RequestKind = "generate" | "refine" | "resume";
 
 /** C-04 请求组装单源（BLUEPRINT_v2 P0-2）：run/refine/resume 三条路径共用，纯函数可测。
- *  旧规则两处手写字面量（startRun 的 run/refine 一处 + resume 一处），resume 漏传 output_lang → 后端 serde 缺省 "zh"，用户 en/mix 设置在续跑被静默忽略。
+ *  旧规则两处手写字面量（startRun 的 run/refine 一处 + resume 一处），resume 漏传 output_lang → 后端 serde 缺省 "zh"，用户 en 设置在续跑被静默忽略。
  *  路径差异只在此处显式分支：
  *  - refine：上一版方案注入 user_input（composeRefineInput 单源）；fast 增量透传 refine_targets（full 不传=全量）
  *  - resume：直接进终稿无讨论轮 → round_gate 恒 false；不传 refine_targets

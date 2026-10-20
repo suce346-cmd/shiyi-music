@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **[§5.1#14 / §3.8] 退役 output_lang mix**：`PipelineRequest.output_lang` 复用 `plan::LyricLang`（仅 zh|en）；IPC 收到 `"mix"` 反序列化失败；删除 `wants_style_en`/`wants_all_en` 与阶段 2 mix 注入；前端下拉/i18n/类型两态；`sanitizeStored` 将旧 mix 归一为 zh；守护 `no_mix_output_lang` + wants_* 扫源。Style 恒英文见 §3.7（硬门另批）。
+
 - **[P1-13] 文本评估 Judge（M-09/M-10）**：七维评分卡 + 圆桌同模型 Judge；设置 **文本评估 Judge**（`textEvalJudge`）默认关闭，仅开启时终稿后打分并发 `text_eval` 事件；失败 `text_eval_degraded` 不阻断。20 条冻结提示词、校准模板与歧义裁定见 `docs/qa/text-eval-*.md` / `p1-13-ambiguities.md`；`tests/text_eval.rs` 离线绿、在线需 `SHIYI_TEXT_EVAL=1`。
 
 - **[§5.1#5] 退役文本终稿校验**：变异实验证明 `plan::validate` 覆盖原文本硬门后，删除 `validate_for_mode` / `validate_production` / 文本 `validate_douyin` / `param_range_issues` / `check_audio_influence` / `declared_minimal_sections`；保留 `validate_lyric_fill`、`style_prompt_length_issues`、`desc_line_length_issues`、`check_bpm_range` 供 IR 调用。RULE_REGISTRY 执行者改挂 `check_*` / `validate_douyin_v2` / `section_floor`；无头/矩阵改走 `plan::validate`；扩展 no-legacy 守卫。对照与变异表见 `docs/audit-2026-10-19/p3-retire-text-validators.md`。

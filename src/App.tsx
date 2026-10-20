@@ -917,10 +917,9 @@ export default function App() {
               <span className="block text-[10px] text-text-muted font-normal">{t(settings.language, "settings.outputLang.desc")}</span>
             </label>
             <select id="output-lang" value={settings.outputLang ?? "zh"}
-              onChange={e => { updateSettings({ outputLang: e.target.value as "zh" | "mix" | "en" }); setTestResult(null); }}
+              onChange={e => { updateSettings({ outputLang: e.target.value as "zh" | "en" }); setTestResult(null); }}
               className="text-[11px] bg-surface-1 border border-border/40 rounded-md px-1.5 py-1 cursor-pointer">
               <option value="zh">{t(settings.language, "settings.outputLang.zh")}</option>
-              <option value="mix">{t(settings.language, "settings.outputLang.mix")}</option>
               <option value="en">{t(settings.language, "settings.outputLang.en")}</option>
             </select>
           </div>

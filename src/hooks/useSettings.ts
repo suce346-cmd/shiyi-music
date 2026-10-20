@@ -21,6 +21,7 @@ const defaultSettings: AppSettings = {
   // （问题的本体就是"等不到你"）；不想被打断可在门条上一键关闭，此后全自动推进。
   roundGate: true,
   textEvalJudge: false,
+  outputLang: "zh",
 };
 
 /** 清洗 localStorage 旧数据：坏类型字段回退默认值，防透传后端 serde 反序列化失败。
@@ -80,7 +81,10 @@ export function sanitizeStored(raw: unknown): AppSettings {
     }
     base.roleOverrides = cleaned;
   }
-  // P1-2 探测缓存清洗：只留 string 键 + 合法档位值
+  // §3.8：歌词语言两态；旧 mix / 非法值归一 zh（设置偏好一次性写回，非测试垃圾兼容）
+  if (o.outputLang === "en") base.outputLang = "en";
+  else base.outputLang = "zh";
+    // P1-2 探测缓存清洗：只留 string 键 + 合法档位值
   if (typeof o.structuredCaps === "object" && o.structuredCaps !== null && !Array.isArray(o.structuredCaps)) {
     const caps: Record<string, StructuredMode> = {};
     for (const [k, v] of Object.entries(o.structuredCaps)) {

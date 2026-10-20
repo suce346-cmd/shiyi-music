@@ -42,7 +42,7 @@ fn make_request(cfg: &TestConfig, mode: Mode, user_input: &str, original_lyrics:
     douyin_scene: None,
     text_eval_judge: None,
         mode,
-        output_lang: "zh".into(),
+        output_lang: suno_prompt_generator_lib::models::LyricLang::Zh,
         user_input: user_input.to_string(),
         model: cfg.model.clone(),
         api_key: cfg.api_key.clone(),

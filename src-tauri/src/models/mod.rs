@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+
+pub use crate::plan::LyricLang;
 use std::collections::HashMap;
 use crate::errors::{AppError, ErrorKind};
 use crate::rules::{FEEDBACK_MAX_CHARS, INPUT_MAX_CHARS};
@@ -368,7 +370,7 @@ mod tests {
         let mut req = PipelineRequest { structured_caps: None,
         douyin_scene: None,
         text_eval_judge: None,
-            output_lang: "zh".into(),
+            output_lang: LyricLang::Zh,
             mode: Mode::ModeB,
             user_input: "雨天".into(),
             model: "m".into(),
@@ -405,7 +407,7 @@ mod tests {
             PipelineRequest { structured_caps: None,
             douyin_scene: None,
             text_eval_judge: None,
-                output_lang: "zh".into(),
+                output_lang: LyricLang::Zh,
                 mode: Mode::ModeB,
                 user_input: "雨天".into(),
                 model: "m".into(),
@@ -526,7 +528,7 @@ mod tests {
             PipelineRequest { structured_caps: None,
             douyin_scene: None,
             text_eval_judge: None,
-                output_lang: "zh".into(),
+                output_lang: LyricLang::Zh,
                 mode: Mode::ModeB,
                 user_input: "雨天".into(),
                 model: "m".into(),
@@ -728,11 +730,10 @@ pub struct PipelineRequest {
     /// **缺省关闭**——暂停必须由前端显式授权，后端不擅自挂住 headless/脚本调用方。
     #[serde(default)]
     pub round_gate: Option<bool>,
-    /// 产出语言三态（"zh" 全中文 / "mix" 中文歌词+英文 Style / "en" 全英文）：
-    /// 讨论层指令语言与结构标签约定不变。旧前端无此字段 → "zh"（现状行为，零漂移）。
-    /// 未知值 → 保守按 "zh" 处理（不做静默猜测）。
-    #[serde(default = "default_output_lang")]
-    pub output_lang: String,
+    /// 歌词语言（§3.8 / D13）：仅 zh|en。Style 恒英文（§3.7），与本字段无关。
+    /// `mix` 反序列化失败（一刀切，不做静默映射）。缺省 zh（旧请求兼容）。
+    #[serde(default = "default_lyric_lang")]
+    pub output_lang: LyricLang,
     /// P1-2：结构化能力探测缓存（键 = `llm_caps::cap_key(base_url, model)`）；旧前端无此字段 → None
     #[serde(default)]
     pub structured_caps: Option<HashMap<String, crate::llm_caps::StructuredMode>>,
@@ -745,21 +746,14 @@ pub struct PipelineRequest {
     pub text_eval_judge: Option<bool>,
 }
 
-/// output_lang 缺省值：全中文（现状行为）。
-fn default_output_lang() -> String {
-    "zh".into()
+fn default_lyric_lang() -> LyricLang {
+    LyricLang::Zh
 }
 
 impl PipelineRequest {
-    /// 全英文产出（含歌词正文）——阶段 0/汇总/专家修订注入英文指令。
-    pub fn wants_all_en(&self) -> bool {
-        self.output_lang.eq_ignore_ascii_case("en")
-    }
-
-    /// 仅 Style 层英文（Style Prompt/音色描述），歌词正文保持原语言——
-    /// 阶段 2 转写/格式注入 STYLE 节英文指令。
-    pub fn wants_style_en(&self) -> bool {
-        self.wants_all_en() || self.output_lang.eq_ignore_ascii_case("mix")
+    /// §3.8：歌词语言（Style 恒英文，不由此字段控制）。
+    pub fn lyric_lang(&self) -> LyricLang {
+        self.output_lang
     }
 }
 
@@ -1089,36 +1083,30 @@ impl PipelineEnvelope {
 mod output_lang_tests {
     use super::*;
 
-    /// 旧前端请求（无 output_lang 字段）→ 缺省 "zh"（全中文），行为零漂移。
     #[test]
     fn missing_field_defaults_to_zh() {
         let json = r#"{"mode":"mode_b","user_input":"雨天","model":"m1","api_key":"k1","base_url":"u1"}"#;
         let req: PipelineRequest = serde_json::from_str(json).unwrap();
-        assert_eq!(req.output_lang, "zh");
-        assert!(!req.wants_all_en());
-        assert!(!req.wants_style_en());
+        assert_eq!(req.lyric_lang(), LyricLang::Zh);
     }
 
-    /// 三态显式值：en = 全英文；mix = 仅 Style 层英文；未知值保守按中文。
     #[test]
-    fn explicit_en_and_unknown_values() {
+    fn explicit_en() {
         let json = r#"{"mode":"mode_b","user_input":"雨天","model":"m1","api_key":"k1","base_url":"u1","output_lang":"en"}"#;
         let req: PipelineRequest = serde_json::from_str(json).unwrap();
-        assert!(req.wants_all_en());
-        assert!(req.wants_style_en());
-
-        let json = r#"{"mode":"mode_b","user_input":"雨天","model":"m1","api_key":"k1","base_url":"u1","output_lang":"fr"}"#;
-        let req: PipelineRequest = serde_json::from_str(json).unwrap();
-        assert!(!req.wants_all_en());
-        assert!(!req.wants_style_en());
+        assert_eq!(req.lyric_lang(), LyricLang::En);
     }
 
-    /// mix = 仅 Style 层英文，歌词正文保持原语言。
+    /// §3.8 / D4：mix 一刀切拒收（不做静默映射）
     #[test]
-    fn mix_wants_style_en_only() {
+    fn output_lang_rejects_mix() {
         let json = r#"{"mode":"mode_b","user_input":"雨天","model":"m1","api_key":"k1","base_url":"u1","output_lang":"mix"}"#;
-        let req: PipelineRequest = serde_json::from_str(json).unwrap();
-        assert!(!req.wants_all_en());
-        assert!(req.wants_style_en());
+        assert!(serde_json::from_str::<PipelineRequest>(json).is_err());
+    }
+
+    #[test]
+    fn unknown_lang_rejected() {
+        let json = r#"{"mode":"mode_b","user_input":"雨天","model":"m1","api_key":"k1","base_url":"u1","output_lang":"fr"}"#;
+        assert!(serde_json::from_str::<PipelineRequest>(json).is_err());
     }
 }

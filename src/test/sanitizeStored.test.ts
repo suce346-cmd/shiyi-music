@@ -95,4 +95,12 @@ describe("sanitizeStored", () => {
     expect(sanitizeStored(JSON.parse(`{"${G}":"yes"}`)).roundGate).toBe(true);
     expect(sanitizeStored({}).roundGate).toBe(true);
   });
+
+  // §3.8：歌词语言两态；旧 mix / 非法 → zh；en 保留
+  it("§3.8 outputLang：en 保留，mix/非法/缺字段 → zh", () => {
+    expect(sanitizeStored(JSON.parse('{"outputLang":"en"}')).outputLang).toBe("en");
+    expect(sanitizeStored(JSON.parse('{"outputLang":"mix"}')).outputLang).toBe("zh");
+    expect(sanitizeStored(JSON.parse('{"outputLang":"fr"}')).outputLang).toBe("zh");
+    expect(sanitizeStored(JSON.parse('{}')).outputLang).toBe("zh");
+  });
 });

@@ -4,7 +4,7 @@ import { composeRefineInput } from "../utils/partialDraft";
 import type { AppSettings, OutputLang } from "../types";
 
 // C-04（BLUEPRINT_v2 P0-2）：run/refine/resume 请求组装单源。
-// 旧规则 resume 手写字面量漏传 output_lang → 后端缺省 "zh"，用户 en/mix 设置在续跑被静默忽略。
+// 旧规则 resume 手写字面量漏传 output_lang → 后端缺省 "zh"，用户 en 设置在续跑被静默忽略。
 const makeSettings = (patch: Partial<AppSettings> = {}): AppSettings => ({
   apiKey: "",
   model: "gpt-4o",
@@ -15,7 +15,7 @@ const makeSettings = (patch: Partial<AppSettings> = {}): AppSettings => ({
 });
 const base = { mode: "mode_b" as const, userInput: "雨天", extra: undefined, originalLyrics: undefined };
 const KINDS: RequestKind[] = ["generate", "refine", "resume"];
-const LANGS: OutputLang[] = ["zh", "mix", "en"];
+const LANGS: OutputLang[] = ["zh", "en"];
 
 describe("buildPipelineRequest（C-04 单源）", () => {
   it("三条路径都透传 output_lang（回归：resume 曾漏传）", () => {
