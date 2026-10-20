@@ -358,7 +358,20 @@ async fn send_and_extract(
         let json: Value = serde_json::from_slice(&bytes)
             .map_err(|e| AppError::new(ErrorKind::Parse, format!("API response parse failed: {}", e)))?;
         let (raw, finish_reason, usage) = extract_message(&json)
-            .ok_or_else(|| AppError::new(ErrorKind::Parse, "API response missing content".to_string()))?;
+            .ok_or_else(|| {
+                // 全量复审 2026-10-20：附诊断（finish_reason / 是否有 reasoning / 用量），前缀保持不变（降级判定按前缀匹配）
+                let c0 = &json["choices"][0];
+                let has_reasoning = c0["message"]["reasoning"].as_str().is_some_and(|s| !s.is_empty());
+                AppError::new(
+                    ErrorKind::Parse,
+                    format!(
+                        "API response missing content (finish_reason={}, reasoning={}, completion_tokens={})",
+                        c0["finish_reason"].as_str().unwrap_or("-"),
+                        has_reasoning,
+                        json["usage"]["completion_tokens"].as_u64().map(|n| n.to_string()).unwrap_or_else(|| "-".into())
+                    ),
+                )
+            })?;
         Ok(LLMResponse { raw, finish_reason, usage })
     }
     match extract_once(client, url, api_key, body, budget, run_id, reserve, notify).await {
@@ -463,7 +476,9 @@ pub(crate) fn structured_body(
 ) -> Value {
     use crate::llm_caps::{response_format, schema_system_message, StructuredMode};
     let mut msgs: Vec<Value> = Vec::with_capacity(messages.len() + 1);
-    if mode == StructuredMode::JsonObject {
+    // 全量复审 2026-10-20 实网发现：网关对 json_schema 返回 200 却不强制 schema（DeepSeek 系仅 json_object 语义），
+    // 模型看不到 schema 就把 positive_local 等数组字段写成字符串 → Parse。json_schema 档同样注入 schema 文本。
+    if matches!(mode, StructuredMode::JsonObject | StructuredMode::JsonSchema) {
         msgs.push(schema_system_message(schema));
     }
     msgs.extend(messages.iter().cloned());
@@ -510,10 +525,81 @@ pub(crate) fn strip_structured_wrappers(raw: &str) -> &str {
     s
 }
 
+/// 全量复审 2026-10-20 实网发现：strictify 为 OpenAI strict 档把**全部**属性标 required，
+/// 而不强制 schema 的网关下模型常省略可空/列表字段（persona、pronunciation_hints、checked、changes…）。
+/// 这些字段在 Rust 侧本就是 `Option`/`#[serde(default)]`——省略与 null/[] 同义。
+/// 仅对**缺席**属性补位：schema 允许 null → null；type=array → []。不改任何已给出的值、不碰类型错误。
+pub(crate) fn fill_omitted_optionals(root: &Value, node: &Value, v: &mut Value) {
+    let node = resolve_ref(root, node);
+    for key in ["anyOf", "oneOf"] {
+        if let Some(Value::Array(bs)) = node.get(key) {
+            for b in bs {
+                let b = resolve_ref(root, b);
+                if b.get("type").and_then(|t| t.as_str()) != Some("null") {
+                    fill_omitted_optionals(root, b, v);
+                    break;
+                }
+            }
+        }
+    }
+    match v {
+        Value::Object(map) => {
+            if let Some(Value::Object(props)) = node.get("properties") {
+                for (k, sub) in props {
+                    match map.get_mut(k) {
+                        Some(child) => fill_omitted_optionals(root, sub, child),
+                        None => {
+                            let sub = resolve_ref(root, sub);
+                            if allows_null(root, sub) {
+                                map.insert(k.clone(), Value::Null);
+                            } else if sub.get("type").and_then(|t| t.as_str()) == Some("array") {
+                                map.insert(k.clone(), Value::Array(vec![]));
+                            } else if sub.get("type").and_then(|t| t.as_str()) == Some("string") {
+                                // serde(default) 的 String 缺省即 ""；真必填字段补 "" 后由 plan::validate 判空打回
+                                map.insert(k.clone(), Value::String(String::new()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Value::Array(items) => {
+            if let Some(it) = node.get("items") {
+                for x in items.iter_mut() {
+                    fill_omitted_optionals(root, it, x);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn resolve_ref<'a>(root: &'a Value, node: &'a Value) -> &'a Value {
+    match node.get("$ref").and_then(|r| r.as_str()).and_then(|r| r.strip_prefix('#')) {
+        Some(ptr) => root.pointer(ptr).unwrap_or(node),
+        None => node,
+    }
+}
+
+fn allows_null(root: &Value, s: &Value) -> bool {
+    match s.get("type") {
+        Some(Value::String(t)) if t == "null" => return true,
+        Some(Value::Array(ts)) if ts.iter().any(|t| t == "null") => return true,
+        _ => {}
+    }
+    ["anyOf", "oneOf"].iter().any(|k| {
+        s.get(*k).and_then(|b| b.as_array()).is_some_and(|bs| bs.iter().any(|b| allows_null(root, resolve_ref(root, b))))
+    })
+}
+
 pub(crate) fn parse_structured<T: serde::de::DeserializeOwned>(raw: &str, schema: &Value) -> Result<(T, Value), AppError> {
-    let v: Value = serde_json::from_str(strip_structured_wrappers(raw)).map_err(|e| {
-        AppError::new(ErrorKind::Parse, format!("结构化输出不是合法 JSON: {}", e))
-    })?;
+    // 只取首个完整 JSON 值（实网见过对象后再跟说明文字/重复对象 → "trailing characters"）
+    let mut v: Value = serde_json::Deserializer::from_str(strip_structured_wrappers(raw))
+        .into_iter::<Value>()
+        .next()
+        .unwrap_or_else(|| serde_json::from_str::<Value>(""))
+        .map_err(|e| AppError::new(ErrorKind::Parse, format!("结构化输出不是合法 JSON: {}", e)))?;
+    fill_omitted_optionals(schema, schema, &mut v);
     crate::plan::schema::check(schema, &v).map_err(|errs| {
         let detail: Vec<String> = errs.iter().take(8).map(|e| e.to_string()).collect();
         AppError::new(ErrorKind::Parse, format!("结构化输出未通过 schema 校验: {}", detail.join("; ")))
@@ -1123,11 +1209,50 @@ mod tests {
     }
 
     #[test]
+    fn omitted_optional_fields_filled_but_type_errors_kept() {
+        use crate::plan::schema::song_plan_schema;
+        let s = song_plan_schema();
+        let mut full = serde_json::to_value(crate::plan::fixtures::minimal_plan()).unwrap();
+        // 省略可空文本层字段 → 补 null 后应能解析
+        for k in ["persona", "pronunciation_hints", "series_context"] {
+            full.as_object_mut().unwrap().remove(k);
+        }
+        let raw = serde_json::to_string(&full).unwrap();
+        let r: Result<(crate::plan::SongPlan, _), _> = parse_structured(&raw, &s);
+        assert!(r.is_ok(), "{:?}", r.err().map(|e| e.message));
+        // 类型错误（数组写成字符串）不修
+        let mut bad = serde_json::to_value(crate::plan::fixtures::minimal_plan()).unwrap();
+        bad["sections"][0]["positive_local"] = serde_json::json!("a, b");
+        let r: Result<(crate::plan::SongPlan, _), _> = parse_structured(&bad.to_string(), &s);
+        assert!(r.is_err());
+        // ReviewOut：缺 checked/changes → []
+        let rs = crate::commands::plan_flow::review_schema();
+        let r: Result<(crate::commands::plan_flow::ReviewOut, _), _> = parse_structured(r#"{"agree":true,"reason":"ok"}"#, &rs);
+        assert!(r.is_ok(), "{:?}", r.err().map(|e| e.message));
+    }
+
+    #[test]
+    fn structured_body_always_carries_schema_text() {
+        use crate::llm_caps::StructuredMode;
+        let schema = serde_json::json!({"type":"object","properties":{"positive_local":{"type":"array"}}});
+        for m in [StructuredMode::JsonSchema, StructuredMode::JsonObject] {
+            let b = structured_body("m", &[], 64, 0.2, m, "x", &schema);
+            let sys = b["messages"][0]["content"].as_str().unwrap_or("");
+            assert!(sys.contains("positive_local") && sys.contains("JSON Schema"), "{m:?} 档必须在提示中带 schema");
+        }
+    }
+
+    #[test]
     fn structured_wrappers_stripped_only_think_and_fence() {
         assert_eq!(strip_structured_wrappers("<think>abc</think>\n{\"a\":1}"), "{\"a\":1}");
         assert_eq!(strip_structured_wrappers("```json\n{\"a\":1}\n```"), "{\"a\":1}");
         assert_eq!(strip_structured_wrappers(" {\"a\":1} "), "{\"a\":1}");
         assert_eq!(strip_structured_wrappers("Here: {\"a\":1}"), "Here: {\"a\":1}", "散文前缀不修复");
+        let s = serde_json::json!({"type":"object","properties":{"a":{"type":"integer"}}});
+        let r: Result<(serde_json::Value, _), _> = parse_structured("{\"a\":1}\n以上为结果", &s);
+        assert!(r.is_ok(), "尾随文字只取首个 JSON 值");
+        let r: Result<(serde_json::Value, _), _> = parse_structured("{\"a\":1", &s);
+        assert!(r.is_err(), "半截 JSON 仍报错");
     }
 
     #[test]

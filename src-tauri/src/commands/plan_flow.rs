@@ -252,7 +252,14 @@ pub async fn role_review_structured<R: Runtime>(
     );
     let messages = vec![json!({"role":"system","content":system}), json!({"role":"user","content":user})];
     let hook = super::orchestrator::backoff_hook(app.clone(), run_id.to_string());
-    let (out, resp) = llm::call_llm_structured::<ReviewOut>(&call, messages, budget, Some(&hook)).await?;
+    // 全量复审 2026-10-20 实网：审改 JSON 偶发非法（未转义引号/半截）→ 同请求重发一次（不加修复提示，D2 不变）
+    let (out, resp) = match llm::call_llm_structured::<ReviewOut>(&call, messages.clone(), budget, Some(&hook)).await {
+        Err(e) if e.kind == crate::errors::ErrorKind::Parse => {
+            tracing::warn!(role = ?role, "审改结构化解析失败，同请求重发一次: {}", e.message);
+            llm::call_llm_structured::<ReviewOut>(&call, messages, budget, Some(&hook)).await?
+        }
+        r => r?,
+    };
     emit_progress(
         app,
         run_id,
@@ -295,7 +302,8 @@ pub async fn auditor_finalize<R: Runtime>(
         return Ok((package_text(&rendered), Vec::new(), plan));
     }
 
-    for attempt in 0..2u32 {
+    // 全量复审 2026-10-20 实网：2 次修正时 Style 超长常差一口气（376>350），放宽到 3 次（每次仍受预算闸门）
+    for attempt in 0..AUDITOR_FIX_ATTEMPTS {
         emit_progress(app, run_id, PipelineRole::Auditor, PhaseKind::Structuring, None);
         let _ = app.emit(
             "pipeline",
@@ -423,6 +431,9 @@ fn stamp_douyin_scene(req: &PipelineRequest, plan: &mut SongPlan) {
     let (scene, source) = crate::plan::douyin::resolve_request_scene(req.douyin_scene.as_deref());
     crate::plan::douyin::apply_scene_to_plan(plan, scene, source);
 }
+
+/// 审核员硬校验打回修正次数上限（全量复审 2026-10-20：2→3）
+pub const AUDITOR_FIX_ATTEMPTS: u32 = 3;
 
 #[cfg(test)]
 mod tests {

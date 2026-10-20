@@ -115,7 +115,7 @@ export default function HistoryPanel({ entries, allEntriesCount, filter, onFilte
                 ${filter === tab.value
                   ? "bg-brand-500/15 text-brand-400"
                   : "text-text-muted hover:text-text-2 hover:bg-surface-3"}`}>
-              {tab.label}
+              {tab.value === "all" ? t(locale, "history.filter.all") : tab.label}
             </button>
           ))}
         </div>

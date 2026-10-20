@@ -57,10 +57,30 @@
 | F-E3 | 结果页能量条：render_suno 段头为单行 `[Verse 1 | …, energy 7]`，`TAG_RE` 只认 `[Verse 1]` → 所有能量条标签都是"开场" | ResultPanel.parseEnergy | 新 `HEAD_RE` 取同行标签；测试补 |
 | F-F | 探测仅凭 HTTP 200 判支持（网关静默忽略 response_format 时误判）；`parse_structured` 不容忍 `<think>`/```json 外壳；推理字段无测试 | llm.rs、llm_caps.rs | 200 时看正文：非空且非 JSON → Rejected；空（reasoning 吃光 token）→ Supported；只剥 think/围栏两种外壳；`reasoning_fields_never_leak_into_content` |
 | F-G | 实网无头测试 A/B/D 只断言非空，D 未开场景/Judge | tests/headless_modes.rs | 订阅 pipeline 事件：末次 audit_result.pass、无 degraded、final_plan 过 schema + plan::validate + render_suno；D 用 scene=dance + Judge 开并断言 text_eval |
+| F-H | json_schema 档不在提示中带 schema；网关 200 但不强制 → 模型把 `positive_local` 等数组写成字符串 | llm.rs `structured_body` | json_schema/json_object 两档都注入 schema 文本；契约写明三字段为字符串数组；`structured_body_always_carries_schema_text` |
+| F-I | strictify 把全部属性标 required；模型省略 Option/默认字段（persona、checked、changes、reason）→ Parse | llm.rs `parse_structured` | `fill_omitted_optionals`：只给**缺席**属性补位（可空→null，数组→[]，字符串→""），类型错误不修；对象后跟尾随文字只取首个 JSON 值；`omitted_optional_fields_filled_but_type_errors_kept` |
+| F-J | 审改 JSON 偶发非法 → 角色意见直接作废（call_degraded） | plan_flow 审改阶段 | Parse 时同请求重发一次（无修复提示，D2 不变） |
+| F-K | Style/段头超长：审核员 2 次修正不收敛（376>350、213>200） | validate / validator / plan_flow | 打回文案给出"须再删 ≥N 字符"与段头拼接组成；`AUDITOR_FIX_ATTEMPTS` 2→3 |
+| F-L | Judge 在终稿后运行却沿用流水线预算并预留 120s → D 长链必 "可用 0ns" | orchestrator `maybe_run_text_eval`、text_eval | 独立旁路预算 `TEXT_EVAL_BUDGET`=180s、reserve=0 |
+| F-M | Judge max_tokens 1024 被 reasoning 吃光 → content 空 | text_eval | `JUDGE_MAX_TOKENS`=4096 |
+| F-N | 实网 C 断言对整包文本跑 lyric_fill（含 Title/Style/段头）必误报；预算 8 分钟四路并发不够 | tests/headless_modes.rs | 改在 final_plan 歌词行上比对；A/B/C 12 分钟、D 15 分钟（=生产） |
 | 记录 | `get_suno_meta` 已注册 IPC 但前端无调用 | lib.rs | 保留（参数上限元数据，待 D7 探针后接 UI），列为遗留 |
 | 记录 | HistoryPanel 筛选页签"全部"硬编码中文未走 i18n | HistoryPanel.tsx | 遗留（低） |
 
 实网探测（curl，deepseek-v4.1-flash）：json_schema / json_object / 无 response_format 在 max_tokens 64 与 1024 下均 200 且正文为合法 JSON；message 含 `reasoning`、`reasoning_details` 字段 → 客户端只读 `content`，已加测试锁。
+
+## 4.1 实网 A/B/C/D 回合记录（deepseek-v4.1-flash，经 amr-link 网关）
+
+| 回合 | A | B | C | D | 主因 → 修复 |
+|---|---|---|---|---|---|
+| 1 | ✗ | ✗ | ✗ | ✗ | 数组写成字符串（F-H）；C 断言误报、B 预算（F-N） |
+| 2 | ✗ | ✗ | ✗ | ✗ | 省略可空字段（F-I）；C Style/段头超长 |
+| 3 | ✗ | ✗ | ✓ | ✗ | 审改非法 JSON/尾随文字（F-I/F-J）；D 预算 |
+| 4 | ✓ | ✗ | ✗ | ✗ | 超长不收敛（F-K）；Judge 预算（F-L） |
+| 5 | ✓ | ✓ | ✓ | ✗ | Judge 空正文（F-M） |
+| 6 | — | — | — | 见最终报告 | |
+
+“讨论轮次上限强制收敛”是设计内软降级，测试单独打印不判失败；其余降级一律判失败。
 
 ## 5. 按钮 → 数据流矩阵
 

@@ -552,9 +552,10 @@ fn check_style_and_headers(p: &SongPlan, mode: &str, out: &mut Vec<Issue>) {
                 "header_too_long",
                 format!("/sections/{i}/positive_local"),
                 format!(
-                    "「{}」段头 {n} 字符 > 上限 {}——压缩 cue（保留乐器，删修饰）",
+                    "「{}」段头 {n} 字符 > 上限 {}——须再删 ≥{} 字符（段头 = 标签 + positive_local + instruments + energy N 拼接）：压缩 positive_local 短语，保留乐器，删修饰",
                     s.label,
-                    rules::DESC_LINE_MAX_CHARS
+                    rules::DESC_LINE_MAX_CHARS,
+                    n - rules::DESC_LINE_MAX_CHARS
                 ),
             ));
         }

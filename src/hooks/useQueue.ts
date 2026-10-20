@@ -26,7 +26,7 @@ export interface QueueItem {
   label: string;
   mode: Mode;
   userInput: string;
-  extra?: { originalLyrics: string };
+  extra?: { originalLyrics?: string; douyinScene?: string };
   status: QueueItemStatus;
   enqueuedAt: number;
   /** 成功项归档后的历史条目 id（点击查看走**精确**关联，不再按输入前缀模糊匹配） */

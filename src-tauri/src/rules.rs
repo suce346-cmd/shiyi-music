@@ -3546,7 +3546,7 @@ pub fn plan_field_contract() -> String {
 const PLAN_FIELD_CONTRACT: &str = "【SongPlan 字段契约（最高优先级：本阶段按 JSON schema 填字段，不输出排版文本；交付包由程序渲染）】\n\
 1. Style Prompt → global：genre / bpm / key / meter / instruments / arc 填英文短标签；vocal / mix 只填《人声/混音词表》id（各 ≥1，渲染展开为英文标签；渲染为逗号串，≤${STYLE_PROMPT_MAX} 字符）。\n\
 2. Exclude → global.negative：直接写要排除的元素，不加 no/without；正向字段不得出现否定写法。\n\
-3. 说明行 → 每段 instruments + positive_local + energy + negative_local：instruments 只放在场乐器；positive_local 写行为、${DESC_LINE_SPACE_SLOT}、人声状态；energy 为 ${ENERGY_SCALE}（A/B 必填）；段内退出写 negative_local（渲染为 X drop out）。\n\
+3. 说明行 → 每段 instruments + positive_local + energy + negative_local（instruments / positive_local / negative_local 均为**字符串数组**，每项一个短语；energy 为整数）：instruments 只放在场乐器；positive_local 写行为、${DESC_LINE_SPACE_SLOT}、人声状态；energy 为 ${ENERGY_SCALE}（A/B 必填）；段内退出写 negative_local（渲染为 X drop out）。\n\
 4. 极简段 → minimal=true：仅 intro/outro/bridge/interlude 且 energy≤${MINIMAL_ENERGY_MAX}，notes 写理由。\n\
 5. 配器（A/B）：极简 ≥${MIN_INSTRUMENT_MINIMAL}；Chorus 类 ≥${MIN_INSTRUMENT_CHORUS}；其余 ≥${MIN_INSTRUMENT_CORE}；最强 ≥${MIN_INSTRUMENT_STRONG}；差 ≥${MIN_INSTRUMENT_GAP}；上限 ${INSTRUMENT_MAX}。\n\
 6. 歌词 → sections[].lines；参数 → settings（variety=${VARIETY}；reference_audio 默认 false，为 true 时 audio_influence 可非 0）；notes 写分析/裁决，不渲染。\n7. D 模式另填 mode_meta.douyin（clip/hook_line/loop_tail；scene 由请求盖写勿自选）；mix 含 M-01+M-06；negative 含 long intro/slow build/fade out。\n8. 可选文本层（默认 null=关闭）：pronunciation_hints（多音字/发音）、persona（声音指纹）、series_context（专辑/系列一致性）。";

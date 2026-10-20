@@ -1211,6 +1211,9 @@ pub(crate) fn backoff_hook<R: Runtime>(
 
 
 /// P1-13：显式 opt-in 后调用圆桌同模型 Judge；失败只记日志/降级事件，不阻断终稿。
+/// Judge 旁路独立预算
+pub(crate) const TEXT_EVAL_BUDGET: std::time::Duration = std::time::Duration::from_secs(180);
+
 async fn maybe_run_text_eval<R: tauri::Runtime>(
     app: &AppHandle<R>,
     request: &PipelineRequest,
@@ -1221,6 +1224,11 @@ async fn maybe_run_text_eval<R: tauri::Runtime>(
     if !crate::text_eval::judge_enabled(request.text_eval_judge) {
         return;
     }
+    // 全量复审 2026-10-20 实网：Judge 在终稿**之后**跑，却沿用流水线预算并预留 120s 终稿额度 →
+    // 长链（D）必然 "可用 0ns"。终稿已交付，Judge 用独立旁路预算（与 test_api 同法），不占也不被流水线池卡死。
+    let _ = budget;
+    let budget: crate::budget::SharedBudget =
+        std::sync::Arc::new(crate::budget::Budget::with_timeout(TEXT_EVAL_BUDGET));
     emit_pipeline_event(
         app,
         run_id,
@@ -1237,7 +1245,7 @@ async fn maybe_run_text_eval<R: tauri::Runtime>(
         request.mode.to_str_name(),
         &request.user_input,
         final_text,
-        budget,
+        &budget,
         &gen,
         run_id,
     )

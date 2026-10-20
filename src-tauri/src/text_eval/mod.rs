@@ -212,6 +212,10 @@ pub fn judge_enabled(flag: Option<bool>) -> bool {
 }
 
 /// 调用圆桌同配置模型打分（失败不阻断主流程——由调用方决定）
+/// 全量复审 2026-10-20 实网：推理模型即便 thinking=false 仍输出 reasoning，1024 被吃光 → content 为空
+/// （"API response missing content"）。放宽到 4096。
+pub const JUDGE_MAX_TOKENS: u32 = 4096;
+
 pub async fn run_judge(
     base_url: &str,
     api_key: &str,
@@ -228,20 +232,32 @@ pub async fn run_judge(
         json!({"role":"system","content":"你只输出合法 JSON，不要 Markdown 围栏。"}),
         json!({"role":"user","content":prompt}),
     ];
-    let resp = llm::call_llm_silent(
+    // 推理模型偶发正文为空（reasoning 吃光 / 网关丢正文）：同请求重发一次
+    let mut attempt = 0;
+    let resp = loop {
+        attempt += 1;
+        let r = llm::call_llm_silent(
         base_url,
         api_key,
         model,
-        messages,
-        1024,
+        messages.clone(),
+        JUDGE_MAX_TOKENS,
         false, // Judge 关闭思考以控成本/延迟
         budget,
         gen,
         run_id,
-        llm::FINAL_STAGE_RESERVE,
+        std::time::Duration::ZERO, // 终稿后旁路：无后续阶段需预留
         None,
     )
-    .await?;
+    .await;
+        match r {
+            Err(e) if attempt < 2 && e.message.contains("missing content") => {
+                tracing::warn!("Judge 正文为空，重发一次: {}", e.message);
+                continue;
+            }
+            r => break r?,
+        }
+    };
     parse_judge_response(&resp.raw).map_err(|m| {
         AppError::new(
             crate::errors::ErrorKind::Parse,

@@ -371,9 +371,10 @@ pub fn style_prompt_length_issues(mode: &str, style_prompt: &str) -> Vec<String>
     let chars = style_prompt.chars().count();
     if rules::STYLE_PROMPT_MAX_MODES.contains(&mode) && chars > rules::STYLE_PROMPT_MAX_CHARS {
         issues.push(format!(
-            "Style Prompt 长度 {} 超限（> {}）",
+            "Style Prompt 长度 {} 超限（> {}）——须再删 ≥{} 字符（Style 由 global 字段拼出：删修饰词/重复标签/合并同义，保留流派+人声+核心乐器）",
             chars,
-            rules::STYLE_PROMPT_MAX_CHARS
+            rules::STYLE_PROMPT_MAX_CHARS,
+            chars - rules::STYLE_PROMPT_MAX_CHARS
         ));
     }
     if rules::STYLE_PROMPT_MIN_MODES.contains(&mode) && chars < rules::STYLE_PROMPT_MIN_CHARS {
