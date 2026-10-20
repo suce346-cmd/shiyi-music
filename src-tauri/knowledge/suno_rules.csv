@@ -1,7 +1,7 @@
 rule,scenario,value_min,value_max,unit,description
 weirdness,all,10,35,,随机度：值越低生成越保守贴合 Style 描述；10-25 稳定可控适合画面明确的歌；26-35 自由适合探索性创作；超过 35 可能失控偏离主题
 style_influence,all,70,95,,Style 引导度：越高 Style Prompt 权重越大越贴合描述；70-85 平衡推荐档；86-95 强引导（风格明确时用）；低于 70 风格描述会被弱化
-audio_influence,all,0,0,,无参考音频时必须为 0：否则 Suno 会尝试匹配不存在的音频导致生成漂移
+audio_influence,all,0,0,,无参考音频（reference_audio=false）时必须为 0：否则 Suno 会尝试匹配不存在的音频导致生成漂移；reference_audio=true 时可非 0
 style_prompt_max_chars,all,0,350,字符,Style Prompt 上限 350 字符（含空格）：超过会被截断，信息块写完后必须自查长度
 min_energy_gap,normal,3,10,级,最弱段与最强段能量差至少 3 级（0-10 标尺）：差太小全曲平淡无对比；差太大段落割裂
 min_instrument_gap,all,2,9,件,最弱段与最强段配器件数差至少 2 件：保证编曲层次变化，避免整曲同一配器密度

@@ -212,7 +212,7 @@
 - 说明行中的配器选择必须能在第二步的情感翻译或意象映射中找到依据
 
 ### 7. Suno 参数
-- Weirdness: 20-35 | Style Influence: 75-85 | Audio Influence = 0（无参考音频时）
+- Weirdness: 20-35 | Style Influence: 75-85 | Audio Influence = 0（无参考音频/reference_audio=false 时；开启参考音频时可非 0）
 
 ## 输出映射（SongPlan 字段——输出结构由 JSON schema 约束，见《SongPlan 字段契约》）
 

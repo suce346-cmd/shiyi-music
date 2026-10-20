@@ -244,7 +244,7 @@
 - U型：Weirdness 25-35 | Style Influence 70-82
 - 单峰型：Weirdness 20-30 | Style Influence 75-85
 - 回环型：Weirdness 20-28 | Style Influence 78-85
-Audio Influence = 0（无参考音频时）
+Audio Influence = 0（无参考音频/reference_audio=false 时；开启参考音频时可非 0）
 
 ## 输出映射（SongPlan 字段——输出结构由 JSON schema 约束，见《SongPlan 字段契约》）
 

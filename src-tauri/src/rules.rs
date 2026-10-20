@@ -51,9 +51,9 @@ pub const LYRIC_LINE_CHORUS_MAX: usize = 9;
 pub const DOUYIN_BPM_MIN: u32 = 90;
 // P1-7：V2 常量定义点 = plan::douyin（此处 re-export 供 RULE_REGISTRY / 插值）
 pub use crate::plan::douyin::{
-    DOUYIN_V2_CLIP_SECONDS, DOUYIN_V2_HOOK_CHARS_MAX, DOUYIN_V2_HOOK_LAND_SEC, DOUYIN_V2_HOOK_LINES_MAX,
-    DOUYIN_V2_HOOK_LINES_MIN, DOUYIN_V2_HOOK_REPEAT_MIN, DOUYIN_V2_INTRO_MAX_SEC, DOUYIN_V2_LINE_MAX_CHARS,
-    DOUYIN_V2_VERSE_MAX_LINES,
+    DOUYIN_V2_CLIP_SECONDS, DOUYIN_V2_HOOK_CHARS_MAX, DOUYIN_V2_HOOK_LAND_SEC,
+    DOUYIN_V2_HOOK_LINES_MAX, DOUYIN_V2_HOOK_LINES_MIN, DOUYIN_V2_HOOK_REPEAT_MIN,
+    DOUYIN_V2_INTRO_MAX_SEC, DOUYIN_V2_LINE_MAX_CHARS, DOUYIN_V2_VERSE_MAX_LINES,
 };
 
 /// 全模式说明行上限字符数（含方括号、整行计）。
@@ -208,7 +208,12 @@ pub fn arc_param_union() -> (u32, u32, u32, u32) {
     ARC_PARAMS.iter().fold(
         (u32::MAX, 0, u32::MAX, 0),
         |(wlo, whi, slo, shi), (_, wmin, wmax, smin, smax)| {
-            (wlo.min(*wmin), whi.max(*wmax), slo.min(*smin), shi.max(*smax))
+            (
+                wlo.min(*wmin),
+                whi.max(*wmax),
+                slo.min(*smin),
+                shi.max(*smax),
+            )
         },
     )
 }
@@ -263,29 +268,124 @@ pub struct RuleSpec {
 }
 
 pub const RULE_REGISTRY: &[RuleSpec] = &[
-    RuleSpec { id: "style_prompt_max", modes: STYLE_PROMPT_MAX_MODES, symbols: &["STYLE_PROMPT_MAX_CHARS"], executor: "style_prompt_length_issues" },
-    RuleSpec { id: "style_prompt_min", modes: STYLE_PROMPT_MIN_MODES, symbols: &["STYLE_PROMPT_MIN_CHARS"], executor: "style_prompt_length_issues" },
-    RuleSpec { id: "min_section_tags", modes: &["mode_a", "mode_b"], symbols: &["MIN_SECTION_TAGS"], executor: "validate_production" },
-    RuleSpec { id: "min_energy_gap", modes: &["mode_a", "mode_b"], symbols: &["MIN_ENERGY_GAP"], executor: "validate_production" },
-    RuleSpec { id: "instrument_gap_weak_strong_max", modes: &["mode_a", "mode_b"], symbols: &["MIN_INSTRUMENT_GAP", "MIN_INSTRUMENT_WEAK", "MIN_INSTRUMENT_STRONG", "INSTRUMENT_MAX"], executor: "validate_production" },
+    RuleSpec {
+        id: "style_prompt_max",
+        modes: STYLE_PROMPT_MAX_MODES,
+        symbols: &["STYLE_PROMPT_MAX_CHARS"],
+        executor: "style_prompt_length_issues",
+    },
+    RuleSpec {
+        id: "style_prompt_min",
+        modes: STYLE_PROMPT_MIN_MODES,
+        symbols: &["STYLE_PROMPT_MIN_CHARS"],
+        executor: "style_prompt_length_issues",
+    },
+    RuleSpec {
+        id: "min_section_tags",
+        modes: &["mode_a", "mode_b"],
+        symbols: &["MIN_SECTION_TAGS"],
+        executor: "validate_production",
+    },
+    RuleSpec {
+        id: "min_energy_gap",
+        modes: &["mode_a", "mode_b"],
+        symbols: &["MIN_ENERGY_GAP"],
+        executor: "validate_production",
+    },
+    RuleSpec {
+        id: "instrument_gap_weak_strong_max",
+        modes: &["mode_a", "mode_b"],
+        symbols: &[
+            "MIN_INSTRUMENT_GAP",
+            "MIN_INSTRUMENT_WEAK",
+            "MIN_INSTRUMENT_STRONG",
+            "INSTRUMENT_MAX",
+        ],
+        executor: "validate_production",
+    },
     // 极简段豁免：最弱段下限的合法放宽口，唯一执行者 = declared_minimal_sections（validator）。
     // 与上一条同域（A/B 配器件数族）；上游告知单源 = rules::minimal_section_exemption()。
-    RuleSpec { id: "minimal_section_exemption", modes: &["mode_a", "mode_b"], symbols: &["MIN_INSTRUMENT_WEAK", "declared_minimal_sections"], executor: "declared_minimal_sections" },
-    RuleSpec { id: "audio_influence_zero", modes: &["mode_a", "mode_b"], symbols: &[], executor: "check_audio_influence" },
+    RuleSpec {
+        id: "minimal_section_exemption",
+        modes: &["mode_a", "mode_b"],
+        symbols: &["MIN_INSTRUMENT_WEAK", "declared_minimal_sections"],
+        executor: "declared_minimal_sections",
+    },
+    RuleSpec {
+        id: "audio_influence_zero",
+        modes: &["mode_a", "mode_b"],
+        symbols: &[],
+        executor: "check_audio_influence",
+    },
     // ARC_PARAMS 经 arc_param_union() 折叠后在 validator 消费，对外消费符号登记访问器
-    RuleSpec { id: "mode_a_param_arc_union", modes: &["mode_a"], symbols: &["arc_param_union"], executor: "validate_production" },
-    RuleSpec { id: "mode_b_param_range", modes: &["mode_b"], symbols: &["MODE_B_WEIRD_MIN", "MODE_B_WEIRD_MAX", "MODE_B_STYLE_MIN", "MODE_B_STYLE_MAX"], executor: "validate_production" },
-    RuleSpec { id: "mode_d_param_range", modes: &["mode_d"], symbols: &["DOUYIN_WEIRD_MIN", "DOUYIN_WEIRD_MAX", "DOUYIN_STYLE_MIN", "DOUYIN_STYLE_MAX"], executor: "validate_douyin" },
-    RuleSpec { id: "hook_min_count", modes: &["mode_d"], symbols: &["HOOK_MIN_COUNT"], executor: "validate_douyin" },
-    RuleSpec { id: "verse_max_lines", modes: &["mode_d"], symbols: &["VERSE_MAX_LINES"], executor: "validate_douyin" },
-    RuleSpec { id: "douyin_line_max", modes: &["mode_d"], symbols: &["DOUYIN_LINE_MAX_CHARS"], executor: "validate_douyin" },
+    RuleSpec {
+        id: "mode_a_param_arc_union",
+        modes: &["mode_a"],
+        symbols: &["arc_param_union"],
+        executor: "validate_production",
+    },
+    RuleSpec {
+        id: "mode_b_param_range",
+        modes: &["mode_b"],
+        symbols: &[
+            "MODE_B_WEIRD_MIN",
+            "MODE_B_WEIRD_MAX",
+            "MODE_B_STYLE_MIN",
+            "MODE_B_STYLE_MAX",
+        ],
+        executor: "validate_production",
+    },
+    RuleSpec {
+        id: "mode_d_param_range",
+        modes: &["mode_d"],
+        symbols: &[
+            "DOUYIN_WEIRD_MIN",
+            "DOUYIN_WEIRD_MAX",
+            "DOUYIN_STYLE_MIN",
+            "DOUYIN_STYLE_MAX",
+        ],
+        executor: "validate_douyin",
+    },
+    RuleSpec {
+        id: "hook_min_count",
+        modes: &["mode_d"],
+        symbols: &["HOOK_MIN_COUNT"],
+        executor: "validate_douyin",
+    },
+    RuleSpec {
+        id: "verse_max_lines",
+        modes: &["mode_d"],
+        symbols: &["VERSE_MAX_LINES"],
+        executor: "validate_douyin",
+    },
+    RuleSpec {
+        id: "douyin_line_max",
+        modes: &["mode_d"],
+        symbols: &["DOUYIN_LINE_MAX_CHARS"],
+        executor: "validate_douyin",
+    },
     // 说明行上限：A/B/C/D 全模式硬门，
     // 两侧同读 DESC_LINE_MAX_CHARS（旧 douyin_desc_line_max 仅 D 单模式 + 80 上限，已废）
-    RuleSpec { id: "desc_line_max_terminal", modes: ALL_MODES, symbols: &["DESC_LINE_MAX_CHARS", "is_desc_line"], executor: "desc_line_length_issues" },
+    RuleSpec {
+        id: "desc_line_max_terminal",
+        modes: ALL_MODES,
+        symbols: &["DESC_LINE_MAX_CHARS", "is_desc_line"],
+        executor: "desc_line_length_issues",
+    },
     // 执行者更正（第三批）：原挂 check_style_prompt_blocks（不消费 DOUYIN_BPM_MIN、只查下限），
     // 真执行者 = check_bpm_range（validator::check_bpm_range 消费 DOUYIN_BPM_MIN，经 orchestrator 接线）。
-    RuleSpec { id: "douyin_bpm_min", modes: &["mode_d"], symbols: &["DOUYIN_BPM_MIN"], executor: "check_bpm_range" },
-    RuleSpec { id: "lyric_fill_tail_allow", modes: &["mode_c"], symbols: &["LYRIC_FILL_TAIL_ALLOW"], executor: "validate_lyric_fill" },
+    RuleSpec {
+        id: "douyin_bpm_min",
+        modes: &["mode_d"],
+        symbols: &["DOUYIN_BPM_MIN"],
+        executor: "check_bpm_range",
+    },
+    RuleSpec {
+        id: "lyric_fill_tail_allow",
+        modes: &["mode_c"],
+        symbols: &["LYRIC_FILL_TAIL_ALLOW"],
+        executor: "validate_lyric_fill",
+    },
     // P1-3：信封退役；字段契约由 plan_field_contract 注入，终稿门 = plan::validate
     // -----------------------------------------------------------------------
     // 准入限额族（第十三批 D1 补登记）：与上面的**产出硬门族**不同，这三条是**请求准入硬门**
@@ -299,9 +399,24 @@ pub const RULE_REGISTRY: &[RuleSpec] = &[
     // modes 取全模式：准入限额与模式无关（任何模式的请求都过同一道闸）。
     // 注意 `interject_max_per_run` 的执行者写作限定路径：`push` 是 `Vec::push` 同名的常见名，
     // 裸名会命中任意容器的 `push(`，守护变成假绿。
-    RuleSpec { id: "input_max_chars", modes: ALL_MODES, symbols: &["INPUT_MAX_CHARS"], executor: "validate_request" },
-    RuleSpec { id: "feedback_max_chars", modes: ALL_MODES, symbols: &["FEEDBACK_MAX_CHARS"], executor: "validate_feedback" },
-    RuleSpec { id: "interject_max_per_run", modes: ALL_MODES, symbols: &["INTERJECT_MAX_PER_RUN"], executor: "interject::push" },
+    RuleSpec {
+        id: "input_max_chars",
+        modes: ALL_MODES,
+        symbols: &["INPUT_MAX_CHARS"],
+        executor: "validate_request",
+    },
+    RuleSpec {
+        id: "feedback_max_chars",
+        modes: ALL_MODES,
+        symbols: &["FEEDBACK_MAX_CHARS"],
+        executor: "validate_feedback",
+    },
+    RuleSpec {
+        id: "interject_max_per_run",
+        modes: ALL_MODES,
+        symbols: &["INTERJECT_MAX_PER_RUN"],
+        executor: "interject::push",
+    },
 ];
 
 // ---------------------------------------------------------------------------
@@ -323,7 +438,9 @@ pub const RULE_REGISTRY: &[RuleSpec] = &[
 /// 🎭 情感分析师：借体/纵深/暴露分层 + 真诚校验原文
 pub const CRAFT_REFS_EMOTION: &[&str] = &["LC-13", "LC-15", "LC-18", "CC-10"];
 /// 📝 作词人：画面清单/意象三筛/人称齿轮/借体/换象/黑暗出口/减法
-pub const CRAFT_REFS_LYRICIST: &[&str] = &["LC-01", "LC-02", "LC-04", "LC-15", "LC-16", "LC-18", "LC-26"];
+pub const CRAFT_REFS_LYRICIST: &[&str] = &[
+    "LC-01", "LC-02", "LC-04", "LC-15", "LC-16", "LC-18", "LC-26",
+];
 /// ✍️ 改词人：对齐约束下的三筛/借体/换象/人称落点/减法
 pub const CRAFT_REFS_REVISER: &[&str] = &["LC-02", "LC-04", "LC-15", "LC-16", "LC-26"];
 /// 🎤 制作人：主题不可改/民族元素表达理由/减法留白/概念先行/制约清单
@@ -440,10 +557,22 @@ pub fn stage_consumer(name: &str) -> Option<&'static CraftStageConsumer> {
 /// 预留位行登记（id, 保留理由）——与 CSV 中 trigger 含"扩展位"的行集合**必须相等**（#18 守护）。
 /// 新增预留行须在此登记理由；若该行本应生效，请改 trigger 为 "审改" 或 "全程"。
 pub const CRAFT_RESERVED_ROWS: &[(&str, &str)] = &[
-    ("LC-29", "连载思维（留续集位/后作反转）：进阶技法，未纳入当前审改轮"),
-    ("CC-05", "动机经济（同旋律家族换词复用）：进阶编曲技法，未纳入当前审改轮"),
-    ("CC-19", "非乐音等权（田野录音入曲）：实验性技法，未纳入当前审改轮"),
-    ("CC-25", "印象集迭代（独立小样循环反馈）：工作流技法，未纳入当前审改轮"),
+    (
+        "LC-29",
+        "连载思维（留续集位/后作反转）：进阶技法，未纳入当前审改轮",
+    ),
+    (
+        "CC-05",
+        "动机经济（同旋律家族换词复用）：进阶编曲技法，未纳入当前审改轮",
+    ),
+    (
+        "CC-19",
+        "非乐音等权（田野录音入曲）：实验性技法，未纳入当前审改轮",
+    ),
+    (
+        "CC-25",
+        "印象集迭代（独立小样循环反馈）：工作流技法，未纳入当前审改轮",
+    ),
 ];
 
 // ---------------------------------------------------------------------------
@@ -495,9 +624,21 @@ pub const STYLE_GENRE_MAX_ROWS: usize = 3;
 /// style_genre 检索面（#31）：genre（中文自造流派名/英文名）+ base（英文家族名）+ aliases
 /// （中英别名与家族伞词）——旧实现只认 genre 单列，中文自造流派名（如"电子摇滚"）整表零命中。
 pub const KEYWORD_TABLES: &[KeywordTableReachability] = &[
-    KeywordTableReachability { table: "emotions", key_cols: &["emotion"], max_rows: KEYWORD_MAX_ROWS },
-    KeywordTableReachability { table: "cliches", key_cols: &["cliche"], max_rows: KEYWORD_MAX_ROWS },
-    KeywordTableReachability { table: "hooks", key_cols: &["hook_type"], max_rows: KEYWORD_MAX_ROWS },
+    KeywordTableReachability {
+        table: "emotions",
+        key_cols: &["emotion"],
+        max_rows: KEYWORD_MAX_ROWS,
+    },
+    KeywordTableReachability {
+        table: "cliches",
+        key_cols: &["cliche"],
+        max_rows: KEYWORD_MAX_ROWS,
+    },
+    KeywordTableReachability {
+        table: "hooks",
+        key_cols: &["hook_type"],
+        max_rows: KEYWORD_MAX_ROWS,
+    },
     KeywordTableReachability {
         table: "style_genre",
         key_cols: &["genre", "base", "aliases"],
@@ -714,10 +855,10 @@ pub fn checklist(mode: &str) -> String {
 /// 由 `no_handwritten_rule_numbers_in_prose_carriers` 扫描 `PROSE_CARRIERS` 锁定）——
 /// 旧实现手写全文数字，与常量/`ARC_PARAMS` 脱钩（#21 家族残留：`CHECKLIST_A` 的
 /// 10 条弧线区间整段复刻 `ARC_PARAMS`、`CHECKLIST_D` 的抖音区间无常量锁）。
-const CHECKLIST_A: &str = "【校验清单 A·单源】Style Prompt≤${STYLE_PROMPT_MAX}字符且≥${STYLE_PROMPT_MIN}字符；结构标签≥${MIN_SECTION_TAGS}段；能量差≥${MIN_ENERGY_GAP}级（${ENERGY_SCALE}）；配器差≥${MIN_INSTRUMENT_GAP}件、单段${INSTRUMENT_RANGE}件（最弱段即下限${MIN_INSTRUMENT_WEAK}件，声明'极简段'的段落豁免下限）、最强段≥${MIN_INSTRUMENT_STRONG}件；说明行≤${DESC_LINE_MAX}字符（含方括号整行计，须含${DESC_LINE_SPACE_SLOT}与人声状态槽位；上限内须保乐器+行为动词）；弧线参数：${ARC_INLINE}；Audio Influence=0；断句单空格、禁/与、标点全半角。";
-const CHECKLIST_B: &str = "【校验清单 B·单源】Style Prompt≤${STYLE_PROMPT_MAX}字符且≥${STYLE_PROMPT_MIN}字符；结构标签≥${MIN_SECTION_TAGS}段；能量差≥${MIN_ENERGY_GAP}级（${ENERGY_SCALE}）；配器差≥${MIN_INSTRUMENT_GAP}件、单段${INSTRUMENT_RANGE}件（最弱段即下限${MIN_INSTRUMENT_WEAK}件，声明'极简段'的段落豁免下限）、最强段≥${MIN_INSTRUMENT_STRONG}件；说明行≤${DESC_LINE_MAX}字符（含方括号整行计，须含${DESC_LINE_SPACE_SLOT}与人声状态槽位；上限内须保乐器+行为动词）；参数固定区间：Weirdness ${MODE_B_WEIRD_RANGE}、Style Influence ${MODE_B_STYLE_RANGE}（B 专属区间为准，弧线区间不适用 B）；Audio Influence=0；断句单空格、禁/与、标点全半角。";
+const CHECKLIST_A: &str = "【校验清单 A·单源】Style Prompt≤${STYLE_PROMPT_MAX}字符且≥${STYLE_PROMPT_MIN}字符；结构标签≥${MIN_SECTION_TAGS}段；能量差≥${MIN_ENERGY_GAP}级（${ENERGY_SCALE}）；配器差≥${MIN_INSTRUMENT_GAP}件、单段${INSTRUMENT_RANGE}件（最弱段即下限${MIN_INSTRUMENT_WEAK}件，声明'极简段'的段落豁免下限）、最强段≥${MIN_INSTRUMENT_STRONG}件；说明行≤${DESC_LINE_MAX}字符（含方括号整行计，须含${DESC_LINE_SPACE_SLOT}与人声状态槽位；上限内须保乐器+行为动词）；弧线参数：${ARC_INLINE}；Audio Influence 默认 0（reference_audio 开启时可非 0）；断句单空格、禁/与、标点全半角。";
+const CHECKLIST_B: &str = "【校验清单 B·单源】Style Prompt≤${STYLE_PROMPT_MAX}字符且≥${STYLE_PROMPT_MIN}字符；结构标签≥${MIN_SECTION_TAGS}段；能量差≥${MIN_ENERGY_GAP}级（${ENERGY_SCALE}）；配器差≥${MIN_INSTRUMENT_GAP}件、单段${INSTRUMENT_RANGE}件（最弱段即下限${MIN_INSTRUMENT_WEAK}件，声明'极简段'的段落豁免下限）、最强段≥${MIN_INSTRUMENT_STRONG}件；说明行≤${DESC_LINE_MAX}字符（含方括号整行计，须含${DESC_LINE_SPACE_SLOT}与人声状态槽位；上限内须保乐器+行为动词）；参数固定区间：Weirdness ${MODE_B_WEIRD_RANGE}、Style Influence ${MODE_B_STYLE_RANGE}（B 专属区间为准，弧线区间不适用 B）；Audio Influence 默认 0（reference_audio 开启时可非 0）；断句单空格、禁/与、标点全半角。";
 const CHECKLIST_C: &str = "【校验清单 C·单源】逐行等字数（差一字即失败，尾部≤${LYRIC_FILL_TAIL}行收尾）；行数与原歌词一致；段落结构与原歌词一致（禁新增Hook/Chorus段）；韵脚位置与模式保留；说明行带方括号且≤${DESC_LINE_MAX}字符（整行计，须含${DESC_LINE_SPACE_SLOT}与人声状态槽位）；Style Prompt≤${STYLE_PROMPT_MAX}字符；断句单空格、禁/与、标点全半角。";
-const CHECKLIST_D: &str = "【校验清单 D·单源】Hook≥${HOOK_MIN}次；单段Verse≤${VERSE_MAX_LINES}行；每行≤${DOUYIN_LINE_MAX}字；结尾骤停（一刀切，含abruptly/cut标识）；BPM≥${DOUYIN_BPM_MIN}；Style Prompt≤${STYLE_PROMPT_MAX}字符且≥${STYLE_PROMPT_MIN}字符；说明行≤${DESC_LINE_MAX}字符（含方括号整行计，须含${DESC_LINE_SPACE_SLOT}与人声状态槽位；上限内须保乐器+行为动词）；参数抖音${DOUYIN_WEIRD_RANGE}/${DOUYIN_STYLE_RANGE}（仅当含≥${NARRATIVE_SECTIONS_MIN}叙事段Verse/Pre-Chorus/Bridge且方案写明'叙事型'归类，方可回落A/B弧线区间，二者缺一打回）；Audio Influence=0；断句单空格、禁/与、标点全半角。";
+const CHECKLIST_D: &str = "【校验清单 D·单源】Hook≥${HOOK_MIN}次；单段Verse≤${VERSE_MAX_LINES}行；每行≤${DOUYIN_LINE_MAX}字；结尾骤停（一刀切，含abruptly/cut标识）；BPM≥${DOUYIN_BPM_MIN}；Style Prompt≤${STYLE_PROMPT_MAX}字符且≥${STYLE_PROMPT_MIN}字符；说明行≤${DESC_LINE_MAX}字符（含方括号整行计，须含${DESC_LINE_SPACE_SLOT}与人声状态槽位；上限内须保乐器+行为动词）；参数抖音${DOUYIN_WEIRD_RANGE}/${DOUYIN_STYLE_RANGE}（仅当含≥${NARRATIVE_SECTIONS_MIN}叙事段Verse/Pre-Chorus/Bridge且方案写明'叙事型'归类，方可回落A/B弧线区间，二者缺一打回）；Audio Influence 默认 0（reference_audio 开启时可非 0）；断句单空格、禁/与、标点全半角。";
 
 /// 阶段 0 地基 primer（模式专属，每模式≤800字；M9 顺序：受众→物件→约束→旋律）。
 /// 定位 = **工序顺序锚点**（primer 独有内容：意象家族/声学映射/Verse2 新增信息/借体覆盖/弧线能量标尺），
@@ -780,30 +921,90 @@ pub const PROSE_CARRIER_EXEMPT: &[(&str, &str)] = &[(
 )];
 
 pub const PROSE_CARRIERS: &[ProseCarrier] = &[
-    ProseCarrier { name: "CHECKLIST_A", text: CHECKLIST_A, csv_locked: &[] },
-    ProseCarrier { name: "CHECKLIST_B", text: CHECKLIST_B, csv_locked: &[] },
-    ProseCarrier { name: "CHECKLIST_C", text: CHECKLIST_C, csv_locked: &[] },
-    ProseCarrier { name: "CHECKLIST_D", text: CHECKLIST_D, csv_locked: &[] },
+    ProseCarrier {
+        name: "CHECKLIST_A",
+        text: CHECKLIST_A,
+        csv_locked: &[],
+    },
+    ProseCarrier {
+        name: "CHECKLIST_B",
+        text: CHECKLIST_B,
+        csv_locked: &[],
+    },
+    ProseCarrier {
+        name: "CHECKLIST_C",
+        text: CHECKLIST_C,
+        csv_locked: &[],
+    },
+    ProseCarrier {
+        name: "CHECKLIST_D",
+        text: CHECKLIST_D,
+        csv_locked: &[],
+    },
     // ≥5件具体物：数值权威在 lyric_craft::LC-01（CSV）；内容由 primer_ab_stage0_threshold_matches_lyric_craft_row 锁定。
     // 不再挂 csv_locked：旧 STRONG=5 时「≥5件」被误判为配器下限命中才需要豁免；STRONG 调为 4 后已无派生命中，挂豁免即孤儿。
-    ProseCarrier { name: "PRIMER_AB", text: PRIMER_AB, csv_locked: &[] },
-    ProseCarrier { name: "PRIMER_C", text: PRIMER_C, csv_locked: &[] },
-    ProseCarrier { name: "PRIMER_D", text: PRIMER_D, csv_locked: &[] },
+    ProseCarrier {
+        name: "PRIMER_AB",
+        text: PRIMER_AB,
+        csv_locked: &[],
+    },
+    ProseCarrier {
+        name: "PRIMER_C",
+        text: PRIMER_C,
+        csv_locked: &[],
+    },
+    ProseCarrier {
+        name: "PRIMER_D",
+        text: PRIMER_D,
+        csv_locked: &[],
+    },
     // 第二十三批：三张表从"prompts.rs 与 roles.rs 各手抄一份"收敛为本文件单源，
     // 登记即受 `no_handwritten_rule_numbers_in_prose_carriers` 扫描（表内规划示例值
     // `3-4件` 等由扫描网的区间右端豁免放行；阈值项一律 ${占位符}）。
-    ProseCarrier { name: "ARC_DENSITY_TABLE", text: ARC_DENSITY_TABLE, csv_locked: &[] },
-    ProseCarrier { name: "ARC_DENSITY_NEW_TABLE", text: ARC_DENSITY_NEW_TABLE, csv_locked: &[] },
-    ProseCarrier { name: "DOUYIN_DYNAMIC_TABLE", text: DOUYIN_DYNAMIC_TABLE, csv_locked: &[] },
+    ProseCarrier {
+        name: "ARC_DENSITY_TABLE",
+        text: ARC_DENSITY_TABLE,
+        csv_locked: &[],
+    },
+    ProseCarrier {
+        name: "ARC_DENSITY_NEW_TABLE",
+        text: ARC_DENSITY_NEW_TABLE,
+        csv_locked: &[],
+    },
+    ProseCarrier {
+        name: "DOUYIN_DYNAMIC_TABLE",
+        text: DOUYIN_DYNAMIC_TABLE,
+        csv_locked: &[],
+    },
     // 说明行契约正文（第二十三批）：旧实现是 `desc_line_contract()` 的 format! 局部手写，
     // 既不进扫描面也不被入网自证发现——改常量不联动它。现为注册载体。
-    ProseCarrier { name: "DESC_LINE_CONTRACT", text: DESC_LINE_CONTRACT, csv_locked: &[] },
+    ProseCarrier {
+        name: "DESC_LINE_CONTRACT",
+        text: DESC_LINE_CONTRACT,
+        csv_locked: &[],
+    },
     // 说明行「空间/力度」槽位名（第二十五批 Q1）：进 LLM 上下文（经 ${DESC_LINE_SPACE_SLOT}
     // 插值进四清单/契约/制作人与校验员核查项）——登记即受扫描网与入网自证覆盖。
-    ProseCarrier { name: "DESC_LINE_SPACE_SLOT", text: DESC_LINE_SPACE_SLOT, csv_locked: &[] },
-    ProseCarrier { name: "PLAN_FIELD_CONTRACT", text: PLAN_FIELD_CONTRACT, csv_locked: &[] },
-    ProseCarrier { name: "PATCH_TARGET_RULE", text: PATCH_TARGET_RULE, csv_locked: &[] },
-    ProseCarrier { name: "PATCH_TARGET_RULE_LYRIC", text: PATCH_TARGET_RULE_LYRIC, csv_locked: &[] },
+    ProseCarrier {
+        name: "DESC_LINE_SPACE_SLOT",
+        text: DESC_LINE_SPACE_SLOT,
+        csv_locked: &[],
+    },
+    ProseCarrier {
+        name: "PLAN_FIELD_CONTRACT",
+        text: PLAN_FIELD_CONTRACT,
+        csv_locked: &[],
+    },
+    ProseCarrier {
+        name: "PATCH_TARGET_RULE",
+        text: PATCH_TARGET_RULE,
+        csv_locked: &[],
+    },
+    ProseCarrier {
+        name: "PATCH_TARGET_RULE_LYRIC",
+        text: PATCH_TARGET_RULE_LYRIC,
+        csv_locked: &[],
+    },
     // 打回 issue 文案（第二十批补登记）：随【格式问题】清单进 LLM 上下文（orchestrator 打回循环），
     // 此前既不在两个源文件里也没登记——同样是发现网暴露的漏网载体。为此把常量放开为 `pub(crate)`。
     ProseCarrier {
@@ -842,8 +1043,12 @@ pub fn interpolate(text: &str) -> String {
 /// 中文数词（0-10）：供需以中文数词表述的载体引用（如"六维思考检查表"），
 /// 与阿拉伯数字值**同源**——维度数改常量时中文写法同步变，不再各写各的。
 fn cn_numeral(n: usize) -> String {
-    const CN: [&str; 11] = ["零", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十"];
-    CN.get(n).map(|s| (*s).to_string()).unwrap_or_else(|| n.to_string())
+    const CN: [&str; 11] = [
+        "零", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十",
+    ];
+    CN.get(n)
+        .map(|s| (*s).to_string())
+        .unwrap_or_else(|| n.to_string())
 }
 
 /// 占位符→值映射表（单源：全部由 rules 常量派生，无手写数字）。
@@ -851,18 +1056,42 @@ fn placeholder_pairs() -> Vec<(&'static str, String)> {
     let mut pairs: Vec<(&'static str, String)> = vec![
         ("${STYLE_PROMPT_MAX}", STYLE_PROMPT_MAX_CHARS.to_string()),
         ("${STYLE_PROMPT_MIN}", STYLE_PROMPT_MIN_CHARS.to_string()),
-        ("${DOUYIN_WEIRD_RANGE}", format!("{}-{}", DOUYIN_WEIRD_MIN, DOUYIN_WEIRD_MAX)),
-        ("${DOUYIN_STYLE_RANGE}", format!("{}-{}", DOUYIN_STYLE_MIN, DOUYIN_STYLE_MAX)),
-        ("${MODE_B_WEIRD_RANGE}", format!("{}-{}", MODE_B_WEIRD_MIN, MODE_B_WEIRD_MAX)),
-        ("${MODE_B_STYLE_RANGE}", format!("{}-{}", MODE_B_STYLE_MIN, MODE_B_STYLE_MAX)),
+        (
+            "${DOUYIN_WEIRD_RANGE}",
+            format!("{}-{}", DOUYIN_WEIRD_MIN, DOUYIN_WEIRD_MAX),
+        ),
+        (
+            "${DOUYIN_STYLE_RANGE}",
+            format!("{}-{}", DOUYIN_STYLE_MIN, DOUYIN_STYLE_MAX),
+        ),
+        (
+            "${MODE_B_WEIRD_RANGE}",
+            format!("{}-{}", MODE_B_WEIRD_MIN, MODE_B_WEIRD_MAX),
+        ),
+        (
+            "${MODE_B_STYLE_RANGE}",
+            format!("{}-{}", MODE_B_STYLE_MIN, MODE_B_STYLE_MAX),
+        ),
         ("${DESC_LINE_MAX}", DESC_LINE_MAX_CHARS.to_string()),
         ("${DESC_LINE_SPACE_SLOT}", DESC_LINE_SPACE_SLOT.to_string()),
-        ("${VARIETY}", crate::plan::suno_profile::VARIETY_DEFAULT.value.to_string()),
+        (
+            "${VARIETY}",
+            crate::plan::suno_profile::VARIETY_DEFAULT.value.to_string(),
+        ),
         ("${PATCH_TARGET_RULE}", PATCH_TARGET_RULE.to_string()),
-        ("${PATCH_TARGET_RULE_LYRIC}", PATCH_TARGET_RULE_LYRIC.to_string()),
+        (
+            "${PATCH_TARGET_RULE_LYRIC}",
+            PATCH_TARGET_RULE_LYRIC.to_string(),
+        ),
         ("${DOUYIN_LINE_MAX}", DOUYIN_LINE_MAX_CHARS.to_string()),
-        ("${LYRIC_CHARS_VERSE}", format!("{}-{}", LYRIC_LINE_VERSE_MIN, LYRIC_LINE_VERSE_MAX)),
-        ("${LYRIC_CHARS_CHORUS}", format!("{}-{}", LYRIC_LINE_CHORUS_MIN, LYRIC_LINE_CHORUS_MAX)),
+        (
+            "${LYRIC_CHARS_VERSE}",
+            format!("{}-{}", LYRIC_LINE_VERSE_MIN, LYRIC_LINE_VERSE_MAX),
+        ),
+        (
+            "${LYRIC_CHARS_CHORUS}",
+            format!("{}-{}", LYRIC_LINE_CHORUS_MIN, LYRIC_LINE_CHORUS_MAX),
+        ),
         ("${LYRIC_LINE_VERSE_MAX}", LYRIC_LINE_VERSE_MAX.to_string()),
         ("${DOUYIN_BPM_MIN}", DOUYIN_BPM_MIN.to_string()),
         ("${HOOK_MIN}", HOOK_MIN_COUNT.to_string()),
@@ -871,44 +1100,111 @@ fn placeholder_pairs() -> Vec<(&'static str, String)> {
         ("${MIN_ENERGY_GAP}", MIN_ENERGY_GAP.to_string()),
         ("${MIN_INSTRUMENT_GAP}", MIN_INSTRUMENT_GAP.to_string()),
         ("${MIN_INSTRUMENT_WEAK}", MIN_INSTRUMENT_WEAK.to_string()),
-        ("${MIN_INSTRUMENT_STRONG}", MIN_INSTRUMENT_STRONG.to_string()),
-        ("${MIN_INSTRUMENT_MINIMAL}", MIN_INSTRUMENT_MINIMAL.to_string()),
+        (
+            "${MIN_INSTRUMENT_STRONG}",
+            MIN_INSTRUMENT_STRONG.to_string(),
+        ),
+        (
+            "${MIN_INSTRUMENT_MINIMAL}",
+            MIN_INSTRUMENT_MINIMAL.to_string(),
+        ),
         ("${MIN_INSTRUMENT_CORE}", MIN_INSTRUMENT_CORE.to_string()),
-        ("${MIN_INSTRUMENT_CHORUS}", MIN_INSTRUMENT_CHORUS.to_string()),
+        (
+            "${MIN_INSTRUMENT_CHORUS}",
+            MIN_INSTRUMENT_CHORUS.to_string(),
+        ),
         ("${MINIMAL_ENERGY_MAX}", MINIMAL_ENERGY_MAX.to_string()),
         ("${INSTRUMENT_MAX}", INSTRUMENT_MAX.to_string()),
-        ("${INSTRUMENT_RANGE}", format!("{}-{}", MIN_INSTRUMENT_WEAK, INSTRUMENT_MAX)),
+        (
+            "${INSTRUMENT_RANGE}",
+            format!("{}-{}", MIN_INSTRUMENT_WEAK, INSTRUMENT_MAX),
+        ),
         // 第二十三批：角色格式规则口径单源。插值为迭代不动点（见 `interpolate`），
         // 容器与标量的定义顺序不影响嵌套展开；容器对仍集中在下方尾部便于审阅。
-        ("${NARRATIVE_SECTIONS_MIN}", NARRATIVE_SECTIONS_MIN.to_string()),
+        (
+            "${NARRATIVE_SECTIONS_MIN}",
+            NARRATIVE_SECTIONS_MIN.to_string(),
+        ),
         ("${STYLE_BLOCKS_AB}", STYLE_BLOCK_COUNT_AB.to_string()),
-        ("${STYLE_BLOCKS_DOUYIN}", STYLE_BLOCK_COUNT_DOUYIN.to_string()),
-        ("${DOUYIN_ARC_FORBID_PHRASE}", DOUYIN_ARC_FORBID_PHRASE.to_string()),
-        ("${DOUYIN_DURATION_RANGE}", format!("{}-{}", DOUYIN_DURATION_SEC_MIN, DOUYIN_DURATION_SEC_MAX)),
+        (
+            "${STYLE_BLOCKS_DOUYIN}",
+            STYLE_BLOCK_COUNT_DOUYIN.to_string(),
+        ),
+        (
+            "${DOUYIN_ARC_FORBID_PHRASE}",
+            DOUYIN_ARC_FORBID_PHRASE.to_string(),
+        ),
+        (
+            "${DOUYIN_DURATION_RANGE}",
+            format!("{}-{}", DOUYIN_DURATION_SEC_MIN, DOUYIN_DURATION_SEC_MAX),
+        ),
         ("${DOUYIN_HOOK_WINDOW}", DOUYIN_HOOK_WINDOW_SEC.to_string()),
         ("${DOUYIN_INTRO_SPAN}", DOUYIN_INTRO_SPAN_SEC.to_string()),
-        ("${DOUYIN_V2_INTRO_MAX}", crate::plan::douyin::DOUYIN_V2_INTRO_MAX_SEC.to_string()),
-        ("${DOUYIN_V2_HOOK_LAND}", crate::plan::douyin::DOUYIN_V2_HOOK_LAND_SEC.to_string()),
-        ("${DOUYIN_V2_HOOK_CHARS}", crate::plan::douyin::DOUYIN_V2_HOOK_CHARS_MAX.to_string()),
-        ("${DOUYIN_V2_HOOK_LINES}", format!("{}-{}", crate::plan::douyin::DOUYIN_V2_HOOK_LINES_MIN, crate::plan::douyin::DOUYIN_V2_HOOK_LINES_MAX)),
-        ("${DOUYIN_V2_HOOK_REPEAT}", crate::plan::douyin::DOUYIN_V2_HOOK_REPEAT_MIN.to_string()),
-        ("${DOUYIN_V2_VERSE_MAX}", crate::plan::douyin::DOUYIN_V2_VERSE_MAX_LINES.to_string()),
-        ("${DOUYIN_V2_LINE_MAX}", crate::plan::douyin::DOUYIN_V2_LINE_MAX_CHARS.to_string()),
+        (
+            "${DOUYIN_V2_INTRO_MAX}",
+            crate::plan::douyin::DOUYIN_V2_INTRO_MAX_SEC.to_string(),
+        ),
+        (
+            "${DOUYIN_V2_HOOK_LAND}",
+            crate::plan::douyin::DOUYIN_V2_HOOK_LAND_SEC.to_string(),
+        ),
+        (
+            "${DOUYIN_V2_HOOK_CHARS}",
+            crate::plan::douyin::DOUYIN_V2_HOOK_CHARS_MAX.to_string(),
+        ),
+        (
+            "${DOUYIN_V2_HOOK_LINES}",
+            format!(
+                "{}-{}",
+                crate::plan::douyin::DOUYIN_V2_HOOK_LINES_MIN,
+                crate::plan::douyin::DOUYIN_V2_HOOK_LINES_MAX
+            ),
+        ),
+        (
+            "${DOUYIN_V2_HOOK_REPEAT}",
+            crate::plan::douyin::DOUYIN_V2_HOOK_REPEAT_MIN.to_string(),
+        ),
+        (
+            "${DOUYIN_V2_VERSE_MAX}",
+            crate::plan::douyin::DOUYIN_V2_VERSE_MAX_LINES.to_string(),
+        ),
+        (
+            "${DOUYIN_V2_LINE_MAX}",
+            crate::plan::douyin::DOUYIN_V2_LINE_MAX_CHARS.to_string(),
+        ),
         ("${CHECKED_MIN}", CHECKED_MIN_ITEMS.to_string()),
         ("${VOCAL_DIM_COUNT}", VOCAL_DIM_COUNT.to_string()),
         ("${VOCAL_DIM_COUNT_CN}", cn_numeral(VOCAL_DIM_COUNT)),
-        ("${VOCAL_DIM_KEEP_RANGE}", format!("{}-{}", VOCAL_DIM_KEEP_MIN, VOCAL_DIM_KEEP_MAX)),
-        ("${HOOK_REPEAT_RANGE}", format!("{}-{}", HOOK_REPEAT_MIN, HOOK_REPEAT_MAX)),
+        (
+            "${VOCAL_DIM_KEEP_RANGE}",
+            format!("{}-{}", VOCAL_DIM_KEEP_MIN, VOCAL_DIM_KEEP_MAX),
+        ),
+        (
+            "${HOOK_REPEAT_RANGE}",
+            format!("{}-{}", HOOK_REPEAT_MIN, HOOK_REPEAT_MAX),
+        ),
         ("${HOOK_REPEAT_DILUTE}", HOOK_REPEAT_DILUTE.to_string()),
-        ("${DOUYIN_HOOK_LOOP_RANGE}", format!("{}-{}", DOUYIN_HOOK_LOOP_MIN, DOUYIN_HOOK_LOOP_MAX)),
-        ("${ENERGY_SCALE}", format!("{}-{}", ENERGY_SCALE_MIN, ENERGY_SCALE_MAX)),
+        (
+            "${DOUYIN_HOOK_LOOP_RANGE}",
+            format!("{}-{}", DOUYIN_HOOK_LOOP_MIN, DOUYIN_HOOK_LOOP_MAX),
+        ),
+        (
+            "${ENERGY_SCALE}",
+            format!("{}-{}", ENERGY_SCALE_MIN, ENERGY_SCALE_MAX),
+        ),
         ("${ENERGY_BAND_1}", ENERGY_BAND_RANGES[0].to_string()),
         ("${ENERGY_BAND_2}", ENERGY_BAND_RANGES[1].to_string()),
         ("${ENERGY_BAND_3}", ENERGY_BAND_RANGES[2].to_string()),
         ("${ENERGY_BAND_4}", ENERGY_BAND_RANGES[3].to_string()),
         ("${ENERGY_BAND_5}", ENERGY_BAND_RANGES[4].to_string()),
-        ("${DOUYIN_ENERGY_HIGH_RANGE}", format!("{}-{}", DOUYIN_ENERGY_HIGH_MIN, DOUYIN_ENERGY_HIGH_MAX)),
-        ("${DOUYIN_ENERGY_ABRUPT_RANGE}", format!("{}-{}", DOUYIN_ENERGY_ABRUPT_MIN, DOUYIN_ENERGY_ABRUPT_MAX)),
+        (
+            "${DOUYIN_ENERGY_HIGH_RANGE}",
+            format!("{}-{}", DOUYIN_ENERGY_HIGH_MIN, DOUYIN_ENERGY_HIGH_MAX),
+        ),
+        (
+            "${DOUYIN_ENERGY_ABRUPT_RANGE}",
+            format!("{}-{}", DOUYIN_ENERGY_ABRUPT_MIN, DOUYIN_ENERGY_ABRUPT_MAX),
+        ),
         ("${MIN_SECTION_TAGS}", MIN_SECTION_TAGS.to_string()),
         ("${MINIMAL_SECTION_EXEMPT}", minimal_section_exemption()),
         ("${ARC_TABLE}", arc_table_lines()),
@@ -917,11 +1213,23 @@ fn placeholder_pairs() -> Vec<(&'static str, String)> {
         // 容器对（值可含上面的标量占位符，由不动点迭代展开——顺序无关）。
         // `_INDENTED` 变体 = 同源表体每行前置 4 空格（供 prompts.rs 缩进代码块；表格仍是单份）。
         ("${ARC_DENSITY_TABLE}", ARC_DENSITY_TABLE.to_string()),
-        ("${ARC_DENSITY_TABLE_INDENTED}", ARC_DENSITY_TABLE.replace('\n', "\n    ")),
-        ("${ARC_DENSITY_NEW_TABLE}", ARC_DENSITY_NEW_TABLE.to_string()),
-        ("${ARC_DENSITY_NEW_TABLE_INDENTED}", ARC_DENSITY_NEW_TABLE.replace('\n', "\n    ")),
+        (
+            "${ARC_DENSITY_TABLE_INDENTED}",
+            ARC_DENSITY_TABLE.replace('\n', "\n    "),
+        ),
+        (
+            "${ARC_DENSITY_NEW_TABLE}",
+            ARC_DENSITY_NEW_TABLE.to_string(),
+        ),
+        (
+            "${ARC_DENSITY_NEW_TABLE_INDENTED}",
+            ARC_DENSITY_NEW_TABLE.replace('\n', "\n    "),
+        ),
         ("${DOUYIN_DYNAMIC_TABLE}", DOUYIN_DYNAMIC_TABLE.to_string()),
-        ("${DOUYIN_DYNAMIC_TABLE_INDENTED}", DOUYIN_DYNAMIC_TABLE.replace('\n', "\n    ")),
+        (
+            "${DOUYIN_DYNAMIC_TABLE_INDENTED}",
+            DOUYIN_DYNAMIC_TABLE.replace('\n', "\n    "),
+        ),
     ];
     // C4/D4：领地声明短语（单源 = TERRITORY_DECLARATIONS）——人设占位符展开为逐字相同文本，
     // 短语只在 rules.rs 定义一次（旧实现三份手抄副本，改表不改人设不报红）。
@@ -936,8 +1244,15 @@ fn arc_table_lines() -> String {
     ARC_PARAMS
         .iter()
         .map(|(name, wmin, wmax, smin, smax)| {
-            let disp = if name.ends_with("型") { name.to_string() } else { format!("{}型", name) };
-            format!("- {}：Weirdness {}-{} | Style Influence {}-{}", disp, wmin, wmax, smin, smax)
+            let disp = if name.ends_with("型") {
+                name.to_string()
+            } else {
+                format!("{}型", name)
+            };
+            format!(
+                "- {}：Weirdness {}-{} | Style Influence {}-{}",
+                disp, wmin, wmax, smin, smax
+            )
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -948,7 +1263,9 @@ fn arc_table_lines() -> String {
 fn arc_inline_list() -> String {
     ARC_PARAMS
         .iter()
-        .map(|(name, wmin, wmax, smin, smax)| format!("{}{}-{}/{}-{}", name, wmin, wmax, smin, smax))
+        .map(|(name, wmin, wmax, smin, smax)| {
+            format!("{}{}-{}/{}-{}", name, wmin, wmax, smin, smax)
+        })
         .collect::<Vec<_>>()
         .join("、")
 }
@@ -978,16 +1295,36 @@ pub const TERRITORY_RULES: &[(&str, &str, &str)] = &[
 /// 现口径：短语在此**定义一次**，人设经占位符展开为**逐字相同**文本（零文案变更）；
 /// 副本数 3 → 1。测试按 (rule_id, domain) 查配对并断言"人设引用了该占位符、插值后含该短语"。
 pub const TERRITORY_DECLARATIONS: &[(&str, &str, &str, &str)] = &[
-    ("R-2", "金句/Hook 文字形态", "${TERRITORY_DECL_R2_LYRICIST}", "金句/Hook 的文字形态与写法归你"),
+    (
+        "R-2",
+        "金句/Hook 文字形态",
+        "${TERRITORY_DECL_R2_LYRICIST}",
+        "金句/Hook 的文字形态与写法归你",
+    ),
     (
         "R-2",
         "Hook 次数/位置/骤停/传播动态",
         "${TERRITORY_DECL_R2_STYLE_ANALYST}",
         "你只管次数、位置、骤停与传播动态",
     ),
-    ("R-3", "人声设计", "${TERRITORY_DECL_R3_PRODUCER}", "人声设计终裁权在你"),
-    ("R-3", "参数与弧线匹配", "${TERRITORY_DECL_R3_EMOTION}", "参数与弧线匹配终裁权在你"),
-    ("R-4", "说明行最终形态（限长合成）", "${TERRITORY_DECL_R4_PRODUCER}", "说明行最终形态由你合成定稿"),
+    (
+        "R-3",
+        "人声设计",
+        "${TERRITORY_DECL_R3_PRODUCER}",
+        "人声设计终裁权在你",
+    ),
+    (
+        "R-3",
+        "参数与弧线匹配",
+        "${TERRITORY_DECL_R3_EMOTION}",
+        "参数与弧线匹配终裁权在你",
+    ),
+    (
+        "R-4",
+        "说明行最终形态（限长合成）",
+        "${TERRITORY_DECL_R4_PRODUCER}",
+        "说明行最终形态由你合成定稿",
+    ),
 ];
 
 /// C4/D4：领地声明文本（`TERRITORY_RULES` 的 prose 形态，单源）。
@@ -1068,19 +1405,46 @@ mod tests {
     /// （与 `ALL_MODES` 自身无守护同族）。派生后，新增模式要么在既有断言上真跑一遍，
     /// 要么立刻报红，不再有"悄悄漏掉一整个模式"的中间态。
     fn all_mode_names() -> Vec<&'static str> {
-        crate::models::Mode::ALL.iter().map(|m| m.to_str_name()).collect()
+        crate::models::Mode::ALL
+            .iter()
+            .map(|m| m.to_str_name())
+            .collect()
     }
 
     #[test]
     fn interpolate_resolves_param_ranges() {
         let t = "抖音 ${DOUYIN_WEIRD_RANGE}/${DOUYIN_STYLE_RANGE}；B ${MODE_B_WEIRD_RANGE}/${MODE_B_STYLE_RANGE}；上限 ${STYLE_PROMPT_MAX}；说明行 ${DESC_LINE_MAX}";
         let r = interpolate(t);
-        assert!(r.contains(&format!("{}-{}", DOUYIN_WEIRD_MIN, DOUYIN_WEIRD_MAX)), "抖音区间: {}", r);
-        assert!(r.contains(&format!("{}-{}", DOUYIN_STYLE_MIN, DOUYIN_STYLE_MAX)), "抖音 Style: {}", r);
-        assert!(r.contains(&format!("{}-{}", MODE_B_WEIRD_MIN, MODE_B_WEIRD_MAX)), "B 区间: {}", r);
-        assert!(r.contains(&format!("{}-{}", MODE_B_STYLE_MIN, MODE_B_STYLE_MAX)), "B Style: {}", r);
-        assert!(r.contains(&STYLE_PROMPT_MAX_CHARS.to_string()), "350: {}", r);
-        assert!(r.contains(&DESC_LINE_MAX_CHARS.to_string()), "说明行上限: {}", r);
+        assert!(
+            r.contains(&format!("{}-{}", DOUYIN_WEIRD_MIN, DOUYIN_WEIRD_MAX)),
+            "抖音区间: {}",
+            r
+        );
+        assert!(
+            r.contains(&format!("{}-{}", DOUYIN_STYLE_MIN, DOUYIN_STYLE_MAX)),
+            "抖音 Style: {}",
+            r
+        );
+        assert!(
+            r.contains(&format!("{}-{}", MODE_B_WEIRD_MIN, MODE_B_WEIRD_MAX)),
+            "B 区间: {}",
+            r
+        );
+        assert!(
+            r.contains(&format!("{}-{}", MODE_B_STYLE_MIN, MODE_B_STYLE_MAX)),
+            "B Style: {}",
+            r
+        );
+        assert!(
+            r.contains(&STYLE_PROMPT_MAX_CHARS.to_string()),
+            "350: {}",
+            r
+        );
+        assert!(
+            r.contains(&DESC_LINE_MAX_CHARS.to_string()),
+            "说明行上限: {}",
+            r
+        );
         assert!(!r.contains("${"), "占位符必须全部解析: {}", r);
     }
 
@@ -1089,15 +1453,25 @@ mod tests {
         let r = interpolate("${ARC_TABLE}");
         assert_eq!(r.lines().count(), ARC_PARAMS.len(), "弧线表行数=弧线数");
         for (name, wmin, wmax, smin, smax) in ARC_PARAMS {
-            let disp = if name.ends_with("型") { name.to_string() } else { format!("{}型", name) };
-            let frag = format!("- {}：Weirdness {}-{} | Style Influence {}-{}", disp, wmin, wmax, smin, smax);
+            let disp = if name.ends_with("型") {
+                name.to_string()
+            } else {
+                format!("{}型", name)
+            };
+            let frag = format!(
+                "- {}：Weirdness {}-{} | Style Influence {}-{}",
+                disp, wmin, wmax, smin, smax
+            );
             assert!(r.contains(&frag), "弧线表缺 {}", frag);
         }
     }
 
     #[test]
     fn interpolate_plain_text_unchanged() {
-        assert_eq!(interpolate("无占位符文本，Weirdness 12-20 保持原样"), "无占位符文本，Weirdness 12-20 保持原样");
+        assert_eq!(
+            interpolate("无占位符文本，Weirdness 12-20 保持原样"),
+            "无占位符文本，Weirdness 12-20 保持原样"
+        );
     }
 
     /// 第二十三批·嵌套占位符锁：容器（表格）值内含标量占位符时，插值必须展开到不动点。
@@ -1105,7 +1479,11 @@ mod tests {
     #[test]
     fn interpolate_expands_nested_placeholders() {
         let table = interpolate("${DOUYIN_DYNAMIC_TABLE}");
-        assert!(table.contains("前7秒"), "容器内的标量占位符必须展开：{}", table);
+        assert!(
+            table.contains("前7秒"),
+            "容器内的标量占位符必须展开：{}",
+            table
+        );
         assert!(!table.contains("${"), "容器展开后不得残留占位符：{}", table);
         // 幂等：已渲染文本再插值不变（用户 override / 二次注入路径）
         assert_eq!(interpolate(&table), table, "插值必须幂等");
@@ -1120,7 +1498,10 @@ mod tests {
         for c in PROSE_CARRIERS {
             carriers.push((format!("carrier:{}", c.name), interpolate(c.text)));
         }
-        carriers.push(("minimal_section_exemption".to_string(), minimal_section_exemption()));
+        carriers.push((
+            "minimal_section_exemption".to_string(),
+            minimal_section_exemption(),
+        ));
         carriers.push(("desc_line_contract".to_string(), desc_line_contract()));
         carriers.push(("plan_field_contract".to_string(), plan_field_contract()));
         carriers.push(("territory_rules_text".to_string(), territory_rules_text()));
@@ -1133,9 +1514,18 @@ mod tests {
             }
         }
         use crate::commands::roles;
-        carriers.push(("role:host".to_string(), interpolate(roles::host().system_prompt)));
-        carriers.push(("role:auditor".to_string(), interpolate(roles::auditor().system_prompt)));
-        carriers.push(("role:auditor_schema".to_string(), interpolate(roles::auditor().output_schema)));
+        carriers.push((
+            "role:host".to_string(),
+            interpolate(roles::host().system_prompt),
+        ));
+        carriers.push((
+            "role:auditor".to_string(),
+            interpolate(roles::auditor().system_prompt),
+        ));
+        carriers.push((
+            "role:auditor_schema".to_string(),
+            interpolate(roles::auditor().output_schema),
+        ));
         carriers.push((
             "role:auditor_review".to_string(),
             interpolate(roles::auditor_review_prompt()),
@@ -1148,7 +1538,10 @@ mod tests {
             ("style_analyst", roles::style_analyst()),
         ] {
             carriers.push((format!("role:{}", name), interpolate(r.system_prompt)));
-            carriers.push((format!("role_schema:{}", name), interpolate(r.output_schema)));
+            carriers.push((
+                format!("role_schema:{}", name),
+                interpolate(r.output_schema),
+            ));
         }
         for (name, p) in [
             ("mode_a", crate::commands::prompts::mode_a_system_prompt()),
@@ -1171,7 +1564,11 @@ mod tests {
             leftovers.len(),
             leftovers.join("\n")
         );
-        assert!(carriers.len() >= 30, "载体扫描面异常（{}）——本锁会空转", carriers.len());
+        assert!(
+            carriers.len() >= 30,
+            "载体扫描面异常（{}）——本锁会空转",
+            carriers.len()
+        );
     }
 
     /// 第二十三批·跨载体引用锁（与扫描网互补）：扫描网判"有没有手写数字"，
@@ -1188,23 +1585,54 @@ mod tests {
             ("lyricist", roles::lyricist().system_prompt.to_string()),
             ("reviser", roles::reviser().system_prompt.to_string()),
             ("producer", roles::producer().system_prompt.to_string()),
-            ("style_analyst", roles::style_analyst().system_prompt.to_string()),
-            ("mode_a", crate::commands::prompts::mode_a_system_prompt().to_string()),
-            ("mode_b", crate::commands::prompts::mode_b_system_prompt().to_string()),
-            ("mode_c", crate::commands::prompts::mode_c_system_prompt().to_string()),
-            ("mode_d", crate::commands::prompts::mode_d_system_prompt().to_string()),
+            (
+                "style_analyst",
+                roles::style_analyst().system_prompt.to_string(),
+            ),
+            (
+                "mode_a",
+                crate::commands::prompts::mode_a_system_prompt().to_string(),
+            ),
+            (
+                "mode_b",
+                crate::commands::prompts::mode_b_system_prompt().to_string(),
+            ),
+            (
+                "mode_c",
+                crate::commands::prompts::mode_c_system_prompt().to_string(),
+            ),
+            (
+                "mode_d",
+                crate::commands::prompts::mode_d_system_prompt().to_string(),
+            ),
         ];
         let cases: &[(&str, &[&str])] = &[
-            ("${NARRATIVE_SECTIONS_MIN}", &["auditor_review", "auditor", "emotion", "producer"]),
+            (
+                "${NARRATIVE_SECTIONS_MIN}",
+                &["auditor_review", "auditor", "emotion", "producer"],
+            ),
             ("${STYLE_BLOCKS_AB}", &["auditor_review", "auditor"]),
-            ("${STYLE_BLOCKS_DOUYIN}", &["auditor_review", "auditor", "style_analyst"]),
-            ("${DOUYIN_ARC_FORBID_PHRASE}", &["auditor", "style_analyst", "mode_d"]),
+            (
+                "${STYLE_BLOCKS_DOUYIN}",
+                &["auditor_review", "auditor", "style_analyst"],
+            ),
+            (
+                "${DOUYIN_ARC_FORBID_PHRASE}",
+                &["auditor", "style_analyst", "mode_d"],
+            ),
             ("${DOUYIN_DURATION_RANGE}", &["style_analyst", "mode_d"]),
             ("${DOUYIN_HOOK_WINDOW}", &["emotion", "style_analyst"]),
             ("${DOUYIN_INTRO_SPAN}", &["mode_d"]),
             (
                 "${CHECKED_MIN}",
-                &["auditor_review", "emotion", "lyricist", "reviser", "producer", "style_analyst"],
+                &[
+                    "auditor_review",
+                    "emotion",
+                    "lyricist",
+                    "reviser",
+                    "producer",
+                    "style_analyst",
+                ],
             ),
             ("${VOCAL_DIM_COUNT}", &["producer"]),
             ("${VOCAL_DIM_COUNT_CN}", &["mode_a", "mode_b", "mode_d"]),
@@ -1212,7 +1640,10 @@ mod tests {
             ("${HOOK_REPEAT_RANGE}", &["style_analyst"]),
             ("${HOOK_REPEAT_DILUTE}", &["style_analyst"]),
             ("${DOUYIN_HOOK_LOOP_RANGE}", &["lyricist", "mode_d"]),
-            ("${ENERGY_SCALE}", &["auditor", "emotion", "mode_a", "mode_b", "mode_d"]),
+            (
+                "${ENERGY_SCALE}",
+                &["auditor", "emotion", "mode_a", "mode_b", "mode_d"],
+            ),
             ("${ENERGY_BAND_1}", &["emotion", "producer", "mode_a"]),
             ("${ENERGY_BAND_2}", &["emotion", "producer", "mode_a"]),
             ("${ENERGY_BAND_3}", &["emotion", "producer", "mode_a"]),
@@ -1229,7 +1660,11 @@ mod tests {
         ];
         for (ph, expected) in cases {
             let rendered = interpolate(ph);
-            assert_ne!(rendered, *ph, "占位符 {} 未被 placeholder_pairs 解析（拼写错误？）", ph);
+            assert_ne!(
+                rendered, *ph,
+                "占位符 {} 未被 placeholder_pairs 解析（拼写错误？）",
+                ph
+            );
             for name in *expected {
                 let (_, text) = carriers
                     .iter()
@@ -1251,9 +1686,18 @@ mod tests {
     #[test]
     fn checked_schema_example_matches_min_items() {
         for (name, schema) in [
-            ("REVIEW_SCHEMA_WIDE", crate::commands::roles::REVIEW_SCHEMA_WIDE),
-            ("REVIEW_SCHEMA_LYRIC", crate::commands::roles::REVIEW_SCHEMA_LYRIC),
-            ("REVIEW_SCHEMA_AUDITOR", crate::commands::roles::REVIEW_SCHEMA_AUDITOR),
+            (
+                "REVIEW_SCHEMA_WIDE",
+                crate::commands::roles::REVIEW_SCHEMA_WIDE,
+            ),
+            (
+                "REVIEW_SCHEMA_LYRIC",
+                crate::commands::roles::REVIEW_SCHEMA_LYRIC,
+            ),
+            (
+                "REVIEW_SCHEMA_AUDITOR",
+                crate::commands::roles::REVIEW_SCHEMA_AUDITOR,
+            ),
         ] {
             let n = schema.matches("已核查项").count();
             assert_eq!(
@@ -1299,19 +1743,53 @@ mod tests {
         // 网一：区间与符号写法（裸数字无法由常量派生，手写枚举）
         const LITERALS: &[&str] = &[
             // 弧线区间片段（10 弧）+ 模式参数区间（4）
-            "22-28", "10-15", "25-35", "70-80", "15-25", "80-90", "28-35", "75-82", "20-28", "78-88",
-            "20-30", "78-83", "85-90", "70-82", "78-85", "12-20", "85-95", "20-35", "75-85",
+            "22-28",
+            "10-15",
+            "25-35",
+            "70-80",
+            "15-25",
+            "80-90",
+            "28-35",
+            "75-82",
+            "20-28",
+            "78-88",
+            "20-30",
+            "78-83",
+            "85-90",
+            "70-82",
+            "78-85",
+            "12-20",
+            "85-95",
+            "20-35",
+            "75-85",
             // 件数/行数/字数区间
-            "3-7", "6-13", "4-9",
+            "3-7",
+            "6-13",
+            "4-9",
             // 第二十三批补：抖音时长/重复/维度区间（原漏网写法）
-            "60-90 秒", "60-90秒",
-            "2-4 次", "2-4次",
-            "3-4 遍", "3-4遍",
-            "2-3 维", "2-3维",
+            "60-90 秒",
+            "60-90秒",
+            "2-4 次",
+            "2-4次",
+            "3-4 遍",
+            "3-4遍",
+            "2-3 维",
+            "2-3维",
             // 上限符号写法（console/半角混写都要拦）
-            "≤350", "≤200", "≤80", "≤30", "≤10", "≤4",
-            "<=350", "<=200", "<=80", "<=10", "<= 10", "<= 4",
-            "BPM>=90", "BPM≥90",
+            "≤350",
+            "≤200",
+            "≤80",
+            "≤30",
+            "≤10",
+            "≤4",
+            "<=350",
+            "<=200",
+            "<=80",
+            "<=10",
+            "<= 10",
+            "<= 4",
+            "BPM>=90",
+            "BPM≥90",
         ];
         for lit in LITERALS {
             if line.contains(lit) {
@@ -1375,10 +1853,17 @@ mod tests {
                     // 逐段密度表的裸件数（"Bridge=7，2件"）是规划示例而非阈值常量，不计违规；
                     // 其与 ≥3 下限的关系由"极简段豁免"条款约束（见 prompts.rs 密度表注记）。
                     let head: Vec<char> = line[..at].chars().collect();
-                    let before: String = head[head.len().saturating_sub(THRESHOLD_WINDOW)..].iter().collect();
-                    let after: String = line[at + needle.len()..].chars().take(THRESHOLD_WINDOW).collect();
+                    let before: String = head[head.len().saturating_sub(THRESHOLD_WINDOW)..]
+                        .iter()
+                        .collect();
+                    let after: String = line[at + needle.len()..]
+                        .chars()
+                        .take(THRESHOLD_WINDOW)
+                        .collect();
                     let is_threshold = !*need_ctx
-                        || THRESHOLD_WORDS.iter().any(|w| before.contains(w) || after.contains(w));
+                        || THRESHOLD_WORDS
+                            .iter()
+                            .any(|w| before.contains(w) || after.contains(w));
                     if !is_range && is_threshold {
                         hits.push(needle.clone());
                     }
@@ -1401,12 +1886,18 @@ mod tests {
                     None => false,
                 };
                 let head: Vec<char> = line[..at].chars().collect();
-                let before: String = head[head.len().saturating_sub(THRESHOLD_WINDOW)..].iter().collect();
-                let tail: String = line[at + lit.len()..].chars().take(THRESHOLD_WINDOW).collect();
+                let before: String = head[head.len().saturating_sub(THRESHOLD_WINDOW)..]
+                    .iter()
+                    .collect();
+                let tail: String = line[at + lit.len()..]
+                    .chars()
+                    .take(THRESHOLD_WINDOW)
+                    .collect();
                 let next_char = tail.chars().find(|c| !c.is_whitespace());
                 let adjacent = matches!(next_char, Some('分') | Some('级') | Some('：'));
-                let in_energy_ctx =
-                    ENERGY_CONTEXT_WORDS.iter().any(|w| before.contains(w) || tail.contains(w));
+                let in_energy_ctx = ENERGY_CONTEXT_WORDS
+                    .iter()
+                    .any(|w| before.contains(w) || tail.contains(w));
                 if !is_range && (adjacent || in_energy_ctx) {
                     hits.push((*lit).to_string());
                 }
@@ -1417,19 +1908,48 @@ mod tests {
     }
 
     /// 能量标尺字面量（档位区间 + 全量程 + 抖音动态窗口）——手写能量数字的完整清单。
-    const ENERGY_RANGE_LITERALS: &[&str] = &["0-10", "0-2", "3-4", "5-6", "7-8", "9-10", "7-9", "8-10"];
+    const ENERGY_RANGE_LITERALS: &[&str] =
+        &["0-10", "0-2", "3-4", "5-6", "7-8", "9-10", "7-9", "8-10"];
     /// 能量语境词：命中能量区间且前后窗口内含其一（或紧邻后随 分/级/：）才判为"手写能量档位"。
     /// 刻意**不含** 爆发/高潮/铺垫/推进/高压 等弧线名与段落描述用词——否则密度表/动态表的
     /// 规划件数（`高潮段 5-6 件`）会误报，网就不可信了。
     const ENERGY_CONTEXT_WORDS: &[&str] = &[
-        "能量", "标尺", "级", "力度", "极弱", "极强", "气声", "克制", "破音", "放开", "用力",
-        "静止", "气息", "自言自语",
+        "能量",
+        "标尺",
+        "级",
+        "力度",
+        "极弱",
+        "极强",
+        "气声",
+        "克制",
+        "破音",
+        "放开",
+        "用力",
+        "静止",
+        "气息",
+        "自言自语",
     ];
 
     /// 阈值语境词表（判定"数值+单位"是否在讲规则阈值，而非讲规划示例）
     const THRESHOLD_WORDS: &[&str] = &[
-        "至少", "最少", "最多", "不超过", "不超", "超过", "以上", "以下", "以内",
-        "≥", "≤", ">=", "<=", ">", "<", "下限", "上限", "起",
+        "至少",
+        "最少",
+        "最多",
+        "不超过",
+        "不超",
+        "超过",
+        "以上",
+        "以下",
+        "以内",
+        "≥",
+        "≤",
+        ">=",
+        "<=",
+        ">",
+        "<",
+        "下限",
+        "上限",
+        "起",
     ];
 
     #[test]
@@ -1440,7 +1960,8 @@ mod tests {
         for rel in PROSE_SOURCE_FILES {
             let file = format!("src/{}", rel);
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(&file);
-            let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("读载体源文件 {} 失败: {}", file, e));
+            let src = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("读载体源文件 {} 失败: {}", file, e));
             let mut depth_in_tests: i32 = -1; // -1 = 不在测试区
             for (i, raw) in src.lines().enumerate() {
                 let trimmed = raw.trim_start();
@@ -1534,7 +2055,12 @@ mod tests {
             "每段能量（0-10）是否符合情绪走向？能量语义标尺：0-2 几乎静止自言自语",
         ] {
             let hits = handwritten_rule_number_hits(leak);
-            assert!(!hits.is_empty(), "扩网后必须抓到该写法：{} → 命中 {:?}", leak, hits);
+            assert!(
+                !hits.is_empty(),
+                "扩网后必须抓到该写法：{} → 命中 {:?}",
+                leak,
+                hits
+            );
         }
         // 规划示例/弧线名/正则样式不得误报（扩网引入了语境判定，这里锁住"不误伤"的一半）
         for ok in [
@@ -1561,7 +2087,11 @@ mod tests {
     /// 未登记的字面量即红；登记了却无实际命中的豁免即红（防无主豁免随时间腐化）。
     #[test]
     fn no_handwritten_rule_numbers_in_prose_carriers() {
-        assert!(PROSE_CARRIERS.len() >= 9, "载体注册表条目数异常: {}", PROSE_CARRIERS.len());
+        assert!(
+            PROSE_CARRIERS.len() >= 9,
+            "载体注册表条目数异常: {}",
+            PROSE_CARRIERS.len()
+        );
         // 第二十批：锁名必须能解析到真实函数——旧实现只查"非空字符串"，注释却宣称
         // "测试名不存在即红"（红灯先行实测：把锁名换成 zzz 幽灵名，本测试全绿）。
         let defined = all_defined_fn_names();
@@ -1586,9 +2116,16 @@ mod tests {
                 assert!(
                     defined.contains(*lock),
                     "{} 的 CSV 豁免 \"{}\" 登记的锁 `{}` 不是任何真实函数名（幽灵锁）",
-                    c.name, lit, lock
+                    c.name,
+                    lit,
+                    lock
                 );
-                assert!(!lock.is_empty(), "{} 的 CSV 豁免 \"{}\" 未写锁定测试名", c.name, lit);
+                assert!(
+                    !lock.is_empty(),
+                    "{} 的 CSV 豁免 \"{}\" 未写锁定测试名",
+                    c.name,
+                    lit
+                );
                 assert!(
                     hits.iter().any(|h| lit.contains(h.as_str())),
                     "{} 登记了 CSV 豁免 \"{}\"（锁 {}）但扫描网未命中——豁免已失效/表述已改，请清理登记",
@@ -1609,10 +2146,16 @@ mod tests {
     #[test]
     fn prose_carrier_guard_catches_handwritten_restore() {
         // 模拟"回退到旧写法"：抖音区间 + Hook/Verse 阈值全部手写（上限已改 12，手写 12 同样须被网住）
-        let legacy = "Hook≥2次；单段Verse≤4行；每行≤12字；BPM≥90；参数抖音12-20/85-95；说明行≤200字符。";
+        let legacy =
+            "Hook≥2次；单段Verse≤4行；每行≤12字；BPM≥90；参数抖音12-20/85-95；说明行≤200字符。";
         let hits = handwritten_rule_number_hits(legacy);
         for want in ["≤200", "12-20", "85-95", "2次", "4行", "12字", "BPM≥90"] {
-            assert!(hits.iter().any(|h| h == want), "红灯先行：旧写法 {} 未被网住（命中 {:?}）", want, hits);
+            assert!(
+                hits.iter().any(|h| h == want),
+                "红灯先行：旧写法 {} 未被网住（命中 {:?}）",
+                want,
+                hits
+            );
         }
         // 现役 CHECKLIST_D 已全部占位符化：原文不得有命中
         assert!(
@@ -1623,7 +2166,11 @@ mod tests {
         // PRIMER_AB：物件清单「≥5件」权威在 CSV（primer_ab_stage0… 锁内容）；STRONG 已调为 4，
         // 不再误命中配器下限，故原文不得再有手写规则数字命中。
         let ab_hits = handwritten_rule_number_hits(PRIMER_AB);
-        assert!(ab_hits.is_empty(), "PRIMER_AB 不得含手写规则数字: {:?}", ab_hits);
+        assert!(
+            ab_hits.is_empty(),
+            "PRIMER_AB 不得含手写规则数字: {:?}",
+            ab_hits
+        );
     }
 
     /// 判定 `name` 在源码中存在**真实调用点**（排除 `fn name(` 定义与注释行）。
@@ -1783,7 +2330,10 @@ mod tests {
                     continue;
                 }
                 frontend_sources_under(&p, out);
-            } else if matches!(p.extension().and_then(|e| e.to_str()), Some("ts") | Some("tsx")) {
+            } else if matches!(
+                p.extension().and_then(|e| e.to_str()),
+                Some("ts") | Some("tsx")
+            ) {
                 out.push(p);
             }
         }
@@ -1833,7 +2383,11 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut files: Vec<std::path::PathBuf> = Vec::new();
         rust_sources_under(&root, &mut files);
-        assert!(files.len() > 10, "源码扫描面异常（{} 个 .rs）——本锁会空转", files.len());
+        assert!(
+            files.len() > 10,
+            "源码扫描面异常（{} 个 .rs）——本锁会空转",
+            files.len()
+        );
         files
             .iter()
             .flat_map(|f| defined_fn_names(&std::fs::read_to_string(f).unwrap_or_default()))
@@ -1862,11 +2416,14 @@ mod tests {
                 .or_else(|| t.strip_prefix("pub "))
                 .unwrap_or(t);
             // ① const/static 字符串定义
-            if let Some(rest) =
-                after_vis.strip_prefix("const ").or_else(|| after_vis.strip_prefix("static "))
+            if let Some(rest) = after_vis
+                .strip_prefix("const ")
+                .or_else(|| after_vis.strip_prefix("static "))
             {
-                let name: String =
-                    rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect();
                 let tail = &rest[name.len()..];
                 let is_str = tail.contains(": &str") || tail.contains(": &'static str");
                 if !name.is_empty() && is_str && tail.contains('"') {
@@ -1976,7 +2533,10 @@ mod tests {
             })
             .collect();
         // 扫描面自证：全空/全塌的扫描面会让下面两条断言集体空转成绿灯（同 RULE_REGISTRY 空表）
-        assert!(!files.is_empty(), "RULE_EXECUTOR_FILES 为空——本锁将空转成绿灯");
+        assert!(
+            !files.is_empty(),
+            "RULE_EXECUTOR_FILES 为空——本锁将空转成绿灯"
+        );
         for (rel, prod) in &files {
             assert!(
                 prod.lines().count() > 50,
@@ -2030,7 +2590,9 @@ mod tests {
         for rule in RULE_REGISTRY {
             assert!(!rule.id.is_empty(), "规则 id 不得为空");
             assert!(
-                rule.id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+                rule.id
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
                 "规则 id `{}` 须为 snake_case（检索键形态）",
                 rule.id
             );
@@ -2039,7 +2601,11 @@ mod tests {
         }
         // ③ 模式域取值真实：空域 = 规则永不适用；未登记模式名 = 同样永不适用，且无人察觉
         for rule in RULE_REGISTRY {
-            assert!(!rule.modes.is_empty(), "规则 {} 模式域为空——该规则永不适用", rule.id);
+            assert!(
+                !rule.modes.is_empty(),
+                "规则 {} 模式域为空——该规则永不适用",
+                rule.id
+            );
             for m in rule.modes {
                 assert!(
                     ALL_MODES.contains(m),
@@ -2065,8 +2631,10 @@ mod tests {
     ///   `host_primer()` 返回 None（零 primer）、不在任何规则模式域——静默降级。
     #[test]
     fn all_modes_equals_mode_enum_exactly() {
-        let from_enum: Vec<&str> =
-            crate::models::Mode::ALL.iter().map(|m| m.to_str_name()).collect();
+        let from_enum: Vec<&str> = crate::models::Mode::ALL
+            .iter()
+            .map(|m| m.to_str_name())
+            .collect();
         assert!(!from_enum.is_empty(), "Mode::ALL 为空——本锁将空转成绿灯");
         for name in &from_enum {
             assert!(
@@ -2112,14 +2680,37 @@ mod tests {
         let orch = read("commands/orchestrator.rs");
         let ij = read("commands/interject.rs");
         // ① 真消费：规则实现唯一，两个入口（整请求准入 / 中途插话）共用
-        assert!(models.contains("pub fn validate_feedback("), "models 缺 feedback 规则实现");
-        assert!(models.contains("INPUT_MAX_CHARS"), "models 未引用输入上限常量");
-        assert!(models.contains("FEEDBACK_MAX_CHARS"), "models 未引用反馈上限常量");
-        assert!(orch.contains("models::validate_feedback("), "插话入口未接单源校验");
-        assert!(ij.contains("crate::rules::FEEDBACK_MAX_CHARS"), "插话槽未引用单条长度单源常量");
-        assert!(ij.contains("crate::rules::INTERJECT_MAX_PER_RUN"), "插话槽未引用条数单源常量");
+        assert!(
+            models.contains("pub fn validate_feedback("),
+            "models 缺 feedback 规则实现"
+        );
+        assert!(
+            models.contains("INPUT_MAX_CHARS"),
+            "models 未引用输入上限常量"
+        );
+        assert!(
+            models.contains("FEEDBACK_MAX_CHARS"),
+            "models 未引用反馈上限常量"
+        );
+        assert!(
+            orch.contains("models::validate_feedback("),
+            "插话入口未接单源校验"
+        );
+        assert!(
+            ij.contains("crate::rules::FEEDBACK_MAX_CHARS"),
+            "插话槽未引用单条长度单源常量"
+        );
+        assert!(
+            ij.contains("crate::rules::INTERJECT_MAX_PER_RUN"),
+            "插话槽未引用条数单源常量"
+        );
         // ② 旧声明不得回归（函数局部常量 = 第二份真源；`const ` 前缀避免撞上常量名的子串）
-        for legacy in ["const MAX_FEEDBACK", "const MAX_INPUT", "const MAX_TEXT_CHARS", "const MAX_PER_RUN"] {
+        for legacy in [
+            "const MAX_FEEDBACK",
+            "const MAX_INPUT",
+            "const MAX_TEXT_CHARS",
+            "const MAX_PER_RUN",
+        ] {
             assert!(
                 !models.contains(legacy) && !ij.contains(legacy) && !orch.contains(legacy),
                 "{} 局部常量不得回归",
@@ -2127,45 +2718,109 @@ mod tests {
             );
         }
         // ③ 越界夹具必须由常量派生（手抄数字的夹具会在常量变更时静默失真）
-        assert!(models.contains("INPUT_MAX_CHARS + 1"), "输入越界夹具须由常量派生");
-        assert!(models.contains("FEEDBACK_MAX_CHARS + 1"), "反馈越界夹具须由常量派生");
-        assert!(ij.contains("FEEDBACK_MAX_CHARS + 1"), "插话槽越界夹具须由常量派生");
-        assert!(orch.contains("FEEDBACK_MAX_CHARS + 1"), "插话入口越界夹具须由常量派生");
+        assert!(
+            models.contains("INPUT_MAX_CHARS + 1"),
+            "输入越界夹具须由常量派生"
+        );
+        assert!(
+            models.contains("FEEDBACK_MAX_CHARS + 1"),
+            "反馈越界夹具须由常量派生"
+        );
+        assert!(
+            ij.contains("FEEDBACK_MAX_CHARS + 1"),
+            "插话槽越界夹具须由常量派生"
+        );
+        assert!(
+            orch.contains("FEEDBACK_MAX_CHARS + 1"),
+            "插话入口越界夹具须由常量派生"
+        );
         // ④⑤ 生产段（剔除全部 `#[cfg(test)]` 条目）：不复述限额数值，且无凭据形状字面量。
         // 扫描针分片拼装——否则断言自己就成了新的"占位域名/凭据字段"字面量。
         let phantom_host = format!("placeholder{}", ".invalid");
         let credential_assign = format!("api_key{} \"", ":");
         for (name, full, prod_fn, test_fn) in [
-            ("models/mod.rs", &models, "pub fn validate_request(", "fn validate_feedback_boundaries("),
-            ("commands/orchestrator.rs", &orch, "pub async fn interject_feedback", "fn interject_feedback_enforces_single_sourced_limit("),
-            ("commands/interject.rs", &ij, "pub(crate) fn push(", "fn interject_limits_error_instead_of_silent_drop("),
+            (
+                "models/mod.rs",
+                &models,
+                "pub fn validate_request(",
+                "fn validate_feedback_boundaries(",
+            ),
+            (
+                "commands/orchestrator.rs",
+                &orch,
+                "pub async fn interject_feedback",
+                "fn interject_feedback_enforces_single_sourced_limit(",
+            ),
+            (
+                "commands/interject.rs",
+                &ij,
+                "pub(crate) fn push(",
+                "fn interject_limits_error_instead_of_silent_drop(",
+            ),
         ] {
             let prod = production_segment(full);
             // 双向自证：提取逻辑一旦失效（如把中段测试模块之后的代码也剔掉），下面两条断言会**静默空转**
             // ——D5 实测过这个失败模式，故先钉住提取正确性：必须含生产函数、必须不含测试函数。
-            assert!(prod.contains(prod_fn), "{} 生产段提取异常：缺生产函数 {}", name, prod_fn);
-            assert!(!prod.contains(test_fn), "{} 生产段提取异常：未剔除测试函数 {}", name, test_fn);
+            assert!(
+                prod.contains(prod_fn),
+                "{} 生产段提取异常：缺生产函数 {}",
+                name,
+                prod_fn
+            );
+            assert!(
+                !prod.contains(test_fn),
+                "{} 生产段提取异常：未剔除测试函数 {}",
+                name,
+                test_fn
+            );
             for v in [INPUT_MAX_CHARS, FEEDBACK_MAX_CHARS] {
                 assert!(
                     !contains_standalone_number(&prod, v),
                     "{} 生产段复述了限额数值 {}——数值唯一真源在本文件，请引用常量",
-                    name, v
+                    name,
+                    v
                 );
             }
-            assert!(!prod.contains(&phantom_host), "{} 生产段出现占位域名字面量（CWE-798 命中面）", name);
-            assert!(!prod.contains(&credential_assign), "{} 生产段出现凭据字段字面量（CWE-798 命中面）", name);
+            assert!(
+                !prod.contains(&phantom_host),
+                "{} 生产段出现占位域名字面量（CWE-798 命中面）",
+                name
+            );
+            assert!(
+                !prod.contains(&credential_assign),
+                "{} 生产段出现凭据字段字面量（CWE-798 命中面）",
+                name
+            );
         }
     }
 
     /// 调用点判定自检（红灯先行）：定义不算调用点、注释提及不算调用点、真实调用才算。
     #[test]
     fn has_call_site_distinguishes_definition_from_invocation() {
-        assert!(!has_call_site("pub fn foo(a: u32) -> u32 { a }", "foo"), "定义不得算调用点");
-        assert!(!has_call_site("// foo( 只是注释\npub fn bar() {}", "foo"), "注释提及不得算调用点");
-        assert!(!has_call_site("fn foo() {}\nlet x = 1;", "foo"), "仅定义无调用应为 false");
-        assert!(has_call_site("fn foo() {}\nlet x = foo(1);", "foo"), "真实调用应为 true");
-        assert!(has_call_site("async fn bar() { baz(1).await; }", "baz"), "普通调用应为 true");
-        assert!(has_call_site("validator::foo(&x)", "foo"), "限定路径调用应为 true");
+        assert!(
+            !has_call_site("pub fn foo(a: u32) -> u32 { a }", "foo"),
+            "定义不得算调用点"
+        );
+        assert!(
+            !has_call_site("// foo( 只是注释\npub fn bar() {}", "foo"),
+            "注释提及不得算调用点"
+        );
+        assert!(
+            !has_call_site("fn foo() {}\nlet x = 1;", "foo"),
+            "仅定义无调用应为 false"
+        );
+        assert!(
+            has_call_site("fn foo() {}\nlet x = foo(1);", "foo"),
+            "真实调用应为 true"
+        );
+        assert!(
+            has_call_site("async fn bar() { baz(1).await; }", "baz"),
+            "普通调用应为 true"
+        );
+        assert!(
+            has_call_site("validator::foo(&x)", "foo"),
+            "限定路径调用应为 true"
+        );
     }
 
     /// 生产段消费判定自检（第二十批·红灯先行）：注释提及不算消费、子串不算标识符使用、
@@ -2187,8 +2842,14 @@ mod tests {
         assert!(has_call_site(&prod, "real"), "生产段真实调用应为 true");
         assert!(has_symbol_use(&prod, "real"), "生产段标识符使用应为 true");
         assert!(!has_symbol_use(&prod, "rea"), "子串不得算标识符使用");
-        assert!(!has_call_site(&prod, "helper"), "测试模块内的调用不算生产接线");
-        assert!(!has_symbol_use(&prod, "helper"), "测试模块内的使用不算生产消费");
+        assert!(
+            !has_call_site(&prod, "helper"),
+            "测试模块内的调用不算生产接线"
+        );
+        assert!(
+            !has_symbol_use(&prod, "helper"),
+            "测试模块内的使用不算生产消费"
+        );
         assert!(
             !has_symbol_use("// fake_symbol 只是注释\nfn a() {}\n", "fake_symbol"),
             "注释行里的提及不算消费"
@@ -2261,9 +2922,21 @@ mod tests {
             }
         }
         // 两面各自自证：任一面为空/未接入时立刻报红（否则"扩展"可能只是空转）
-        assert!(seen_rust >= 5, "Rust 扫描面自证：仅 {} 处 `::tests::` 引用——本锁可能空转", seen_rust);
-        assert!(seen_fe >= 2, "前端扫描面自证：仅 {} 处 `::tests::` 引用——第二扫描面可能空转", seen_fe);
-        assert!(missing.is_empty(), "注释点名的测试不存在（幽灵锁）：{:?}", missing);
+        assert!(
+            seen_rust >= 5,
+            "Rust 扫描面自证：仅 {} 处 `::tests::` 引用——本锁可能空转",
+            seen_rust
+        );
+        assert!(
+            seen_fe >= 2,
+            "前端扫描面自证：仅 {} 处 `::tests::` 引用——第二扫描面可能空转",
+            seen_fe
+        );
+        assert!(
+            missing.is_empty(),
+            "注释点名的测试不存在（幽灵锁）：{:?}",
+            missing
+        );
     }
 
     /// 散文载体的**入网自证**（第二十批·红灯先行）。
@@ -2285,14 +2958,19 @@ mod tests {
         let mut covered_files: Vec<String> = Vec::new();
         let mut uncovered: Vec<String> = Vec::new();
         for f in &files {
-            let rel =
-                f.strip_prefix(&root).unwrap_or(f.as_path()).to_string_lossy().replace('\\', "/");
+            let rel = f
+                .strip_prefix(&root)
+                .unwrap_or(f.as_path())
+                .to_string_lossy()
+                .replace('\\', "/");
             let src = std::fs::read_to_string(f).unwrap_or_default();
             for (name, _) in discover_prose_definitions(&production_segment(&src)) {
                 if PROSE_SOURCE_FILES.contains(&rel.as_str()) {
                     covered_files.push(rel.clone());
                 } else if PROSE_CARRIERS.iter().any(|c| c.name == name.as_str())
-                    || PROSE_CARRIER_EXEMPT.iter().any(|(n, _)| *n == name.as_str())
+                    || PROSE_CARRIER_EXEMPT
+                        .iter()
+                        .any(|(n, _)| *n == name.as_str())
                 {
                 } else {
                     uncovered.push(format!("{}::{}", rel, name));
@@ -2301,7 +2979,11 @@ mod tests {
             }
         }
         // 扫描面自证：发现逻辑失效（判据写错/被空串喂饱）时本锁会静默空转
-        assert!(discovered.len() >= 8, "散文定义发现数异常（{}）——发现逻辑可能已失效", discovered.len());
+        assert!(
+            discovered.len() >= 8,
+            "散文定义发现数异常（{}）——发现逻辑可能已失效",
+            discovered.len()
+        );
         for known in ["CHECKLIST_A", "PRIMER_AB", "PLAN_FIELD_CONTRACT"] {
             assert!(
                 discovered.iter().any(|n| n == known),
@@ -2346,21 +3028,41 @@ mod tests {
     #[test]
     fn production_segment_excludes_mid_file_test_module() {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let models = std::fs::read_to_string(src.join("models/mod.rs")).expect("读 models/mod.rs 失败");
+        let models =
+            std::fs::read_to_string(src.join("models/mod.rs")).expect("读 models/mod.rs 失败");
         let prod = production_segment(&models);
-        assert!(prod.contains("pub fn validate_request("), "中段测试模块之后的生产代码必须保留");
-        assert!(prod.contains("pub(crate) fn too_long("), "中段测试模块之后的生产代码必须保留");
-        assert!(!prod.contains("fn validate_feedback_boundaries("), "测试函数必须被剔除");
+        assert!(
+            prod.contains("pub fn validate_request("),
+            "中段测试模块之后的生产代码必须保留"
+        );
+        assert!(
+            prod.contains("pub(crate) fn too_long("),
+            "中段测试模块之后的生产代码必须保留"
+        );
+        assert!(
+            !prod.contains("fn validate_feedback_boundaries("),
+            "测试函数必须被剔除"
+        );
         assert!(!prod.contains("#[cfg(test)]"), "测试属性行必须被剔除");
         // 提取后不得塌成"只剩文件头"：生产段必须显著长于测试段之外的残片
-        assert!(prod.lines().count() > 200, "生产段长度异常（{} 行）——提取逻辑可能剔多了", prod.lines().count());
+        assert!(
+            prod.lines().count() > 200,
+            "生产段长度异常（{} 行）——提取逻辑可能剔多了",
+            prod.lines().count()
+        );
     }
 
     /// 独立数字 token 判定自检（第十三批 D3 红灯先行）：子串不得误报，真值必须命中。
     #[test]
     fn standalone_number_ignores_substrings() {
-        assert!(contains_standalone_number("上限 = 2000;", 2000), "独立 token 应命中");
-        assert!(contains_standalone_number("上限 = 20000;", 20000), "独立 token 应命中");
+        assert!(
+            contains_standalone_number("上限 = 2000;", 2000),
+            "独立 token 应命中"
+        );
+        assert!(
+            contains_standalone_number("上限 = 20000;", 20000),
+            "独立 token 应命中"
+        );
         assert!(
             !contains_standalone_number("上限 = 12000;", 2000),
             "12000 里的 2000 是子串，不得误报"
@@ -2373,8 +3075,14 @@ mod tests {
             !contains_standalone_number("上限 = 20001;", 20000),
             "20001 里的 20000 是子串，不得误报"
         );
-        assert!(!contains_standalone_number("上限 = 200;", 2000), "短数字不得命中");
-        assert!(!contains_standalone_number("无数字", 2000), "无命中应为 false");
+        assert!(
+            !contains_standalone_number("上限 = 200;", 2000),
+            "短数字不得命中"
+        );
+        assert!(
+            !contains_standalone_number("无数字", 2000),
+            "无命中应为 false"
+        );
     }
 
     #[test]
@@ -2397,7 +3105,10 @@ mod tests {
         let i_obj = p.find("物件").expect("缺物件段");
         let i_con = p.find("约束").expect("缺约束段");
         let i_arc = p.find("弧线").expect("缺旋律/弧线段");
-        assert!(i_aud < i_obj && i_obj < i_con && i_con < i_arc, "primer 段落顺序须为受众→物件→约束→旋律");
+        assert!(
+            i_aud < i_obj && i_obj < i_con && i_con < i_arc,
+            "primer 段落顺序须为受众→物件→约束→旋律"
+        );
     }
 
     /// #23 修复后的**双载体同源锁**：primer 与「清单」同族，都是阶段0 上游告知载体
@@ -2422,9 +3133,18 @@ mod tests {
         let n: usize = check
             .split('≥')
             .nth(1)
-            .map(|s| s.chars().take_while(|c| c.is_ascii_digit()).collect::<String>())
+            .map(|s| {
+                s.chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect::<String>()
+            })
             .and_then(|s| s.parse().ok())
-            .unwrap_or_else(|| panic!("LC-01 check 列缺「≥N件」阈值表述（primer 同源锁的取值基准）: {}", check));
+            .unwrap_or_else(|| {
+                panic!(
+                    "LC-01 check 列缺「≥N件」阈值表述（primer 同源锁的取值基准）: {}",
+                    check
+                )
+            });
         assert!(
             interpolate(PRIMER_AB).contains(&format!("≥{}件", n)),
             "PRIMER_AB 物件清单下限与 LC-01 双载体不同源（CSV={}，primer 须含「≥{}件」）: {}",
@@ -2438,16 +3158,28 @@ mod tests {
     fn checklist_contains_single_source_numbers() {
         // 清单数字必须与常量一致（verbatim 锁）
         let ab = checklist("mode_a");
-        assert!(ab.contains(&format!("≤{}", STYLE_PROMPT_MAX_CHARS)), "缺350");
+        assert!(
+            ab.contains(&format!("≤{}", STYLE_PROMPT_MAX_CHARS)),
+            "缺350"
+        );
         assert!(ab.contains(&format!("≥{}", MIN_ENERGY_GAP)), "缺能量差3");
-        assert!(ab.contains(&format!("≥{}件", MIN_INSTRUMENT_GAP)), "缺配器差2");
+        assert!(
+            ab.contains(&format!("≥{}件", MIN_INSTRUMENT_GAP)),
+            "缺配器差2"
+        );
         // L-3：单段下限统一为 3 后，清单不得残留"最弱段≥2件"旧口径
         assert!(ab.contains("单段3-7件"), "缺单段3-7");
         assert!(!ab.contains("最弱段≥2件"), "残留最弱段2件旧口径");
         // R-1：B 清单参数准绳是 B 专属区间，弧线区间不适用 B
         let b = checklist("mode_b");
-        assert!(b.contains(&format!("{}-{}", MODE_B_WEIRD_MIN, MODE_B_WEIRD_MAX)), "缺B区间20-35");
-        assert!(b.contains(&format!("{}-{}", MODE_B_STYLE_MIN, MODE_B_STYLE_MAX)), "缺B区间75-85");
+        assert!(
+            b.contains(&format!("{}-{}", MODE_B_WEIRD_MIN, MODE_B_WEIRD_MAX)),
+            "缺B区间20-35"
+        );
+        assert!(
+            b.contains(&format!("{}-{}", MODE_B_STYLE_MIN, MODE_B_STYLE_MAX)),
+            "缺B区间75-85"
+        );
         assert!(b.contains("B 专属区间为准"), "缺B优先级声明");
         assert!(!b.contains("22-28/78-83"), "B 清单不得混入弧线区间表");
         assert!(!b.contains("弧线参数："), "B 清单不得含弧线参数段");
@@ -2455,24 +3187,42 @@ mod tests {
         let d = checklist("mode_d");
         assert!(d.contains(&format!("≥{}次", HOOK_MIN_COUNT)), "缺Hook2");
         assert!(d.contains(&format!("≤{}行", VERSE_MAX_LINES)), "缺Verse4");
-        assert!(d.contains(&format!("≤{}字", DOUYIN_LINE_MAX_CHARS)), "缺行字上限");
+        assert!(
+            d.contains(&format!("≤{}字", DOUYIN_LINE_MAX_CHARS)),
+            "缺行字上限"
+        );
         assert!(d.contains(&format!("≥{}", DOUYIN_BPM_MIN)), "缺BPM90");
         let c = checklist("mode_c");
-        assert!(c.contains(&format!("≤{}行", LYRIC_FILL_TAIL_ALLOW)), "缺尾部2行");
+        assert!(
+            c.contains(&format!("≤{}行", LYRIC_FILL_TAIL_ALLOW)),
+            "缺尾部2行"
+        );
         // 说明行上限（2026-09-18：80→200）：四模式清单都告知同一数字——上游告知与下游门同源，
         // 任一模式漏告知即"上游不知道、下游硬拦"的降级源（旧实现 A/B/C 三模式零告知）
         for m in all_mode_names() {
             let cl = checklist(m);
-            assert!(cl.contains(&format!("≤{}", DESC_LINE_MAX_CHARS)), "{} 清单缺说明行上限 {}", m, DESC_LINE_MAX_CHARS);
+            assert!(
+                cl.contains(&format!("≤{}", DESC_LINE_MAX_CHARS)),
+                "{} 清单缺说明行上限 {}",
+                m,
+                DESC_LINE_MAX_CHARS
+            );
             assert!(cl.contains("说明行"), "{} 清单缺说明行条目", m);
         }
         // A/B 极简段豁免是下游实装（validator::declared_minimal_sections）的放宽口，上游必须告知
         for m in ["mode_a", "mode_b"] {
-            assert!(checklist(m).contains("极简段"), "{} 清单缺极简段豁免告知", m);
+            assert!(
+                checklist(m).contains("极简段"),
+                "{} 清单缺极简段豁免告知",
+                m
+            );
         }
         // D primer 与常量同口径（primer 与清单同为上游告知载体；primer 原文已占位符化，
-// 数值断言一律针对**插值后**文本——"原文写法"由 no_handwritten_rule_numbers_in_prose_carriers 管）
-        assert!(interpolate(PRIMER_D).contains(&format!("说明行≤{}字符", DESC_LINE_MAX_CHARS)), "D primer 说明行上限与常量不一致");
+        // 数值断言一律针对**插值后**文本——"原文写法"由 no_handwritten_rule_numbers_in_prose_carriers 管）
+        assert!(
+            interpolate(PRIMER_D).contains(&format!("说明行≤{}字符", DESC_LINE_MAX_CHARS)),
+            "D primer 说明行上限与常量不一致"
+        );
         // 全部上游告知载体的插值结果不得残留未解析占位符
         for m in all_mode_names() {
             assert!(!checklist(m).contains("${"), "{} 清单占位符未解析", m);
@@ -2487,23 +3237,47 @@ mod tests {
     fn minimal_section_exemption_is_ab_only_and_single_sourced() {
         let clause = minimal_section_exemption();
         assert!(clause.contains("极简段"), "条款缺标记词");
-        assert!(clause.contains(&format!("{} 件", MIN_INSTRUMENT_WEAK)), "条款缺最弱段下限 {}", MIN_INSTRUMENT_WEAK);
-        assert!(clause.contains(&format!("≥{} 件", MIN_INSTRUMENT_GAP)), "条款缺配器差 {}", MIN_INSTRUMENT_GAP);
-        assert!(clause.contains(&format!("≥{} 件", MIN_INSTRUMENT_STRONG)), "条款缺最强段下限 {}", MIN_INSTRUMENT_STRONG);
-        assert!(clause.contains(&format!("≤{} 件", INSTRUMENT_MAX)), "条款缺全曲上限 {}", INSTRUMENT_MAX);
+        assert!(
+            clause.contains(&format!("{} 件", MIN_INSTRUMENT_WEAK)),
+            "条款缺最弱段下限 {}",
+            MIN_INSTRUMENT_WEAK
+        );
+        assert!(
+            clause.contains(&format!("≥{} 件", MIN_INSTRUMENT_GAP)),
+            "条款缺配器差 {}",
+            MIN_INSTRUMENT_GAP
+        );
+        assert!(
+            clause.contains(&format!("≥{} 件", MIN_INSTRUMENT_STRONG)),
+            "条款缺最强段下限 {}",
+            MIN_INSTRUMENT_STRONG
+        );
+        assert!(
+            clause.contains(&format!("≤{} 件", INSTRUMENT_MAX)),
+            "条款缺全曲上限 {}",
+            INSTRUMENT_MAX
+        );
         // 注册表：豁免是 A/B 专属规则，执行者唯一（"每条硬门规则一个条目"）
         let rule = RULE_REGISTRY
             .iter()
             .find(|r| r.id == "minimal_section_exemption")
             .expect("极简段豁免规则未登记");
-        assert_eq!(rule.modes.to_vec(), vec!["mode_a", "mode_b"], "豁免规则模式域应为 A/B");
+        assert_eq!(
+            rule.modes.to_vec(),
+            vec!["mode_a", "mode_b"],
+            "豁免规则模式域应为 A/B"
+        );
         assert_eq!(rule.executor, "declared_minimal_sections", "豁免执行者唯一");
         // A/B：prompt 与清单必须都告知（上游无告知 = 下游硬拦）
         for (m, p) in [
             ("mode_a", crate::commands::prompts::mode_a_system_prompt()),
             ("mode_b", crate::commands::prompts::mode_b_system_prompt()),
         ] {
-            assert!(p.contains("${MINIMAL_SECTION_EXEMPT}"), "{} prompt 未引用豁免条款单源", m);
+            assert!(
+                p.contains("${MINIMAL_SECTION_EXEMPT}"),
+                "{} prompt 未引用豁免条款单源",
+                m
+            );
             assert!(checklist(m).contains("极简段"), "{} 清单未告知豁免", m);
         }
         // C/D：无执行者（validate_lyric_fill / validate_douyin 均不查配器件数），不得告知
@@ -2511,8 +3285,16 @@ mod tests {
             ("mode_c", crate::commands::prompts::mode_c_system_prompt()),
             ("mode_d", crate::commands::prompts::mode_d_system_prompt()),
         ] {
-            assert!(!p.contains("${MINIMAL_SECTION_EXEMPT}"), "{} 无执行者却引用豁免条款（承诺没人执行的门）", m);
-            assert!(!checklist(m).contains("极简段"), "{} 无执行者却在清单告知豁免", m);
+            assert!(
+                !p.contains("${MINIMAL_SECTION_EXEMPT}"),
+                "{} 无执行者却引用豁免条款（承诺没人执行的门）",
+                m
+            );
+            assert!(
+                !checklist(m).contains("极简段"),
+                "{} 无执行者却在清单告知豁免",
+                m
+            );
         }
     }
 
@@ -2531,13 +3313,20 @@ mod tests {
             "${INSTRUMENT_RANGE}",
             "${MIN_ENERGY_GAP}",
         ] {
-            assert!(!d.contains(ph), "mode_d 引用了无执行者的阈值占位符 {}（A/B 专属硬门）", ph);
+            assert!(
+                !d.contains(ph),
+                "mode_d 引用了无执行者的阈值占位符 {}（A/B 专属硬门）",
+                ph
+            );
         }
         for p in [
             crate::commands::prompts::mode_a_system_prompt(),
             crate::commands::prompts::mode_b_system_prompt(),
         ] {
-            assert!(p.contains("${INSTRUMENT_RANGE}"), "A/B prompt 丢了配器区间门");
+            assert!(
+                p.contains("${INSTRUMENT_RANGE}"),
+                "A/B prompt 丢了配器区间门"
+            );
         }
     }
 
@@ -2562,11 +3351,22 @@ mod tests {
         let rule_idx = table.header_index("rule").expect("缺 rule 列");
         let min_idx = table.header_index("value_min").expect("缺 value_min 列");
         let max_idx = table.header_index("value_max").expect("缺 value_max 列");
-        let row = table.rows.iter().find(|r| r.get(rule_idx).map(|s| s.as_str()) == Some("style_arc_high")).expect("缺 style_arc_high 行");
+        let row = table
+            .rows
+            .iter()
+            .find(|r| r.get(rule_idx).map(|s| s.as_str()) == Some("style_arc_high"))
+            .expect("缺 style_arc_high 行");
         let csv_min: u32 = row[min_idx].parse().expect("value_min 非数字");
         let csv_max: u32 = row[max_idx].parse().expect("value_max 非数字");
-        let (_, _, _, smin, smax) = ARC_PARAMS.iter().find(|(n, _, _, _, _)| *n == "全程高能").expect("缺全程高能");
-        assert_eq!((*smin, *smax), (csv_min, csv_max), "全程高能须与 CSV style_arc_high 同源");
+        let (_, _, _, smin, smax) = ARC_PARAMS
+            .iter()
+            .find(|(n, _, _, _, _)| *n == "全程高能")
+            .expect("缺全程高能");
+        assert_eq!(
+            (*smin, *smax),
+            (csv_min, csv_max),
+            "全程高能须与 CSV style_arc_high 同源"
+        );
     }
 
     /// 第二十五批 Q1 修复锁（跨载体）：说明行「空间/力度」槽位必须**既有告知、又有核查者**。
@@ -2601,11 +3401,20 @@ mod tests {
         );
         // ③ 两版校验员（定稿人）：缺槽位必须补齐
         let auditor = crate::commands::roles::auditor().system_prompt;
-        assert!(auditor.contains("${DESC_LINE_SPACE_SLOT}"), "校验员 prompt 未引用槽位");
-        assert!(auditor.contains("必须补齐后再输出"), "校验员 prompt 缺补齐语义（只说上限不管缺项）");
+        assert!(
+            auditor.contains("${DESC_LINE_SPACE_SLOT}"),
+            "校验员 prompt 未引用槽位"
+        );
+        assert!(
+            auditor.contains("必须补齐后再输出"),
+            "校验员 prompt 缺补齐语义（只说上限不管缺项）"
+        );
         // ④ 说明行契约（渲染后含槽位名，零残留）
         let contract = desc_line_contract();
-        assert!(contract.contains(DESC_LINE_SPACE_SLOT), "说明行契约缺槽位名");
+        assert!(
+            contract.contains(DESC_LINE_SPACE_SLOT),
+            "说明行契约缺槽位名"
+        );
         assert!(!contract.contains("${"), "说明行契约渲染后残留占位符");
         // ⑤ 模式 prompt 源文本引用数（上游告知面；prompts.rs 是声明式扫描面文件）
         let src = std::fs::read_to_string(
@@ -2632,10 +3441,19 @@ mod tests {
         let table = kb.table("suno_rules").expect("suno_rules 缺失");
         let rule_idx = table.header_index("rule").expect("缺 rule 列");
         let max_idx = table.header_index("value_max").expect("缺 value_max 列");
-        let desc_idx = table.header_index("description").expect("缺 description 列");
-        let row = table.rows.iter().find(|r| r.get(rule_idx).map(|s| s.as_str()) == Some("desc_line_max")).expect("缺 desc_line_max 行");
+        let desc_idx = table
+            .header_index("description")
+            .expect("缺 description 列");
+        let row = table
+            .rows
+            .iter()
+            .find(|r| r.get(rule_idx).map(|s| s.as_str()) == Some("desc_line_max"))
+            .expect("缺 desc_line_max 行");
         let csv_max: usize = row[max_idx].parse().expect("value_max 非数字");
-        assert_eq!(csv_max, DESC_LINE_MAX_CHARS, "desc_line_max 须与 DESC_LINE_MAX_CHARS 同源");
+        assert_eq!(
+            csv_max, DESC_LINE_MAX_CHARS,
+            "desc_line_max 须与 DESC_LINE_MAX_CHARS 同源"
+        );
         assert!(
             row[desc_idx].contains(&DESC_LINE_MAX_CHARS.to_string()),
             "desc_line_max 描述须写明上限（该文本会渲染进提示词）: {}",
@@ -2654,18 +3472,38 @@ mod tests {
         let rule_idx = table.header_index("rule").expect("缺 rule 列");
         let min_idx = table.header_index("value_min").expect("缺 value_min 列");
         let max_idx = table.header_index("value_max").expect("缺 value_max 列");
-        let desc_idx = table.header_index("description").expect("缺 description 列");
+        let desc_idx = table
+            .header_index("description")
+            .expect("缺 description 列");
         for (rule, lo, hi) in [
-            ("line_chars_verse", LYRIC_LINE_VERSE_MIN, LYRIC_LINE_VERSE_MAX),
-            ("line_chars_chorus", LYRIC_LINE_CHORUS_MIN, LYRIC_LINE_CHORUS_MAX),
+            (
+                "line_chars_verse",
+                LYRIC_LINE_VERSE_MIN,
+                LYRIC_LINE_VERSE_MAX,
+            ),
+            (
+                "line_chars_chorus",
+                LYRIC_LINE_CHORUS_MIN,
+                LYRIC_LINE_CHORUS_MAX,
+            ),
         ] {
             let row = table
                 .rows
                 .iter()
                 .find(|r| r.get(rule_idx).map(|s| s.as_str()) == Some(rule))
                 .unwrap_or_else(|| panic!("suno_rules 缺 {} 行", rule));
-            assert_eq!(row[min_idx].parse::<usize>().unwrap(), lo, "{} value_min 须与常量同源", rule);
-            assert_eq!(row[max_idx].parse::<usize>().unwrap(), hi, "{} value_max 须与常量同源", rule);
+            assert_eq!(
+                row[min_idx].parse::<usize>().unwrap(),
+                lo,
+                "{} value_min 须与常量同源",
+                rule
+            );
+            assert_eq!(
+                row[max_idx].parse::<usize>().unwrap(),
+                hi,
+                "{} value_max 须与常量同源",
+                rule
+            );
             assert!(
                 row[desc_idx].contains(&format!("{}-{}", lo, hi)),
                 "{} 描述须写明区间（该文本会渲染进提示词）: {}",
@@ -2691,14 +3529,19 @@ mod tests {
             douyin_row[desc_idx]
         );
         // 占位符渲染值 = CSV 区间（有人手改 CSV 忘了改常量，或反之，都红）
-        let rendered = interpolate("${LYRIC_CHARS_VERSE}|${LYRIC_CHARS_CHORUS}|${LYRIC_LINE_VERSE_MAX}|${DOUYIN_LINE_MAX}");
+        let rendered = interpolate(
+            "${LYRIC_CHARS_VERSE}|${LYRIC_CHARS_CHORUS}|${LYRIC_LINE_VERSE_MAX}|${DOUYIN_LINE_MAX}",
+        );
         assert_eq!(
             rendered,
             format!(
                 "{}-{}|{}-{}|{}|{}",
-                LYRIC_LINE_VERSE_MIN, LYRIC_LINE_VERSE_MAX,
-                LYRIC_LINE_CHORUS_MIN, LYRIC_LINE_CHORUS_MAX,
-                LYRIC_LINE_VERSE_MAX, DOUYIN_LINE_MAX_CHARS
+                LYRIC_LINE_VERSE_MIN,
+                LYRIC_LINE_VERSE_MAX,
+                LYRIC_LINE_CHORUS_MIN,
+                LYRIC_LINE_CHORUS_MAX,
+                LYRIC_LINE_VERSE_MAX,
+                DOUYIN_LINE_MAX_CHARS
             )
         );
     }
@@ -2745,8 +3588,7 @@ const PLAN_FIELD_CONTRACT: &str = "【SongPlan 字段契约（最高优先级：
 3. 说明行 → 每段 instruments + positive_local + energy + negative_local：instruments 只放在场乐器；positive_local 写行为、${DESC_LINE_SPACE_SLOT}、人声状态；energy 为 ${ENERGY_SCALE}（A/B 必填）；段内退出写 negative_local（渲染为 X drop out）。\n\
 4. 极简段 → minimal=true：仅 intro/outro/bridge/interlude 且 energy≤${MINIMAL_ENERGY_MAX}，notes 写理由。\n\
 5. 配器（A/B）：极简 ≥${MIN_INSTRUMENT_MINIMAL}；Chorus 类 ≥${MIN_INSTRUMENT_CHORUS}；其余 ≥${MIN_INSTRUMENT_CORE}；最强 ≥${MIN_INSTRUMENT_STRONG}；差 ≥${MIN_INSTRUMENT_GAP}；上限 ${INSTRUMENT_MAX}。\n\
-6. 歌词 → sections[].lines；参数 → settings（variety=${VARIETY}）；notes 写分析/裁决，不渲染。\n7. D 模式另填 mode_meta.douyin（clip/hook_line/loop_tail；scene 由请求盖写勿自选）；mix 含 M-01+M-06；negative 含 long intro/slow build/fade out。";
-
+6. 歌词 → sections[].lines；参数 → settings（variety=${VARIETY}；reference_audio 默认 false，为 true 时 audio_influence 可非 0）；notes 写分析/裁决，不渲染。\n7. D 模式另填 mode_meta.douyin（clip/hook_line/loop_tail；scene 由请求盖写勿自选）；mix 含 M-01+M-06；negative 含 long intro/slow build/fade out。\n8. 可选文本层（默认 null=关闭）：pronunciation_hints（多音字/发音）、persona（声音指纹）、series_context（专辑/系列一致性）。";
 
 /// 说明行契约正文（单源：本文件唯一一份；数值一律 `${占位符}`）。
 const DESC_LINE_CONTRACT: &str = "【说明行契约（全模式统一）】每段说明行形如 [乐器1+行为, 乐器2+行为, …, ${DESC_LINE_SPACE_SLOT}, 人声状态]（A/B 模式另在行尾标 能量:X），整行含方括号 ≤${DESC_LINE_MAX} 字符。上限宽松：不得为缩短而删乐器或行为动词（最强段 ≥${MIN_INSTRUMENT_STRONG} 件、单段 ${INSTRUMENT_RANGE} 件照常执行），也不得靠堆修饰词占满；超过上限的说明行会被 plan::validate 硬校验拦下。\n\
@@ -2801,7 +3643,13 @@ mod desc_line_tests {
         let six = "[acoustic guitar fingerpicked, cello dark bowing, warm piano cushions, light brushed drums, deep bass pulses, intimate room, voice open earnest, 能量:9]";
         for (name, l) in [("最强段5件", five), ("六件强配", six)] {
             let n = l.chars().count();
-            assert!(n <= DESC_LINE_MAX_CHARS, "{} 合法说明行 {} 字符超上限 {}", name, n, DESC_LINE_MAX_CHARS);
+            assert!(
+                n <= DESC_LINE_MAX_CHARS,
+                "{} 合法说明行 {} 字符超上限 {}",
+                name,
+                n,
+                DESC_LINE_MAX_CHARS
+            );
         }
     }
 
@@ -2833,8 +3681,17 @@ mod desc_line_tests {
                 }
             }
         }
-        assert!(checked >= 10, "说明行示例扫描数量异常（应≥10，实际 {}）——扫描逻辑失效即锁失效", checked);
-        assert!(violations.is_empty(), "说明行示例超过 {} 字符上限：\n{}", DESC_LINE_MAX_CHARS, violations.join("\n"));
+        assert!(
+            checked >= 10,
+            "说明行示例扫描数量异常（应≥10，实际 {}）——扫描逻辑失效即锁失效",
+            checked
+        );
+        assert!(
+            violations.is_empty(),
+            "说明行示例超过 {} 字符上限：\n{}",
+            DESC_LINE_MAX_CHARS,
+            violations.join("\n")
+        );
     }
 
     /// 行型谓词单源：缩进/未缩进同判（旧方案侧不 trim → 缩进行漏检，与终稿侧判法分叉）
@@ -2848,9 +3705,16 @@ mod desc_line_tests {
 
     #[test]
     fn territory_r4_desc_line_owner_is_producer() {
-        assert!(TERRITORY_RULES.iter().any(|(id, domain, owner)| *id == "R-4" && domain.contains("说明行") && *owner == "制作人"));
+        assert!(TERRITORY_RULES
+            .iter()
+            .any(|(id, domain, owner)| *id == "R-4"
+                && domain.contains("说明行")
+                && *owner == "制作人"));
         let producer_prompt = crate::commands::roles::producer().system_prompt;
-        assert!(producer_prompt.contains("领地声明（R-4）"), "制作人提示词应含 R-4 领地声明");
+        assert!(
+            producer_prompt.contains("领地声明（R-4）"),
+            "制作人提示词应含 R-4 领地声明"
+        );
     }
 
     /// #14 冲突裁决措辞**双载体**守护（红灯先行）。
@@ -2873,7 +3737,8 @@ mod desc_line_tests {
             assert!(
                 injection.contains(key),
                 "冲突裁决**注入**缺语义锚点 \"{}\"\n{}",
-                key, injection
+                key,
+                injection
             );
         }
         // 反向：人设不得残留与裁决职责对立的旧口径（"只做整合"/"不自己改细节"）

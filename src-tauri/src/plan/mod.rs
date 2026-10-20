@@ -35,6 +35,15 @@ pub struct SongPlan {
     pub mode_meta: ModeMeta,
     /// 创作说明（不渲染给 Suno）
     pub notes: Option<String>,
+    /// P1-9 / M-08：发音/多音字/同音替代提示（纯文本；默认 null=关闭）
+    #[serde(default)]
+    pub pronunciation_hints: Option<String>,
+    /// P1-9 / M-05：可复用 Persona/声音指纹描述（纯文本；默认 null=关闭）
+    #[serde(default)]
+    pub persona: Option<String>,
+    /// P1-9 / M-11：专辑/系列一致性上下文（纯文本；默认 null=关闭）
+    #[serde(default)]
+    pub series_context: Option<String>,
 }
 
 /// Style 六层的全局部分（渲染为 Suno Style 栏，恒英文——§3.7）
@@ -119,9 +128,12 @@ pub struct SunoSettings {
     #[schemars(range(max = 100))]
     pub variety: u8,
     pub vocal_gender: Option<VocalGender>,
-    /// 0–100；仅上传音频时有意义
+    /// 0–100；仅参考音频模式有意义（P1-9 / M-12：默认 null/0；`reference_audio=true` 时允许非 0）
     #[schemars(range(max = 100))]
     pub audio_influence: Option<u8>,
+    /// P1-9 / M-12：是否启用参考音频模式（默认 false → Audio Influence 须 0/null）
+    #[serde(default)]
+    pub reference_audio: bool,
 }
 
 /// 歌词与 notes 语言（D13：zh/en 两值；Style 恒英文与此无关）
@@ -186,7 +198,12 @@ pub mod fixtures {
                     positive_local: vec!["full, soaring".into()],
                     negative_local: vec!["no drums".into()],
                     energy: Some(8),
-                    instruments: vec!["guzheng".into(), "cello".into(), "dizi".into(), "pipa".into()],
+                    instruments: vec![
+                        "guzheng".into(),
+                        "cello".into(),
+                        "dizi".into(),
+                        "pipa".into(),
+                    ],
                     minimal: false,
                     target_seconds: None,
                     lines: vec!["雨落长街".into(), "灯火未眠".into()],
@@ -198,9 +215,16 @@ pub mod fixtures {
                 variety: 0,
                 vocal_gender: Some(VocalGender::Female),
                 audio_influence: None,
+                reference_audio: false,
             },
-            mode_meta: ModeMeta { lyrics_lang: LyricLang::Zh, douyin: None },
+            mode_meta: ModeMeta {
+                lyrics_lang: LyricLang::Zh,
+                douyin: None,
+            },
             notes: None,
+            pronunciation_hints: None,
+            persona: None,
+            series_context: None,
         }
     }
 }
@@ -225,7 +249,10 @@ mod tests {
     fn plan_ir_is_transparent() {
         let p = minimal_plan();
         let ir = PlanIr(p.clone());
-        assert_eq!(serde_json::to_value(&ir).unwrap(), serde_json::to_value(&p).unwrap());
+        assert_eq!(
+            serde_json::to_value(&ir).unwrap(),
+            serde_json::to_value(&p).unwrap()
+        );
     }
 
     #[test]
@@ -243,7 +270,13 @@ mod tests {
             SectionKind::Breakdown,
         ]
         .iter()
-        .map(|k| serde_json::to_value(k).unwrap().as_str().unwrap().to_string())
+        .map(|k| {
+            serde_json::to_value(k)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
         .collect();
         assert_eq!(names, ["pre_chorus", "post_chorus", "breakdown"]);
     }

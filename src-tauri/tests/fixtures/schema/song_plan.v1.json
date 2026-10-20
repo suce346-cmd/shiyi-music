@@ -279,6 +279,10 @@
             "null"
           ]
         },
+        "reference_audio": {
+          "default": false,
+          "type": "boolean"
+        },
         "style_influence": {
           "maximum": 100,
           "minimum": 0,
@@ -307,6 +311,7 @@
       },
       "required": [
         "audio_influence",
+        "reference_audio",
         "style_influence",
         "variety",
         "vocal_gender",
@@ -337,6 +342,20 @@
         "null"
       ]
     },
+    "persona": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "pronunciation_hints": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "schema_version": {
       "maximum": 1,
       "minimum": 1,
@@ -347,6 +366,13 @@
         "$ref": "#/$defs/Section"
       },
       "type": "array"
+    },
+    "series_context": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "settings": {
       "$ref": "#/$defs/SunoSettings"
@@ -362,8 +388,11 @@
     "global",
     "mode_meta",
     "notes",
+    "persona",
+    "pronunciation_hints",
     "schema_version",
     "sections",
+    "series_context",
     "settings",
     "title"
   ],

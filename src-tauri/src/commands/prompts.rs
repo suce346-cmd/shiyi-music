@@ -246,7 +246,7 @@ ${VOCAL_DIM_COUNT_CN}维思考检查表（音域/音色/发声/颤音/咬字/节
 ### 6. Suno 参数
 根据弧线类型选值：
 ${ARC_TABLE}
-Audio Influence = 0（无参考音频时）
+Audio Influence = 0（无参考音频/reference_audio=false 时；开启参考音频时可非 0）
 
 ## 输出映射（SongPlan 字段——输出结构由 JSON schema 约束，见《SongPlan 字段契约》）
 
@@ -772,7 +772,7 @@ ${VOCAL_DIM_COUNT_CN}维思考检查表（音域/音色/发声/颤音/咬字/节
 - 说明行中的配器选择必须能在第二步的情感翻译或意象映射中找到依据
 
 ## Suno 参数
-Weirdness: ${DOUYIN_WEIRD_RANGE} | Style Influence: ${DOUYIN_STYLE_RANGE} | Audio Influence = 0（无参考音频时）
+Weirdness: ${DOUYIN_WEIRD_RANGE} | Style Influence: ${DOUYIN_STYLE_RANGE} | Audio Influence = 0（无参考音频/reference_audio=false 时；开启参考音频时可非 0）
 
 ## D 模式 V2 硬规则（P1-7，写入 mode_meta.douyin；场景由请求盖写勿自选）
 
@@ -1041,7 +1041,7 @@ ${VOCAL_DIM_COUNT_CN}维思考检查表（音域/音色/发声/颤音/咬字/节
 - 说明行中的配器选择必须能在第二步的情感翻译或意象映射中找到依据
 
 ### 7. Suno 参数
-- Weirdness: ${MODE_B_WEIRD_RANGE} | Style Influence: ${MODE_B_STYLE_RANGE} | Audio Influence = 0（无参考音频时）
+- Weirdness: ${MODE_B_WEIRD_RANGE} | Style Influence: ${MODE_B_STYLE_RANGE} | Audio Influence = 0（无参考音频/reference_audio=false 时；开启参考音频时可非 0）
 
 ## 输出映射（SongPlan 字段——输出结构由 JSON schema 约束，见《SongPlan 字段契约》）
 
@@ -1100,16 +1100,30 @@ mod tests {
         assert!(!p.contains("${"), "占位符必须全部解析");
         for (name, wmin, wmax, smin, smax) in crate::rules::ARC_PARAMS {
             // ARC_PARAMS 名不带"型"后缀（U型已带），prompt 展示名统一补"型"
-            let display = if name.ends_with('型') { name.to_string() } else { format!("{}型", name) };
+            let display = if name.ends_with('型') {
+                name.to_string()
+            } else {
+                format!("{}型", name)
+            };
             assert!(p.contains(&display), "A 模式 prompt 缺弧线: {}", display);
             let param_line = format!(
                 "{}：Weirdness {}-{} | Style Influence {}-{}",
                 display, wmin, wmax, smin, smax
             );
-            assert!(p.contains(&param_line), "弧线 {} 参数区间与 ARC_PARAMS 不一致，应为: {}", display, param_line);
+            assert!(
+                p.contains(&param_line),
+                "弧线 {} 参数区间与 ARC_PARAMS 不一致，应为: {}",
+                display,
+                param_line
+            );
         }
         // 新增 5 弧线的逐段密度表（与制作人 prompt 同措辞）
-        for cell in ["长 Build（蓄而不放）", "全开一击爆发", "最强（超过开头）", "回到 Intro 配置（呼应）"] {
+        for cell in [
+            "长 Build（蓄而不放）",
+            "全开一击爆发",
+            "最强（超过开头）",
+            "回到 Intro 配置（呼应）",
+        ] {
             assert!(p.contains(cell), "A 模式 prompt 缺新弧线密度格: {}", cell);
         }
     }
