@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AppSettings, RoleApiOverride, StructuredMode } from "../types";
 import { STRUCTURED_MODES } from "../types";
@@ -89,6 +89,22 @@ export function sanitizeStored(raw: unknown): AppSettings {
   return base;
 }
 
+/** F1：未验证进钥匙串的明文 */
+export interface PlaintextHold { global?: string; roles: Record<string, string> }
+
+/** F1：确保 secret 已在钥匙串（读回相等）；不等则写入并读回校验。成功 null，失败返回原因。 */
+export async function ensureInKeychain(account: string, secret: string): Promise<string | null> {
+  try {
+    const cur = await invoke<string | null>("keychain_get", { account });
+    if (cur === secret) return null;
+    await invoke("keychain_set", { account, secret });
+    const back = await invoke<string | null>("keychain_get", { account });
+    return back === secret ? null : "写入后读回不一致";
+  } catch (e) {
+    return secretErrorMessage(e);
+  }
+}
+
 /** 从原始 localStorage 数据中提取待迁移的明文 key（全局 + 各角色），不经过 sanitize */
 function extractPlaintextKeys(raw: unknown): { global?: string; roles: Record<string, string> } {
   const roles: Record<string, string> = {};
@@ -126,12 +142,26 @@ export function useSettings() {
   const [secretsReady, setSecretsReady] = useState(false);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
+  /** F1：未验证进钥匙串的明文（account → 明文）。写出时原样保留，绝不哨兵化。 */
+  // 同步初始化为 localStorage 中**全部**明文：迁移验证完成前的任何写出都不得把它们哨兵化
+  const plaintextHold = useRef<PlaintextHold>(null as unknown as PlaintextHold);
+  if (plaintextHold.current === null) {
+    try {
+      const raw0 = localStorage.getItem(STORAGE_KEY);
+      plaintextHold.current = raw0 ? extractPlaintextKeys(JSON.parse(raw0)) : { roles: {} };
+    } catch {
+      plaintextHold.current = { roles: {} };
+    }
+    if (plaintextHold.current.global === undefined) delete plaintextHold.current.global;
+  }
+  /** F1/F5：迁移失败原因（account → 原因），设置界面就地显示 */
+  const [migrationErrors, setMigrationErrors] = useState<Record<string, string>>({});
 
   /** 基础 updateSettings（只更新内存 + 本地非敏感字段；密钥同步由 useSettingsWithSecrets 包一层） */
   const updateSettings = useCallback((partial: Partial<AppSettings>) => {
     setSettings((prev) => {
       const next = { ...prev, ...partial };
-      persistNonSecrets(next);
+      persistNonSecrets(next, plaintextHold.current);
       return next;
     });
   }, []);
@@ -141,37 +171,42 @@ export function useSettings() {
     let cancelled = false;
     (async () => {
       try {
-        // 1. 迁移：localStorage 明文 → 钥匙串（仅未迁移过且存在明文时）
-        // U-2：仅全部写入成功才置迁移标记（旧规则失败也置——明文永远留在 localStorage，
-        // "下次启动再试"永不发生）；失败保留明文等下次启动重试
-        // C-10（P0-6）：钥匙串已持有密钥（迁移成功或此前已迁移）→ 回填结束无条件写出脱敏副本，
-        // 清掉 localStorage 残留明文（旧规则只在 changed 时写：明文 apiKey 不触发回填 → 明文永久留存）。
-        // 迁移失败 → 不写（写出会把明文哨兵化，而钥匙串没有副本 = 密钥丢失；U-2 保留明文待重试）。
-        let keysSafeInKeychain = !!localStorage.getItem(MIGRATED_KEY);
-        if (!keysSafeInKeychain) {
-          let migrated = true;
-          try {
-            const raw = localStorage.getItem(STORAGE_KEY);
-            if (raw) {
-              const { global, roles } = extractPlaintextKeys(JSON.parse(raw));
-              if (global) await invoke("keychain_set", { account: "global", secret: global });
-              for (const [role, secret] of Object.entries(roles)) {
-                await invoke("keychain_set", { account: `role:${role}`, secret });
-              }
-            }
-          } catch {
-            // 迁移失败不阻断启动（用户可重新输入，下次启动再试）；明文保留，不置标记
-            migrated = false;
-          }
-          if (migrated) {
-            keysSafeInKeychain = true;
-            try { localStorage.setItem(MIGRATED_KEY, "1"); } catch { /* 忽略 */ }
+        // 1. 迁移：localStorage 明文 → 钥匙串。
+        // F1（P0 审计）：明文只有在**钥匙串读回值 = 明文**时才可清除。旧规则凭 MIGRATED_KEY 标记
+        // 或 keychain_set 未抛错就判定安全——标记残留 + 钥匙串被清空/不同时，回填结束的脱敏写出
+        // 会把唯一一份明文哨兵化（Key 丢失）。现逐 account：读回相等 → 安全；否则写入并读回校验；
+        // 仍不相等/出错 → 保留明文（hold）、内存用明文继续可用，并把原因报给设置界面。
+        const plain = { global: plaintextHold.current.global, roles: { ...plaintextHold.current.roles } };
+        const pending: Array<[string, string]> = [];
+        if (plain.global) pending.push(["global", plain.global]);
+        for (const [role, secret] of Object.entries(plain.roles)) pending.push([`role:${role}`, secret]);
+        const failures: Record<string, string> = {};
+        for (const [account, secret] of pending) {
+          const reason = await ensureInKeychain(account, secret);
+          if (reason === null) {
+            // 读回校验通过 → 释放（之后写出才允许哨兵化）
+            if (account === "global") delete plaintextHold.current.global;
+            else delete plaintextHold.current.roles[account.slice("role:".length)];
+          } else {
+            failures[account] = reason;
           }
         }
+        if (pending.length > 0 && Object.keys(failures).length === 0) {
+          try { localStorage.setItem(MIGRATED_KEY, "1"); } catch { /* 忽略 */ }
+        }
+        if (!cancelled && Object.keys(failures).length > 0) setMigrationErrors(failures);
           // 2. 回填：钥匙串 → 内存（全局 + 各角色）
-          const next: AppSettings = { ...settingsRef.current };
+          const next: AppSettings = { ...settingsRef.current, roleOverrides: { ...settingsRef.current.roleOverrides } };
           let changed = false;
-          if (next.apiKey === KEYCHAIN_SENTINEL || next.apiKey === "") {
+          // 未能进钥匙串的明文：内存直接用明文（Key 仍可用），不再去钥匙串回填它
+          const hold = plaintextHold.current;
+          if (hold.global) { next.apiKey = hold.global; changed = true; }
+          for (const [role, secret] of Object.entries(hold.roles)) {
+            const ro = next.roleOverrides as Record<string, RoleApiOverride>;
+            ro[role] = { ...(ro[role] ?? {}), api_key: secret };
+            changed = true;
+          }
+          if (!hold.global && (next.apiKey === KEYCHAIN_SENTINEL || next.apiKey === "")) {
             try {
               const pw = await invoke<string | null>("keychain_get", { account: "global" });
               if (pw) { next.apiKey = pw; changed = true; }
@@ -183,7 +218,7 @@ export function useSettings() {
           if (next.roleOverrides) {
             for (const role of Object.keys(next.roleOverrides)) {
               const entry = (next.roleOverrides as Record<string, RoleApiOverride>)[role];
-              if (entry?.api_key === KEYCHAIN_SENTINEL) {
+              if (entry?.api_key === KEYCHAIN_SENTINEL && !(role in hold.roles)) {
                 try {
                   const pw = await invoke<string | null>("keychain_get", { account: `role:${role}` });
                   if (pw) { entry.api_key = pw; changed = true; }
@@ -196,7 +231,8 @@ export function useSettings() {
           }
           if (!cancelled) {
             if (changed) setSettings(next);
-            if (keysSafeInKeychain) persistNonSecrets(next);
+            // 脱敏写出：hold 中的明文原样保留（未验证进钥匙串的绝不哨兵化）
+            persistNonSecrets(next, plaintextHold.current);
             setSecretsReady(true);
           }
         } catch (e) {
@@ -210,14 +246,27 @@ export function useSettings() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return { settings, updateSettings, showSettings, setShowSettings, secretsReady };
+  /** 用户之后成功同步了某 account → 该明文不再需要保留 */
+  const releaseHold = useCallback((account: string) => {
+    const h = plaintextHold.current;
+    if (account === "global") delete h.global;
+    else delete h.roles[account.slice("role:".length)];
+    setMigrationErrors((prev) => {
+      if (!(account in prev)) return prev;
+      const n = { ...prev };
+      delete n[account];
+      return n;
+    });
+  }, []);
+
+  return { settings, updateSettings, showSettings, setShowSettings, secretsReady, migrationErrors, releaseHold, plaintextHold };
 }
 
 /** 持久化非敏感字段——apiKey/api_key 写哨兵（真实值只在钥匙串）。
  * 唯一写出口统一过 sanitizeStored：读写同一清洗函数，运行期输入的越界值
  * （如 max_tokens 32000）不再原样落盘，后端不会在生成时整请求拒绝（F-1 根治）。
  * export 供单测（唯一写出口的清洗语义必须钉死）。 */
-export function persistNonSecrets(s: AppSettings) {
+export function persistNonSecrets(s: AppSettings, hold?: PlaintextHold) {
   try {
     const scrubbed: AppSettings = {
       ...s,
@@ -229,7 +278,14 @@ export function persistNonSecrets(s: AppSettings) {
         ]),
       ),
     };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitizeStored(scrubbed)));
+    // hold 中的明文要原样落盘：sanitizeStored 只保留哨兵，故清洗后再写回明文
+    const out = sanitizeStored(scrubbed) as AppSettings;
+    if (hold?.global) out.apiKey = hold.global;
+    for (const [k, secret] of Object.entries(hold?.roles ?? {})) {
+      out.roleOverrides = { ...out.roleOverrides, [k]: { ...(out.roleOverrides?.[k as keyof typeof out.roleOverrides] ?? {}), api_key: secret } };
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(out));
+
   } catch { /* 配额等失败静默（与旧行为一致） */ }
 }
 
@@ -259,23 +315,24 @@ export function useSettingsWithSecrets() {
   /** P0-10 残留：同步失败（如 Key 格式被后端拒绝）按 account 记录，设置界面就地显示；成功即清除。
    * 旧规则只 console.error——用户看到输入框有值，重启后 Key 消失，无任何提示。 */
   const [secretErrors, setSecretErrors] = useState<Record<string, string>>({});
+  const { releaseHold } = base;
   const invokeSync = useCallback((account: string, secret: string | null) => {
     const op = secret
       ? invoke("keychain_set", { account, secret })
       : invoke("keychain_delete", { account });
     op.then(
-      () => setSecretErrors((prev) => {
+      () => (releaseHold(account), setSecretErrors((prev) => {
         if (!(account in prev)) return prev;
         const next = { ...prev };
         delete next[account];
         return next;
-      }),
+      })),
       (e) => {
         console.error(`[keychain] ${account} 同步失败:`, e);
         setSecretErrors((prev) => ({ ...prev, [account]: secretErrorMessage(e) }));
       },
     );
-  }, []);
+  }, [releaseHold]);
   /** 防抖窗口内退出/卸载时 pending 同步会随 timer 一起死——最终值丢失（与"中间态写入"同族缺口）。
    * flush：把所有 pending 的最终值立即落盘（卸载 cleanup 调用）。 */
   const flushPendingSyncs = useCallback(() => {
@@ -322,11 +379,13 @@ export function useSettingsWithSecrets() {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const cur = JSON.parse(raw) as AppSettings;
-        persistNonSecrets({ ...cur, ...partial });
+        persistNonSecrets({ ...cur, ...partial }, base.plaintextHold.current);
       }
     } catch { /* 忽略 */ }
   }, [base, scheduleSync]);
-  return { ...base, updateSettings, secretErrors };
+  // F1/F5：迁移失败原因与同步失败同一显示通道（同 account 以最新同步结果为准）
+  const mergedErrors = useMemo(() => ({ ...base.migrationErrors, ...secretErrors }), [base.migrationErrors, secretErrors]);
+  return { ...base, updateSettings, secretErrors: mergedErrors };
 }
 
 /** 后端 AppError 序列化为 {kind, message}；其他形态兜底转字符串 */

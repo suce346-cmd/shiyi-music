@@ -115,8 +115,14 @@ describe("U-2 迁移标记行为锁", () => {
     expect(localStorage.getItem(STORAGE_KEY)).toContain("ak-plain-legacy");
   });
 
-  it("迁移写入成功：置标记（一次性迁移，不重复执行）", async () => {
+  it("迁移写入成功（读回校验通过）：置标记", async () => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ apiKey: "ak-plain-legacy" }));
+    const kc = new Map<string, string>();
+    invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "keychain_set") kc.set(String(args?.account), String(args?.secret));
+      if (cmd === "keychain_get") return kc.get(String(args?.account)) ?? null;
+      return null;
+    });
 
     await renderReady();
 
@@ -157,13 +163,46 @@ describe("C-10 迁移后无条件脱敏落盘", () => {
     expect(kc.get("role:emotion")).toBe("ak-role-plain");
   });
 
-  it("此前已迁移但仍有残留明文（旧版本遗留）：启动即清", async () => {
+  it("F1：已迁移标记 + 钥匙串为空 + 明文：写入无法读回 → 明文保留，界面显示原因", async () => {
     localStorage.setItem(MIGRATED_KEY, "1");
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ apiKey: "ak-plain-legacy" }));
-    invokeMock.mockImplementation(noBackfill);
+    invokeMock.mockImplementation(noBackfill); // keychain_set 不落地、keychain_get 恒 null
+    const h = await renderReady();
+    expect(localStorage.getItem(STORAGE_KEY)).toContain("ak-plain-legacy");
+    expect(h.result.current.settings.apiKey).toBe("ak-plain-legacy"); // 内存仍可用
+    expect(h.result.current.secretErrors.global).toContain("读回不一致");
+  });
+
+  it("F1：钥匙串持有不同值 → 写入并读回校验后才清明文", async () => {
+    localStorage.setItem(MIGRATED_KEY, "1");
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ apiKey: "ak-plain-legacy" }));
+    const kc = new Map<string, string>([["global", "ak-other"]]);
+    invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "keychain_set") kc.set(String(args?.account), String(args?.secret));
+      if (cmd === "keychain_get") return kc.get(String(args?.account)) ?? null;
+      return null;
+    });
+    await renderReady();
+    expect(kc.get("global")).toBe("ak-plain-legacy");
+    expect(localStorage.getItem(STORAGE_KEY)).not.toContain("ak-plain-legacy");
+  });
+
+  it("F1：钥匙串读回已等于明文 → 直接清明文，不重复写", async () => {
+    localStorage.setItem(MIGRATED_KEY, "1");
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ apiKey: "ak-plain-legacy" }));
+    invokeMock.mockImplementation(async (cmd: string) => (cmd === "keychain_get" ? "ak-plain-legacy" : null));
     await renderReady();
     expect(localStorage.getItem(STORAGE_KEY)).not.toContain("ak-plain-legacy");
-    expect(calls("keychain_set")).toHaveLength(0); // 已迁移不重复写钥匙串
+    expect(calls("keychain_set")).toHaveLength(0);
+  });
+
+  it("F1：迁移验证完成前的设置写出也不得哨兵化明文", async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ apiKey: "ak-plain-legacy" }));
+    invokeMock.mockImplementation(async () => { throw new Error("keychain locked"); });
+    const h = await renderReady();
+    await act(async () => { await h.result.current.updateSettings({ model: "x" }); });
+    expect(localStorage.getItem(STORAGE_KEY)).toContain("ak-plain-legacy");
+    expect(h.result.current.secretErrors.global).toContain("keychain locked");
   });
 
   it("迁移失败 + 角色回填 changed=true：仍不写出（防明文被哨兵化而钥匙串无副本）", async () => {
