@@ -19,7 +19,7 @@ pub const PLAN_IR_SCHEMA_NAME: &str = "plan_ir";
 /// - 只剥**schema 元键** `description`/`format`（与 `type`/`properties` 同级的那些）。
 /// - **绝不**把 `properties` 映射本身当 schema 递归剥键——否则名为 `description`/`format`
 ///   的字段定义会被删掉（模型再也填不了这两个字段名）。
-fn strictify(v: &mut Value) {
+pub(crate) fn strictify(v: &mut Value) {
     match v {
         Value::Object(map) => {
             map.remove("format");

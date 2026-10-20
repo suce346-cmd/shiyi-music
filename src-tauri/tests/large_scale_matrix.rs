@@ -230,14 +230,14 @@ async fn large_scale_matrix() {
                 (None, Some(format!("{:?}: {}", e.kind, e.message)))
             }
         };
+        let evs = events.lock().unwrap().clone();
         let (validation_passed, issues) = match &output {
-            Some(text) => {
-                let (passed, issues) = measure(&case, text);
-                (Some(passed), issues)
-            }
+            Some(_) => match measure_from_events(&evs) {
+                Some((passed, issues)) => (Some(passed), issues),
+                None => (Some(false), vec!["缺少 AuditResult 事件".into()]),
+            },
             None => (None, Vec::new()),
         };
-        let evs = events.lock().unwrap().clone();
         println!("CASE-DONE {} {} validation={:?} issues={} events={} dur={}s",
             case.prompt_id, match_mode(&case.mode), validation_passed, issues.len(), evs.len(),
             started.elapsed().as_secs());
@@ -253,11 +253,37 @@ fn results_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("target").join("large-test")
 }
 
-/// C-11（P0-7）：测量口径 = 生产终稿门 `collect_hard_issues`（validate_for_mode + Style Prompt
-/// 长度门 + BPM 等）。旧口径只调 validate_for_mode，比生产宽松，矩阵读数虚高。
-fn measure(case: &Case, text: &str) -> (bool, Vec<String>) {
-    let issues = orchestrator::collect_hard_issues(&case.mode, text, case.original_lyrics);
-    (issues.is_empty(), issues)
+/// P1-3/4：测量口径 = 生产终稿门 `plan::validate`（经流水线 `AuditResult` 事件；
+/// 离线 dry-run 直接调 validate）。不再走文本终稿门。
+fn measure_from_events(events: &[String]) -> Option<(bool, Vec<String>)> {
+    // 取最后一次 AuditResult
+    for raw in events.iter().rev() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else { continue };
+        let ev = v.get("event").unwrap_or(&v);
+        if ev.get("type").and_then(|t| t.as_str()) != Some("audit_result") {
+            continue;
+        }
+        let pass = ev.get("pass").and_then(|p| p.as_bool()).unwrap_or(false);
+        let findings = ev
+            .get("findings")
+            .and_then(|f| f.as_array())
+            .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+            .unwrap_or_default();
+        return Some((pass, findings));
+    }
+    None
+}
+
+fn measure_plan(case: &Case, plan: &suno_prompt_generator_lib::plan::SongPlan) -> (bool, Vec<String>) {
+    use suno_prompt_generator_lib::plan::validate::{self, ValidateCtx};
+    let ctx = ValidateCtx {
+        mode: case.mode.to_str_name(),
+        original_lyrics: case.original_lyrics,
+        converged: None,
+    };
+    let issues = validate::validate(plan, &ctx);
+    let lines: Vec<String> = issues.iter().map(|i| i.line()).collect();
+    (validate::passed(&issues), lines)
 }
 
 /// 离线 dry-run：路径相对工程、测量与生产终稿门同源（无网络，常规 cargo test 运行）
@@ -271,14 +297,19 @@ fn offline_dry_run_paths_and_measurement() {
     let src = include_str!("large_scale_matrix.rs");
     let hardcoded = ["/Users/", "hakayi"].concat();
     assert_eq!(src.matches(hardcoded.as_str()).count(), 0, "源码不得出现机器绝对路径");
-    let validate_call = ["validator::", "validate_for_mode("].concat();
-    assert_eq!(src.matches(validate_call.as_str()).count(), 0, "测量必须走 collect_hard_issues");
-    // 冻结矩阵每例都能离线测量（空终稿必有硬问题，证明走的是真门而非恒通过）
+    assert!(src.contains("measure_from_events"), "测量必须走 AuditResult 事件");
+    assert!(src.contains("measure_plan"), "离线测量必须走 plan::validate");
+    // 禁止再接线旧文本终稿门（拼接点缀，避免本断言字符串自命中）
+    let banned = ["orchestrator::", "collect_hard_issues("].concat();
+    assert_eq!(src.matches(banned.as_str()).count(), 0, "矩阵不得再调旧文本终稿门");
+    // 离线：空 sections 的最小方案应被硬门拒绝
     let cases = matrix();
     assert!(!cases.is_empty());
+    let mut bad = suno_prompt_generator_lib::plan::fixtures::minimal_plan();
+    bad.sections.clear();
     for c in &cases {
-        let (passed, issues) = measure(c, "");
-        assert!(!passed && !issues.is_empty(), "{} {} 空终稿应被硬门拒绝", match_mode(&c.mode), c.prompt_id);
+        let (passed, issues) = measure_plan(c, &bad);
+        assert!(!passed && !issues.is_empty(), "{} {} 空段落方案应被硬门拒绝", match_mode(&c.mode), c.prompt_id);
     }
 }
 

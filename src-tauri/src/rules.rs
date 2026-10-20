@@ -279,7 +279,7 @@ pub const RULE_REGISTRY: &[RuleSpec] = &[
     RuleSpec { id: "douyin_bpm_min", modes: &["mode_d"], symbols: &["DOUYIN_BPM_MIN"], executor: "check_bpm_range" },
     RuleSpec { id: "lyric_fill_tail_allow", modes: &["mode_c"], symbols: &["LYRIC_FILL_TAIL_ALLOW"], executor: "validate_lyric_fill" },
     // D-Envelope：方案信封契约——解析器是"方案是否符合结构"的唯一执行者（2026-09-09）
-    RuleSpec { id: "plan_envelope_contract", modes: ALL_MODES, symbols: &["parse_plan_sections", "envelope_spec"], executor: "enforce_envelope" },
+    // P1-3：信封退役；字段契约由 plan_field_contract 注入，终稿门 = plan::validate
     // -----------------------------------------------------------------------
     // 准入限额族（第十三批 D1 补登记）：与上面的**产出硬门族**不同，这三条是**请求准入硬门**
     // （§6.4 验收口径是"每条参数/格式规则恰有一个执行点"，未按产出/准入分类豁免）。
@@ -767,6 +767,9 @@ pub const PROSE_CARRIERS: &[ProseCarrier] = &[
     // 说明行「空间/力度」槽位名（第二十五批 Q1）：进 LLM 上下文（经 ${DESC_LINE_SPACE_SLOT}
     // 插值进四清单/契约/制作人与校验员核查项）——登记即受扫描网与入网自证覆盖。
     ProseCarrier { name: "DESC_LINE_SPACE_SLOT", text: DESC_LINE_SPACE_SLOT, csv_locked: &[] },
+    ProseCarrier { name: "PLAN_FIELD_CONTRACT", text: PLAN_FIELD_CONTRACT, csv_locked: &[] },
+    ProseCarrier { name: "PATCH_TARGET_RULE", text: PATCH_TARGET_RULE, csv_locked: &[] },
+    ProseCarrier { name: "PATCH_TARGET_RULE_LYRIC", text: PATCH_TARGET_RULE_LYRIC, csv_locked: &[] },
     // 打回 issue 文案（第二十批补登记）：随【格式问题】清单进 LLM 上下文（orchestrator 打回循环），
     // 此前既不在两个源文件里也没登记——同样是发现网暴露的漏网载体。为此把常量放开为 `pub(crate)`。
     ProseCarrier {
@@ -820,6 +823,9 @@ fn placeholder_pairs() -> Vec<(&'static str, String)> {
         ("${MODE_B_STYLE_RANGE}", format!("{}-{}", MODE_B_STYLE_MIN, MODE_B_STYLE_MAX)),
         ("${DESC_LINE_MAX}", DESC_LINE_MAX_CHARS.to_string()),
         ("${DESC_LINE_SPACE_SLOT}", DESC_LINE_SPACE_SLOT.to_string()),
+        ("${VARIETY}", crate::plan::suno_profile::VARIETY_DEFAULT.value.to_string()),
+        ("${PATCH_TARGET_RULE}", PATCH_TARGET_RULE.to_string()),
+        ("${PATCH_TARGET_RULE_LYRIC}", PATCH_TARGET_RULE_LYRIC.to_string()),
         ("${DOUYIN_LINE_MAX}", DOUYIN_LINE_MAX_CHARS.to_string()),
         ("${LYRIC_CHARS_VERSE}", format!("{}-{}", LYRIC_LINE_VERSE_MIN, LYRIC_LINE_VERSE_MAX)),
         ("${LYRIC_CHARS_CHORUS}", format!("{}-{}", LYRIC_LINE_CHORUS_MIN, LYRIC_LINE_CHORUS_MAX)),
@@ -1076,6 +1082,7 @@ mod tests {
         carriers.push(("minimal_section_exemption".to_string(), minimal_section_exemption()));
         carriers.push(("envelope_spec".to_string(), envelope_spec()));
         carriers.push(("desc_line_contract".to_string(), desc_line_contract()));
+        carriers.push(("plan_field_contract".to_string(), plan_field_contract()));
         carriers.push(("territory_rules_text".to_string(), territory_rules_text()));
         carriers.push(("arc_table".to_string(), interpolate("${ARC_TABLE}")));
         carriers.push(("arc_inline".to_string(), interpolate("${ARC_INLINE}")));
@@ -1974,7 +1981,7 @@ mod tests {
         // ① 精确条数：这是**绊线**不是真源（真源是上面的数组本身）——数字变化必须是有意为之。
         //    新增规则时同步改本断言（并登记执行器 + 扫描面 + 清单文档改动面）；删除规则时
         //    必须先确认无执行点残留。
-        const EXPECTED_RULES: usize = 20;
+        const EXPECTED_RULES: usize = 19;
         assert_eq!(
             RULE_REGISTRY.len(),
             EXPECTED_RULES,
@@ -2721,6 +2728,24 @@ pub fn desc_line_contract() -> String {
 /// 模式 prompt 格式行 + 制作人核查项 + 校验员打回项；由
 /// `desc_line_space_slot_declared_across_carriers` 跨载体锁定。
 pub const DESC_LINE_SPACE_SLOT: &str = "空间/力度";
+
+/// 审改修订 target/content 语义（P1-3）：target = SongPlan JSON Pointer，content = 替换值。
+pub const PATCH_TARGET_RULE: &str = "target 为 SongPlan 字段的 JSON Pointer（如 /global/instruments、/sections/N/instruments、/sections/N/positive_local、/sections/N/energy、/sections/N/lines、/settings/weirdness、/notes），content 为该字段替换后的完整 JSON 值（数组字段给整个数组，数值字段给数字），reason 说明理由；增删整段时 target 用 /sections 并给出完整段落数组";
+pub const PATCH_TARGET_RULE_LYRIC: &str = "target 只用 /sections/N/lines（意见类建议用 /notes），content 为该段替换后的完整歌词行数组（一行一个字符串，不含结构标签与括号说明），reason 说明理由";
+
+/// SongPlan 字段契约（P1-3/4）：主持人/审改/定稿按 schema 填字段，交付包由 render_suno 渲染。
+pub fn plan_field_contract() -> String {
+    interpolate(PLAN_FIELD_CONTRACT)
+}
+
+const PLAN_FIELD_CONTRACT: &str = "【SongPlan 字段契约（最高优先级：本阶段按 JSON schema 填字段，不输出排版文本；交付包由程序渲染）】\n\
+1. Style Prompt → global：genre / bpm / key / meter / vocal / instruments / arc / mix 各填英文短标签（渲染为逗号串，≤${STYLE_PROMPT_MAX} 字符）。\n\
+2. Exclude → global.negative：直接写要排除的元素，不加 no/without；正向字段不得出现否定写法。\n\
+3. 说明行 → 每段 instruments + positive_local + energy + negative_local：instruments 只放在场乐器；positive_local 写行为、${DESC_LINE_SPACE_SLOT}、人声状态；energy 为 ${ENERGY_SCALE}（A/B 必填）；段内退出写 negative_local（渲染为 X drop out）。\n\
+4. 极简段 → minimal=true：仅 intro/outro/bridge/interlude 且 energy≤${MINIMAL_ENERGY_MAX}，notes 写理由。\n\
+5. 配器（A/B）：极简 ≥${MIN_INSTRUMENT_MINIMAL}；Chorus 类 ≥${MIN_INSTRUMENT_CHORUS}；其余 ≥${MIN_INSTRUMENT_CORE}；最强 ≥${MIN_INSTRUMENT_STRONG}；差 ≥${MIN_INSTRUMENT_GAP}；上限 ${INSTRUMENT_MAX}。\n\
+6. 歌词 → sections[].lines；参数 → settings（variety=${VARIETY}）；notes 写分析/裁决，不渲染。";
+
 
 /// 说明行契约正文（单源：本文件唯一一份；数值一律 `${占位符}`）。
 const DESC_LINE_CONTRACT: &str = "【说明行契约（全模式统一）】每段说明行形如 [乐器1+行为, 乐器2+行为, …, ${DESC_LINE_SPACE_SLOT}, 人声状态]（A/B 模式另在行尾标 能量:X），整行含方括号 ≤${DESC_LINE_MAX} 字符。上限宽松：不得为缩短而删乐器或行为动词（最强段 ≥${MIN_INSTRUMENT_STRONG} 件、单段 ${INSTRUMENT_RANGE} 件照常执行），也不得靠堆修饰词占满；超过上限的说明行会被信封门与终稿硬校验拦下。\n\

@@ -1,9 +1,13 @@
 use crate::budget::SharedBudget;
 use crate::errors::{AppError, ErrorKind};
-use crate::models::{LLMResponse, StreamChunk, TokenUsage};
+use crate::models::{LLMResponse, TokenUsage};
+#[cfg(test)]
+use crate::models::StreamChunk;
+#[cfg(test)]
 use futures_util::StreamExt;
 use reqwest::Client;
 use serde_json::Value;
+#[cfg(test)]
 use tauri::{AppHandle, Emitter, Runtime};
 
 /// 截断错误响应体（防敏感信息/超长回显，历史修复）
@@ -448,7 +452,6 @@ pub(crate) async fn call_llm_silent(
 
 /// P1-2 结构化调用的请求体（纯函数，离线可测）。
 /// `none` 档不应走到这里（调用方先拒）；json_object 档在最前插入 schema system 消息。
-#[cfg_attr(not(test), expect(dead_code, reason = "P1-3/P1-4 编排接线前仅离线测试调用；接线后 expect 失效即红，届时删除本属性"))]
 pub(crate) fn structured_body(
     model: &str,
     messages: &[Value],
@@ -478,7 +481,6 @@ pub(crate) fn structured_body(
 }
 
 /// `none` 档的固定报错（用户可见；不发请求、不自由文本兜底）。
-#[cfg_attr(not(test), expect(dead_code, reason = "P1-3/P1-4 编排接线前仅离线测试调用；接线后 expect 失效即红，届时删除本属性"))]
 pub(crate) fn structured_unsupported_error(model: &str) -> AppError {
     AppError::new(
         ErrorKind::Validation,
@@ -490,7 +492,6 @@ pub(crate) fn structured_unsupported_error(model: &str) -> AppError {
 }
 
 /// 模型正文 → JSON → 本地 schema 校验 → 类型化。失败 = Parse，detail 含 JSON 路径。
-#[cfg_attr(not(test), expect(dead_code, reason = "P1-3/P1-4 编排接线前仅离线测试调用；接线后 expect 失效即红，届时删除本属性"))]
 pub(crate) fn parse_structured<T: serde::de::DeserializeOwned>(raw: &str, schema: &Value) -> Result<(T, Value), AppError> {
     let v: Value = serde_json::from_str(raw.trim()).map_err(|e| {
         AppError::new(ErrorKind::Parse, format!("结构化输出不是合法 JSON: {}", e))
@@ -505,7 +506,6 @@ pub(crate) fn parse_structured<T: serde::de::DeserializeOwned>(raw: &str, schema
 }
 
 /// 结构化调用参数（端点 + 生成参数 + 档位/schema）；预算、消息与退避钩子单独传。
-#[cfg_attr(not(test), expect(dead_code, reason = "P1-3/P1-4 编排接线前仅离线测试调用；接线后 expect 失效即红，届时删除本属性"))]
 pub(crate) struct StructuredCall<'a> {
     pub base_url: &'a str,
     pub api_key: &'a str,
@@ -525,7 +525,6 @@ pub(crate) struct StructuredCall<'a> {
 ///   解析/校验失败不重发、不发"修复提示"，原样以 Parse 报出。
 /// - 非流式：结构化阶段不出 token 流，进度由调用方发 `PhaseProgress` 事件。
 /// - 思考参数不注入（部分网关 thinking 与 response_format 互斥）。
-#[cfg_attr(not(test), expect(dead_code, reason = "P1-3/P1-4 编排接线前仅离线测试调用；接线后 expect 失效即红，届时删除本属性"))]
 pub(crate) async fn call_llm_structured<T: serde::de::DeserializeOwned>(
     c: &StructuredCall<'_>,
     messages: Vec<Value>,
@@ -632,56 +631,12 @@ async fn probe_structured_caps_unchecked(
     Ok(StructuredMode::None)
 }
 
-/// 调用 LLM 流式接口并逐 chunk 转发给前端（budget 透传gen 缺省 temperature 0.7）
-/// notify 透传退避播报钩子（#27-c）
-pub(crate) async fn call_llm_stream<R: Runtime>(
-    app: AppHandle<R>,
-    base_url: &str,
-    api_key: &str,
-    model: &str,
-    messages: Vec<Value>,
-    thinking: bool,
-    budget: &SharedBudget,
-    gen: &crate::models::GenerationConfig,
-    run_id: &str,
-    reserve: std::time::Duration,
-    notify: Option<BackoffHook<'_>>,
-) -> Result<LLMResponse, AppError> {
-    let client_timeout = budget.remaining().as_secs().min(if thinking { 300 } else { 120 }).max(10);
-    let client = build_client(client_timeout)?;
-    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-
-    let mut body = serde_json::json!({
-        "model": model,
-        "messages": messages,
-        "stream": true,
-        "temperature": gen.stream_temperature(),
-        "max_tokens": gen.max_tokens(),
-    });
-    if thinking {
-        apply_thinking(&mut body, model, gen.max_tokens(), true);
-    }
-
-    let response = send_with_retry(
-        client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", api_key))
-            .header("Content-Type", "application/json")
-            .json(&body),
-        budget,
-        run_id,
-        reserve,
-        notify,
-    )
-    .await?;
-
-    stream_response(app, response, run_id, budget, reserve).await
-}
 
 /// 解析单行 SSE 数据（`data: ...` 前缀行，兼容 `data:{...}` 无空格变体，尾部行修复）。
 /// 返回本次解析出的增量内容（未 emit，由调用方决定是否转发）。
 /// 流式 usage 块（`{"choices":[],"usage":{...}}` 尾部形态）累加进 stream_usage。
 /// 纯函数，可独立单测（不含网络）。
+#[cfg(test)]
 fn parse_sse_line(
     line: &str,
     full_content: &mut String,
@@ -717,6 +672,7 @@ fn parse_sse_line(
 /// 维护跨 chunk 行缓冲区，确保被拆分的 JSON 行不会丢失。
 /// R8：按保底断流——可用预算（remaining - reserve）耗尽时不断死，
 /// 带着已收内容正常返回（finish_reason 记 truncated_by_budget，调用方按截断分级处置）。
+#[cfg(test)]
 async fn stream_response<R: Runtime>(
     app: AppHandle<R>,
     response: reqwest::Response,

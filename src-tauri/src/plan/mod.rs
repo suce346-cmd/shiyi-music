@@ -145,12 +145,11 @@ pub struct ModeMeta {
 #[serde(transparent)]
 pub struct PlanIr(pub SongPlan);
 
-#[cfg(test)]
-pub(crate) mod fixtures {
+pub mod fixtures {
     use super::*;
 
     /// 最小合法 SongPlan（测试共用）
-    pub(crate) fn minimal_plan() -> SongPlan {
+    pub fn minimal_plan() -> SongPlan {
         SongPlan {
             schema_version: SCHEMA_VERSION,
             title: Some("雨巷".into()),
