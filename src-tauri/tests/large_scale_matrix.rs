@@ -301,8 +301,19 @@ fn offline_dry_run_paths_and_measurement() {
     assert!(src.contains("measure_from_events"), "测量必须走 AuditResult 事件");
     assert!(src.contains("measure_plan"), "离线测量必须走 plan::validate");
     // 禁止再接线旧文本终稿门（拼接点缀，避免本断言字符串自命中）
-    let banned = ["orchestrator::", "collect_hard_issues("].concat();
-    assert_eq!(src.matches(banned.as_str()).count(), 0, "矩阵不得再调旧文本终稿门");
+    // 禁止再接线旧文本终稿门（拼接点缀，避免本断言字符串自命中）
+    for banned in [
+        ["collect_hard_issues", "("].concat(),
+        ["validate_for_mode", "("].concat(),
+        ["validate_production", "("].concat(),
+        ["validate_douyin", "("].concat(),
+    ] {
+        assert_eq!(
+            src.matches(banned.as_str()).count(),
+            0,
+            "矩阵不得再调旧文本终稿门：{banned}"
+        );
+    }
     // 离线：空 sections 的最小方案应被硬门拒绝
     let cases = matrix();
     assert!(!cases.is_empty());

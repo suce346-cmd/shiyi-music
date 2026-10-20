@@ -1137,6 +1137,23 @@ mod tests {
         );
     }
 
+    /// §5.1#5 变异覆盖：style_length 经 check_style_and_headers 接线（关闭则红）
+    #[test]
+    fn style_length_wired_through_plan_validate() {
+        let mut p = minimal_plan();
+        // 清空全局层，令渲染 Style 短于 STYLE_PROMPT_MIN
+        p.global.genre = vec!["folk".into()];
+        p.global.bpm = None;
+        p.global.key = None;
+        p.global.meter = None;
+        p.global.vocal.clear();
+        p.global.instruments.clear();
+        p.global.arc = None;
+        p.global.mix.clear();
+        let c = codes(&validate(&p, &ctx("mode_b")));
+        assert!(c.contains(&"style_length"), "{c:?}");
+    }
+
     /// P1-9 / M-12：reference_audio 默认关；开启后允许 Audio Influence ≠ 0
     #[test]
     fn reference_audio_allows_nonzero_influence() {

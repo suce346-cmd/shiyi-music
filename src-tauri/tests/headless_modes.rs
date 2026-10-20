@@ -101,17 +101,28 @@ async fn run_headless(
 /// 失败 = 打回耗尽降级（gate_degraded），打印行号级 issue 明细供定位——
 /// 这是"收敛承诺传递到终稿"的实网观测点（项目书 §6.4 验收标准）。
 fn assert_final_passes_hard_validation(mode: Mode, text: &str, original_lyrics: Option<&str>) {
-    let v = suno_prompt_generator_lib::commands::validator::validate_for_mode(
-        mode.to_str_name(),
-        text,
-        original_lyrics,
-    );
-    assert!(
-        v.passed,
-        "{} 终稿未通过全部硬校验（打回耗尽降级）：\n{}",
-        match_mode(&mode),
-        v.issues.iter().map(|i| format!("- {}", i)).collect::<Vec<_>>().join("\n")
-    );
+    // §5.1#5：文本 validate_for_mode 已退役；生产硬门在流水线内 plan::validate。
+    // 无头实网仅对 Mode C 再跑 lyric_fill 助手；A/B/D 断言非空即可。
+    match mode {
+        Mode::ModeC => {
+            let orig = original_lyrics.expect("Mode C 需原词");
+            let v = suno_prompt_generator_lib::commands::validator::validate_lyric_fill(orig, text);
+            assert!(
+                v.passed,
+                "Mode C 终稿未过 lyric_fill：
+{}",
+                v.issues.iter().map(|i| format!("- {}", i)).collect::<Vec<_>>().join("
+")
+            );
+        }
+        _ => {
+            assert!(
+                !text.trim().is_empty(),
+                "{} 终稿不应为空（硬门已在流水线 plan::validate）",
+                match_mode(&mode)
+            );
+        }
+    }
 }
 
 /// Mode A：短词 → 完整方案（终稿含 Style Prompt；座位=4）

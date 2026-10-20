@@ -251,6 +251,7 @@ pub const RULE_EXECUTOR_FILES: &[&str] = &[
     "commands/validator.rs",
     "commands/orchestrator.rs",
     "plan/validate.rs",
+    "plan/douyin.rs",
     // 准入硬门执行者（#26 新增三条规则所在处）
     "models/mod.rs",
     "commands/interject.rs",
@@ -284,45 +285,46 @@ pub const RULE_REGISTRY: &[RuleSpec] = &[
         id: "min_section_tags",
         modes: &["mode_a", "mode_b"],
         symbols: &["MIN_SECTION_TAGS"],
-        executor: "validate_production",
+        executor: "check_structure",
     },
     RuleSpec {
         id: "min_energy_gap",
         modes: &["mode_a", "mode_b"],
         symbols: &["MIN_ENERGY_GAP"],
-        executor: "validate_production",
+        executor: "check_arc",
     },
     RuleSpec {
         id: "instrument_gap_weak_strong_max",
         modes: &["mode_a", "mode_b"],
         symbols: &[
             "MIN_INSTRUMENT_GAP",
-            "MIN_INSTRUMENT_WEAK",
             "MIN_INSTRUMENT_STRONG",
             "INSTRUMENT_MAX",
+            "MIN_INSTRUMENT_CORE",
+            "MIN_INSTRUMENT_CHORUS",
         ],
-        executor: "validate_production",
+        executor: "check_arc",
     },
-    // 极简段豁免：最弱段下限的合法放宽口，唯一执行者 = declared_minimal_sections（validator）。
+    // 极简段豁免：最弱段下限的合法放宽口，唯一执行者 = plan::validate::section_floor。
     // 与上一条同域（A/B 配器件数族）；上游告知单源 = rules::minimal_section_exemption()。
     RuleSpec {
         id: "minimal_section_exemption",
         modes: &["mode_a", "mode_b"],
-        symbols: &["MIN_INSTRUMENT_WEAK", "declared_minimal_sections"],
-        executor: "declared_minimal_sections",
+        symbols: &["MIN_INSTRUMENT_MINIMAL"],
+        executor: "section_floor",
     },
     RuleSpec {
         id: "audio_influence_zero",
         modes: &["mode_a", "mode_b"],
         symbols: &[],
-        executor: "check_audio_influence",
+        executor: "check_params",
     },
-    // ARC_PARAMS 经 arc_param_union() 折叠后在 validator 消费，对外消费符号登记访问器
+    // ARC_PARAMS 经 arc_param_union() 折叠后在 plan::validate::check_params 消费
     RuleSpec {
         id: "mode_a_param_arc_union",
         modes: &["mode_a"],
         symbols: &["arc_param_union"],
-        executor: "validate_production",
+        executor: "check_params",
     },
     RuleSpec {
         id: "mode_b_param_range",
@@ -333,7 +335,7 @@ pub const RULE_REGISTRY: &[RuleSpec] = &[
             "MODE_B_STYLE_MIN",
             "MODE_B_STYLE_MAX",
         ],
-        executor: "validate_production",
+        executor: "check_params",
     },
     RuleSpec {
         id: "mode_d_param_range",
@@ -344,25 +346,25 @@ pub const RULE_REGISTRY: &[RuleSpec] = &[
             "DOUYIN_STYLE_MIN",
             "DOUYIN_STYLE_MAX",
         ],
-        executor: "validate_douyin",
+        executor: "check_params",
     },
     RuleSpec {
         id: "hook_min_count",
         modes: &["mode_d"],
-        symbols: &["HOOK_MIN_COUNT"],
-        executor: "validate_douyin",
+        symbols: &["DOUYIN_V2_HOOK_REPEAT_MIN"],
+        executor: "validate_douyin_v2",
     },
     RuleSpec {
         id: "verse_max_lines",
         modes: &["mode_d"],
-        symbols: &["VERSE_MAX_LINES"],
-        executor: "validate_douyin",
+        symbols: &["DOUYIN_V2_VERSE_MAX_LINES"],
+        executor: "validate_douyin_v2",
     },
     RuleSpec {
         id: "douyin_line_max",
         modes: &["mode_d"],
         symbols: &["DOUYIN_LINE_MAX_CHARS"],
-        executor: "validate_douyin",
+        executor: "check_lyric_lines",
     },
     // 说明行上限：A/B/C/D 全模式硬门，
     // 两侧同读 DESC_LINE_MAX_CHARS（旧 douyin_desc_line_max 仅 D 单模式 + 80 上限，已废）
@@ -370,7 +372,7 @@ pub const RULE_REGISTRY: &[RuleSpec] = &[
         id: "desc_line_max_terminal",
         modes: ALL_MODES,
         symbols: &["DESC_LINE_MAX_CHARS", "is_desc_line"],
-        executor: "desc_line_length_issues",
+        executor: "check_style_and_headers",
     },
     // 执行者更正（第三批）：原挂 check_style_prompt_blocks（不消费 DOUYIN_BPM_MIN、只查下限），
     // 真执行者 = check_bpm_range（validator::check_bpm_range 消费 DOUYIN_BPM_MIN，经 orchestrator 接线）。
@@ -3209,7 +3211,7 @@ mod tests {
             );
             assert!(cl.contains("说明行"), "{} 清单缺说明行条目", m);
         }
-        // A/B 极简段豁免是下游实装（validator::declared_minimal_sections）的放宽口，上游必须告知
+        // A/B 极简段豁免是下游实装（plan::validate::section_floor）的放宽口，上游必须告知
         for m in ["mode_a", "mode_b"] {
             assert!(
                 checklist(m).contains("极简段"),
@@ -3231,7 +3233,7 @@ mod tests {
 
     /// 极简段豁免：单源（`minimal_section_exemption()`）+ 模式域与执行者严格一致（A/B）。
     /// 上游缺告知（旧版 mode_b 零告知）或与执行者对立（旧版 A/B 都写"Intro/Outro 不豁免"，
-    /// 而执行者 `declared_minimal_sections` 对任何声明的段落都豁免）都会打回降级，
+    /// 而执行者 `section_floor` 对声明 minimal 且 kind/energy 合规的段落放宽）都会打回降级，
     /// 故锁死三件事：条款数字与常量同源、A/B 必须引用、C/D 不得引用。
     #[test]
     fn minimal_section_exemption_is_ab_only_and_single_sourced() {
@@ -3267,7 +3269,7 @@ mod tests {
             vec!["mode_a", "mode_b"],
             "豁免规则模式域应为 A/B"
         );
-        assert_eq!(rule.executor, "declared_minimal_sections", "豁免执行者唯一");
+        assert_eq!(rule.executor, "section_floor", "豁免执行者唯一");
         // A/B：prompt 与清单必须都告知（上游无告知 = 下游硬拦）
         for (m, p) in [
             ("mode_a", crate::commands::prompts::mode_a_system_prompt()),
@@ -3597,7 +3599,7 @@ const DESC_LINE_CONTRACT: &str = "【说明行契约（全模式统一）】每�
 3. 人声映射：每段说明行的人声状态必须能映射到 Style Prompt 的人声描述序列（高能段用开放真声形态、低能段用气声/假声形态），不得自造与 Style Prompt 无关的人声描述。\n\
 4. 能量标注：A/B 模式每段说明行末尾必须标 能量:X（${ENERGY_SCALE}）——必须用中文'能量:X'格式、X 为 ${ENERGY_SCALE} 单值，禁英文 energy、禁区间写法（如 8-9）。";
 
-/// 极简段豁免条款（单源；**仅 A/B 适用**）：下游执行者 = `validator::declared_minimal_sections`
+/// 极简段豁免条款（单源；**仅 A/B 适用**）：下游执行者 = `plan::validate::section_floor`
 /// 过滤 + `validate_production` 的 mode_a/mode_b 最弱段下限检查。
 ///
 /// 上下游同域修复（2026-09-18，审计 #20 延伸）：旧版此条款只写在 `prompts.rs` 的 mode_a 一处

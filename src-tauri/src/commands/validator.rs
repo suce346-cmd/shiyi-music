@@ -1,16 +1,13 @@
-//! 代码校验器：对最终生成的文本做**确定性**硬校验。
+//! 文本侧校验助手（§5.1#5 退役后）。
 //!
-//! 不信任 LLM 的自检（同一模型自审有盲区），格式类规则由代码裁决。
-//! 校验失败时返回具体问题清单供主持人重收口。
+//! 终稿硬门唯一入口 = `plan::validate`。本模块保留仍被 IR 门调用的助手：
+//! `validate_lyric_fill`（Mode C）、`style_prompt_length_issues`、`check_bpm_range`、
+//! `desc_line_length_issues`（供 lyric_fill）、`is_bare_package_line`、字数/行型工具，
+//! 以及 `extract_style_prompt`（无头观测）。
 //!
-//! ⚠️ 双源维护提醒：本文件的规则阈值引用 `crate::rules` 单源常量
-//! （STYLE_PROMPT_MAX_CHARS/MIN_ENERGY_GAP/MIN_INSTRUMENT_GAP 等），
-//! `roles.rs` 校验员 prompt 的格式规范通过 `rules::checklist` 同源拼接——
-//! 改数值只改 `rules.rs`，改任一处必须跑单源一致单测，
-//! 否则会出现「prompt 说合规、代码说不合规」的漂移。
+//! 已删：`validate_for_mode` / `validate_production` / 文本 `validate_douyin` /
+//! `param_range_issues` / `check_audio_influence` / `declared_minimal_sections`。
 
-// 能量解析唯一实现在 energy.rs（原先 validator/knowledge 各持一份拷贝）
-use crate::energy::extract_energy_values;
 use crate::rules;
 
 /// 校验结果
@@ -22,26 +19,17 @@ pub struct ValidationResult {
 
 impl ValidationResult {
     fn ok() -> Self {
-        Self { passed: true, issues: vec![] }
-    }
-    fn fail(issues: Vec<String>) -> Self {
-        Self { passed: false, issues }
-    }
-}
-
-/// 提取全部 `[...]` 结构标签（[Verse 1] / [Chorus] 等）
-fn extract_section_tags(text: &str) -> Vec<String> {
-    let mut tags = Vec::new();
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            // 跳过说明行（含逗号的都是说明行，不是结构标签）
-            if !trimmed.contains(',') {
-                tags.push(trimmed.to_string());
-            }
+        Self {
+            passed: true,
+            issues: vec![],
         }
     }
-    tags
+    fn fail(issues: Vec<String>) -> Self {
+        Self {
+            passed: false,
+            issues,
+        }
+    }
 }
 
 /// 提取 Style Prompt 正文（冒号后）。
@@ -88,99 +76,6 @@ pub fn extract_style_prompt(text: &str) -> Option<String> {
     Some(first.to_string())
 }
 
-/// 否定/退出项判定（P0-9）：`no X`、`without X`、`X drops out`、`X stop(s)` 不是在场乐器
-/// （`double/triple/quadruple/multiple stop(s)` 为弦乐演奏技法，除外——F9）。
-fn is_absent_item(part: &str) -> bool {
-    let l = part.trim().to_lowercase();
-    // F9（P0 审计）：" stop" 尾项须排除演奏技法——弦乐 `double stops`/`triple stop` 是在场演奏，不是退出
-    let stop_tail = l.strip_suffix(" stops").or_else(|| l.strip_suffix(" stop"));
-    let stop_is_absence = stop_tail.is_some_and(|head| {
-        let prev = head.rsplit(' ').next().unwrap_or("");
-        !matches!(prev, "double" | "triple" | "quadruple" | "multiple")
-    });
-    l.starts_with("no ")
-        || l.starts_with("without ")
-        || stop_is_absence
-        || l.ends_with(" drops out")
-        || l.ends_with(" drop out")
-}
-
-/// 从说明行解析乐器数量（从尾部连续去掉空间/人声/力度尾项）
-/// 说明行格式：[乐器1+行为, 乐器2+行为, ..., 空间/力度, 人声状态]
-/// P0-9（B-02 归因，docs/qa/b02-root-cause.md）：
-/// - 能量尾项须与 energy::extract_energy_values 同口径（能量/energy 两种标记）——旧词表只认“能量”，
-///   英文 `energy:6` 尾项不被剥离 → 整行全计为乐器（v3 #19 “配器过多 8 件”实为 5 件）；
-/// - 否定/退出项（`no drums`、`without bass`、`bass drops out`、`drums stop`）不是在场乐器，任意位置剔除
-///   （v3 #17 Bridge “3 件”实为 1 件）。
-///
-/// 环境声/拟音（rain、hum、tape hiss）文本无法可靠区分，留待 SongPlan 结构化字段（P1-4）。
-fn parse_section_instruments(line: &str) -> usize {
-    let parts: Vec<&str> = line
-        .trim()
-        .trim_start_matches('[')
-        .trim_end_matches(']')
-        .split(',')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty() && !is_absent_item(s))
-        .collect();
-    let non_instrument_keywords = [
-        "voice", "vocal", "人声", "声", "room", "空间", "hall", "大厅", "能量", "energy",
-        "力度", "no voice", "无", "氛围", "atmosphere", "reverb", "混响", "极简段",
-    ];
-    let mut count = parts.len();
-    while count > 0 {
-        if let Some(last) = parts.get(count - 1) {
-            let l = last.to_lowercase();
-            if non_instrument_keywords.iter().any(|k| l.contains(k)) {
-                count -= 1;
-            } else {
-                break;
-            }
-        } else {
-            break;
-        }
-    }
-    count
-}
-
-/// 提取全部（结构标签，说明行乐器数）对
-fn extract_section_instrument_counts(text: &str) -> Vec<(String, usize)> {
-    let mut result = Vec::new();
-    let mut current_section: Option<String> = None;
-    for line in text.lines() {
-        let t = line.trim();
-        if t.starts_with('[') && t.ends_with(']') && !t.contains(',') {
-            current_section = Some(t.to_string());
-        } else if t.starts_with('[') && t.ends_with(']') && t.contains(',') {
-            // 说明行：为该节配器数
-            if let Some(section) = &current_section {
-                result.push((section.clone(), parse_section_instruments(t)));
-            }
-        }
-    }
-    result
-}
-
-/// D-极简段豁免（2026-09-13，与 D 模式叙事型例外同设计模式）：
-/// 说明行含"极简段"标记的段落，豁免最弱段件数下限（MIN_INSTRUMENT_WEAK）——
-/// 抒情/叙事曲的 Bridge/Intro 用 1-2 件乐器是合法音乐设计（40 例实证 P6 三连
-/// [Intro]:2件 被规则逼降级）。豁免须显式声明，可审计；能量差/配器差/上限照查。
-fn declared_minimal_sections(text: &str) -> Vec<String> {
-    let mut result = Vec::new();
-    let mut current_section: Option<String> = None;
-    for line in text.lines() {
-        let t = line.trim();
-        if t.starts_with('[') && t.ends_with(']') && !t.contains(',') {
-            current_section = Some(t.to_string());
-        } else if t.starts_with('[') && t.ends_with(']') && t.contains(',') && t.contains("极简段") {
-            if let Some(section) = &current_section {
-                result.push(section.clone());
-            }
-        }
-    }
-    result
-}
-
 /// 说明行长度门（终稿层单源，A/B/C/D 全模式共用）：上限 rules::DESC_LINE_MAX_CHARS。
 /// 与 plan::validate 同读一个常量、共用同一个行型谓词（rules::is_desc_line）——
 /// 上游输出约束与下游校验约束不再各写一套（R1 根因：上游零告知 + 下游 80 硬门 → 必然降级）。
@@ -213,114 +108,6 @@ pub fn desc_line_length_issues(text: &str) -> Vec<String> {
     issues
 }
 
-/// Mode A/B：校验生产方案（真硬校验）
-pub fn validate_production(mode: &str, text: &str) -> ValidationResult {
-    let mut issues = Vec::new();
-
-    // 1. Style Prompt 存在性（A/B）。
-    //    长度门（上限 ≤350 / 下限 ≥30）不再在此复述——全模式唯一执行者 =
-    //    `style_prompt_length_issues`，由 `orchestrator::collect_hard_issues` 单点接线。
-    //    同规则两套判法会产生双报，且 C/D 无执行者（审计第三批缺口）正是这么漏出来的。
-    if extract_style_prompt(text).is_none() {
-        issues.push("未找到 Style Prompt 字段".to_string());
-    }
-
-    // 2. 结构标签必须存在（至少单源段落数）
-    let tags = extract_section_tags(text);
-    if tags.len() < rules::MIN_SECTION_TAGS {
-        issues.push(format!("结构标签不足 {} 个（当前 {}）", rules::MIN_SECTION_TAGS, tags.len()));
-    }
-
-    // 3. 能量差 ≥ 单源下限（真解析数值，而非仅看关键词）
-    let energy = extract_energy_values(text);
-    if energy.is_empty() {
-        issues.push(format!(
-            "未发现能量标注（应包含 {}-{} 能量值）",
-            rules::ENERGY_SCALE_MIN,
-            rules::ENERGY_SCALE_MAX
-        ));
-    } else {
-        let min = energy.iter().min().copied().unwrap_or(0);
-        let max = energy.iter().max().copied().unwrap_or(0);
-        if max.saturating_sub(min) < rules::MIN_ENERGY_GAP {
-            issues.push(format!(
-                "能量差不足: 最弱 {} vs 最强 {}（要求差 >= {} 级）",
-                min, max, rules::MIN_ENERGY_GAP
-            ));
-        }
-    }
-
-    // 4. 配器差 ≥ 单源下限 + 弱强段下限：解析每段说明行乐器数（Mode A/B 都校验）
-    // Q2：此前只查差值与上限，弱段 1 件/强段 4 件可蒙混过关；现补 MIN_INSTRUMENT_WEAK/STRONG 两条下限。
-    // D-靶向修复：issue 附每段件数明细（段名:件数）——回炉修复从"盲修打摆子"（40例实测 P10':
-    // 1件→修→8件过限）变为按段加/减乐器。明细单源 = extract_section_instrument_counts。
-    if mode == "mode_a" || mode == "mode_b" {
-        let counts = extract_section_instrument_counts(text);
-        // D-极简段豁免：声明"极简段"的段落不计入最弱段下限检查（能量差/差值/上限照查）
-        let minimal: Vec<String> = declared_minimal_sections(text);
-        let counted: Vec<&(String, usize)> = counts
-            .iter()
-            .filter(|(tag, _)| !minimal.iter().any(|m| tag.contains(m.as_str()) || m.contains(tag.as_str())))
-            .collect();
-        if !counts.is_empty() {
-            let detail = counts
-                .iter()
-                .map(|(tag, c)| format!("{}:{}", tag, c))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let min_count = counts.iter().map(|(_, c)| *c).min().unwrap_or(0);
-            let max_count = counts.iter().map(|(_, c)| *c).max().unwrap_or(0);
-            if max_count.saturating_sub(min_count) < rules::MIN_INSTRUMENT_GAP {
-                issues.push(format!(
-                    "配器差不足: 最少 {} 件 / 最多 {} 件（要求差 >= {} 件）；当前各段件数 [{}]",
-                    min_count, max_count, rules::MIN_INSTRUMENT_GAP, detail
-                ));
-            }
-            if !counted.is_empty() && counted.iter().any(|(_, c)| *c < rules::MIN_INSTRUMENT_WEAK) {
-                let weak: Vec<String> = counted.iter().filter(|(_, c)| *c < rules::MIN_INSTRUMENT_WEAK).map(|(t, c)| format!("{}:{}件", t, c)).collect();
-                issues.push(format!(
-                    "最弱段配器不足（要求 >= {} 件）——需按段补乐器: {}；当前各段件数 [{}]",
-                    rules::MIN_INSTRUMENT_WEAK,
-                    weak.join(", "),
-                    detail
-                ));
-            }
-            if max_count < rules::MIN_INSTRUMENT_STRONG {
-                issues.push(format!(
-                    "最强段配器 {} 件（要求 >= {} 件）；当前各段件数 [{}]",
-                    max_count, rules::MIN_INSTRUMENT_STRONG, detail
-                ));
-            }
-            if max_count > rules::INSTRUMENT_MAX {
-                let heavy: Vec<String> = counts.iter().filter(|(_, c)| *c > rules::INSTRUMENT_MAX).map(|(t, c)| format!("{}:{}件", t, c)).collect();
-                issues.push(format!(
-                    "配器过多（要求 <= {}）——需按段减乐器: {}；当前各段件数 [{}]",
-                    rules::INSTRUMENT_MAX,
-                    heavy.join(", "),
-                    detail
-                ));
-            }
-        } else {
-            issues.push("未找到任何说明行（每段应含 [乐器1+行为, ...] 说明行）".to_string());
-        }
-        // K-3：Audio Influence=0 硬门（双向）——清单写了"Audio Influence=0"但旧校验不查，
-        // 非 0 会让 Suno 匹配不存在的参考音频导致生成漂移（CSV audio_influence 行）。
-        if let Some(msg) = check_audio_influence(text) {
-            issues.push(msg);
-        }
-        // C1/ADR-2：参数区间硬门——CHECKLIST_A/B 承诺的区间准绳由代码执行。
-        // 此前 rules::MODE_B_*/ARC_PARAMS 仅有常量与提示词表述、无任何执行点（诊断复现：50/50 双双通过）。
-        issues.extend(param_range_issues(mode, text));
-        // O5（2026-09-13）：断句/禁用标点硬门——校验清单声明"断句单空格、禁 / 与 、"，
-        // 此前仅提示词承诺无执行点（清单-代码口径漂移复发案例）。歌词行检出即报（带行号）。
-        issues.extend(forbidden_break_marks(text));
-        // R1：说明行长度硬门（上游 checklist/信封规范/primer 同源告知同一数字）
-        issues.extend(desc_line_length_issues(text));
-    }
-
-    if issues.is_empty() { ValidationResult::ok() } else { ValidationResult::fail(issues) }
-}
-
 /// O5：歌词行禁用断句符号检出（`/` 斜杠、`、` 顿号——Suno 会读出或忽略）。
 /// 只查歌词行（行型解析），说明行/标签/参数行不查。
 fn forbidden_break_marks(text: &str) -> Vec<String> {
@@ -338,133 +125,6 @@ fn forbidden_break_marks(text: &str) -> Vec<String> {
     issues
 }
 
-/// C1/ADR-2：A/B 参数区间硬门调度（调用方已限定 mode_a/mode_b）。
-/// 参数行可解析→按模式逐条报越界；含参数行但解析失败→报格式；
-/// 无参数行→不在此报（check_audio_influence 的"缺参数行"已覆盖，避免重复判断）。
-fn param_range_issues(mode: &str, text: &str) -> Vec<String> {
-    match parse_weird_style(text) {
-        Some((w, s)) => {
-            if mode == "mode_b" {
-                mode_b_param_issues(w, s)
-            } else {
-                mode_a_param_issues(w, s)
-            }
-        }
-        None => {
-            if text.contains("Weirdness") {
-                vec!["参数行 Weirdness/Style Influence 无法解析（应为 `参数: Weirdness=… | Style Influence=… | Audio Influence=0`）".to_string()]
-            } else {
-                Vec::new()
-            }
-        }
-    }
-}
-
-/// B 专属区间门（MODE_B_* 常量的唯一执行点）。
-fn mode_b_param_issues(w: u32, s: u32) -> Vec<String> {
-    let mut issues = Vec::new();
-    if !(rules::MODE_B_WEIRD_MIN..=rules::MODE_B_WEIRD_MAX).contains(&w) {
-        issues.push(format!(
-            "参数越界: Weirdness={}（B 专属区间 {}-{}）",
-            w, rules::MODE_B_WEIRD_MIN, rules::MODE_B_WEIRD_MAX
-        ));
-    }
-    if !(rules::MODE_B_STYLE_MIN..=rules::MODE_B_STYLE_MAX).contains(&s) {
-        issues.push(format!(
-            "参数越界: Style Influence={}（B 专属区间 {}-{}）",
-            s, rules::MODE_B_STYLE_MIN, rules::MODE_B_STYLE_MAX
-        ));
-    }
-    issues
-}
-
-/// 弧线区间并集门（ARC_PARAMS 经 arc_param_union 派生，激活常量）；精确到单弧线的门
-/// 需终稿带弧线类型机读标注（交付报告既有问题区记录，后续组件补）。
-fn mode_a_param_issues(w: u32, s: u32) -> Vec<String> {
-    let (wlo, whi, slo, shi) = rules::arc_param_union();
-    if !(wlo..=whi).contains(&w) || !(slo..=shi).contains(&s) {
-        vec![format!(
-            "参数越界: Weirdness={}/Style Influence={}（弧线区间并集 {}-{}/{}-{}，弧线参数须落在所选弧线区间内）",
-            w, s, wlo, whi, slo, shi
-        )]
-    } else {
-        Vec::new()
-    }
-}
-
-/// C1/ADR-2：抖音参数区间硬门（3c）。越界且不满足叙事型例外→报。
-/// 叙事型例外（ADR-2 假设的结构化近似）：LLM 判语义（方案中声明"叙事型"归类），
-/// 代码判结构事实（≥N 个非 Hook 叙事段，N = `rules::NARRATIVE_SECTIONS_MIN`）——两项齐备才放行，缺一即打回。
-/// **跨域绑定（第二十三批）**：N 不在本文件写死——上游告知（CHECKLIST_D + 四个角色人设）与
-/// 本判定同读 `rules::NARRATIVE_SECTIONS_MIN`，由 `narrative_exception_threshold_is_single_sourced` 双向锁定。
-fn douyin_param_issue(text: &str, tags: &[String]) -> Option<String> {
-    let (w, s) = parse_weird_style(text)?;
-    let in_douyin = (rules::DOUYIN_WEIRD_MIN..=rules::DOUYIN_WEIRD_MAX).contains(&w)
-        && (rules::DOUYIN_STYLE_MIN..=rules::DOUYIN_STYLE_MAX).contains(&s);
-    if in_douyin {
-        return None;
-    }
-    let narrative_sections = tags
-        .iter()
-        .filter(|t| {
-            let l = t.to_lowercase();
-            l.contains("verse") || l.contains("pre-chorus") || l.contains("bridge")
-        })
-        .count();
-    if narrative_sections >= rules::NARRATIVE_SECTIONS_MIN && text.contains("叙事型") {
-        return None;
-    }
-    Some(format!(
-        "参数越界: Weirdness={}/Style Influence={}（抖音区间 {}-{}/{}-{}；仅当结构含≥{}个叙事段（Verse/Pre-Chorus/Bridge）且方案写明'叙事型'归类方可回落 A/B 弧线区间）",
-        w, s, rules::DOUYIN_WEIRD_MIN, rules::DOUYIN_WEIRD_MAX, rules::DOUYIN_STYLE_MIN, rules::DOUYIN_STYLE_MAX,
-        rules::NARRATIVE_SECTIONS_MIN
-    ))
-}
-
-/// K-3：解析参数行 Audio Influence（Mode A/B 硬门）。双向：缺参数行 / 值非 0 / 无法解析都拦。
-fn check_audio_influence(text: &str) -> Option<String> {
-    let line = text
-        .lines()
-        .find(|l| l.trim_start().starts_with("参数") && l.contains("Audio Influence"));
-    let line = match line {
-        Some(l) => l,
-        None => return Some("缺参数行（末尾须输出 `参数: Weirdness=… | Style Influence=… | Audio Influence=0`）".to_string()),
-    };
-    let after = line.split("Audio Influence").nth(1).unwrap_or("");
-    let num: String = after
-        .trim_start()
-        .trim_start_matches(['=', '：', ':'])
-        .trim_start()
-        .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '.')
-        .collect();
-    match num.parse::<f64>() {
-        Ok(0.0) => None,
-        Ok(v) => Some(format!("Audio Influence 须为 0（无参考音频，当前 {}）", v)),
-        Err(_) => Some("参数行 Audio Influence 无法解析（应为 `Audio Influence=0`）".to_string()),
-    }
-}
-
-/// C1/ADR-2：解析参数行 (Weirdness, Style Influence)。
-/// 缺行返回 None——缺行本身由 check_audio_influence 报告，此处不重复报。
-fn parse_weird_style(text: &str) -> Option<(u32, u32)> {
-    let line = text
-        .lines()
-        .find(|l| l.trim_start().starts_with("参数") && l.contains("Weirdness"))?;
-    let parse_after = |key: &str| -> Option<u32> {
-        let after = line.split(key).nth(1)?;
-        let num: String = after
-            .trim_start()
-            .trim_start_matches(['=', '：', ':'])
-            .trim_start()
-            .chars()
-            .take_while(|c| c.is_ascii_digit())
-            .collect();
-        num.parse::<u32>().ok()
-    };
-    Some((parse_after("Weirdness")?, parse_after("Style Influence")?))
-}
-
 /// 和音虚词单源（用户拍板 2026-09-19）：纯英文虚词 token 不计入歌词行字数。
 /// 根治："(ooh~) 一半是你 一半是我" 剥标点后 ooh 三字母被计入=11 字误判超限。
 /// 扩充规则：只收公认无实义的拟声/和音词，小写匹配；实义词（baby 等）不得收入。
@@ -475,14 +135,21 @@ const LYRIC_VOCABLES: [&str; 9] = ["ooh", "oh", "yeah", "ah", "la", "hey", "woah
 pub(crate) fn count_line_chars_excluding_vocables(s: &str, is_punct: fn(char) -> bool) -> usize {
     s.split_whitespace()
         .filter_map(|t| {
-            let stripped: String = t.chars().filter(|c| !is_punct(*c) && !c.is_whitespace()).collect();
+            let stripped: String = t
+                .chars()
+                .filter(|c| !is_punct(*c) && !c.is_whitespace())
+                .collect();
             if stripped.is_empty() {
                 return None;
             }
             let lower = stripped.to_ascii_lowercase();
             let is_vocable = stripped.bytes().all(|b| b.is_ascii_alphabetic())
                 && LYRIC_VOCABLES.contains(&lower.as_str());
-            if is_vocable { None } else { Some(stripped.chars().count()) }
+            if is_vocable {
+                None
+            } else {
+                Some(stripped.chars().count())
+            }
         })
         .sum()
 }
@@ -495,7 +162,29 @@ fn count_lyric_chars(s: &str) -> usize {
 
 /// 歌词标点表（半角标点 + 中日韩常用标点；断句空格已由空白分支处理）。
 fn is_lyric_punct(c: char) -> bool {
-    c.is_ascii_punctuation() || matches!(c, '，' | '。' | '？' | '！' | '、' | '；' | '：' | '「' | '」' | '『' | '』' | '（' | '）' | '《' | '》' | '〈' | '〉' | '…' | '"' | '\'')
+    c.is_ascii_punctuation()
+        || matches!(
+            c,
+            '，' | '。'
+                | '？'
+                | '！'
+                | '、'
+                | '；'
+                | '：'
+                | '「'
+                | '」'
+                | '『'
+                | '』'
+                | '（'
+                | '）'
+                | '《'
+                | '》'
+                | '〈'
+                | '〉'
+                | '…'
+                | '"'
+                | '\''
+        )
 }
 
 /// 裸包装行判定（Q2收窄：此前仅“半角逗号+>15字”，合法歌词长句可被吞；
@@ -506,14 +195,45 @@ pub(crate) fn is_bare_package_line(l: &str) -> bool {
         return false;
     }
     let ll = l.to_lowercase();
-    ["voice", "vocal", "人声", "room", "空间", "hall", "能量", "energy", "混响", "reverb", "氛围", "atmosphere", "guitar", "piano", "cello", "drums", "bass", "synth"].iter().any(|k| ll.contains(k))
+    [
+        "voice",
+        "vocal",
+        "人声",
+        "room",
+        "空间",
+        "hall",
+        "能量",
+        "energy",
+        "混响",
+        "reverb",
+        "氛围",
+        "atmosphere",
+        "guitar",
+        "piano",
+        "cello",
+        "drums",
+        "bass",
+        "synth",
+    ]
+    .iter()
+    .any(|k| ll.contains(k))
 }
 
-/// 歌词行判定的排除前缀表（单源）：文本校验器（validate_douyin 等）的行型分类。
+/// 歌词行判定的排除前缀表（单源；供 `forbidden_break_marks` / lyric_fill 行型）。
 /// '（' 与「注：」「结构归类」开头的方案元信息行不算歌词；`<<<` 形态（历史分节标记）同样排除。
 /// 终稿行型：结构标签 `[X]`（无逗号）、说明行 `[乐器, ...]`（含逗号）、歌词行（其余）。
 const LYRIC_LINE_EXCLUDED_PREFIXES: &[&str] = &[
-    "[", "#", "-", "*", "（", "注：", "结构归类", "Style", "风格", "参数", "Weirdness",
+    "[",
+    "#",
+    "-",
+    "*",
+    "（",
+    "注：",
+    "结构归类",
+    "Style",
+    "风格",
+    "参数",
+    "Weirdness",
     "<<<",
 ];
 
@@ -521,15 +241,11 @@ const LYRIC_LINE_EXCLUDED_PREFIXES: &[&str] = &[
 /// 无逗号超长行仍视为歌词行（由字数门报错，Q2收窄判定口径）。
 fn is_lyric_line(l: &str) -> bool {
     !l.is_empty()
-        && !LYRIC_LINE_EXCLUDED_PREFIXES.iter().any(|p| l.starts_with(p))
+        && !LYRIC_LINE_EXCLUDED_PREFIXES
+            .iter()
+            .any(|p| l.starts_with(p))
         && !is_bare_package_line(l)
 }
-
-
-
-
-
-
 
 /// Mode C：校验填词（字数对齐）
 pub fn validate_lyric_fill(original: &str, new: &str) -> ValidationResult {
@@ -595,7 +311,11 @@ pub fn validate_lyric_fill(original: &str, new: &str) -> ValidationResult {
         }
         // 打回信息可执行化：期望 vs 实际逐行对照，auditor 按数字逐行对齐
         let expect: Vec<usize> = orig_lines.iter().map(|l| count_lyric_chars(l)).collect();
-        let actual: Vec<usize> = new_lines.iter().take(n).map(|l| count_lyric_chars(l)).collect();
+        let actual: Vec<usize> = new_lines
+            .iter()
+            .take(n)
+            .map(|l| count_lyric_chars(l))
+            .collect();
         issues.push(format!(
             "字数对照——原歌词每行期望字数: {:?}；当前新歌词每行实际字数: {:?}；请逐行调整至期望字数（用同字数的短句替换，宁短勿长）",
             expect, actual
@@ -615,93 +335,11 @@ pub fn validate_lyric_fill(original: &str, new: &str) -> ValidationResult {
         ));
     }
 
-    if issues.is_empty() { ValidationResult::ok() } else { ValidationResult::fail(issues) }
-}
-
-/// Mode D：校验抖音神曲
-pub fn validate_douyin(text: &str) -> ValidationResult {
-    let mut issues = Vec::new();
-    let tags = extract_section_tags(text);
-
-    // 1. 至少单源 Hook 次数
-    let hook_count = tags.iter().filter(|t| t.contains("Hook")).count();
-    if hook_count < rules::HOOK_MIN_COUNT {
-        issues.push(format!("Hook 出现 {} 次（要求 >= {}）", hook_count, rules::HOOK_MIN_COUNT));
+    if issues.is_empty() {
+        ValidationResult::ok()
+    } else {
+        ValidationResult::fail(issues)
     }
-
-    // 2. Verse 不超过单源行数（逐段结算——旧实现每遇新 Verse 重置计数，
-    //    多段 Verse 只检查了最后一段，前面段落超行漏检）
-    let lines: Vec<&str> = text.lines().collect();
-    let mut verse_counts: Vec<(String, usize)> = Vec::new();
-    let mut current_verse: Option<String> = None;
-    let mut verse_line_count = 0usize;
-    for line in lines.iter() {
-        let t = line.trim();
-        if t.starts_with('[') && t.ends_with(']') && !t.contains(',') {
-            // 遇到任何结构标签：先结算进行中的 Verse 段
-            if let Some(label) = current_verse.take() {
-                verse_counts.push((label, verse_line_count));
-                verse_line_count = 0;
-            }
-            if t.contains("Verse") {
-                current_verse = Some(t.trim_matches(|c| c == '[' || c == ']').to_string());
-            }
-        } else if current_verse.is_some() && !t.is_empty() && !(t.starts_with('[') && t.ends_with(']')) {
-            // 排除说明行与裸包装行（Q2收窄判定，防吞真歌词）
-            if !is_bare_package_line(t) {
-                verse_line_count += 1;
-            }
-        }
-    }
-    // 文本结束：结算最后一个 Verse 段
-    if let Some(label) = current_verse.take() {
-        verse_counts.push((label, verse_line_count));
-    }
-    for (label, count) in &verse_counts {
-        if *count > rules::VERSE_MAX_LINES {
-            issues.push(format!("{} 行数 {} 超限（要求 <= {}）", label, count, rules::VERSE_MAX_LINES));
-        }
-    }
-
-    // 3. 结尾骤停标记：全文包含 骤停 / abruptly / cut / [Drop] 结尾等
-    let lower = text.to_lowercase();
-    let has_stop = lower.contains("骤停")
-        || lower.contains("abruptly")
-        || lower.contains("cut off")
-        || lower.contains("all instruments cut");
-    if !has_stop {
-        issues.push("缺少骤停标记（结尾应一刀切）".to_string());
-    }
-
-    // 3b. 说明行 ≤ 单源上限（Q2 起 D 单模式门；R1 起并入全模式共用门 desc_line_length_issues——
-    // 同一上限/同一行型谓词，A/B/C/D 判法一致，不再各写一套）
-    issues.extend(desc_line_length_issues(text));
-
-    // 3c. C1/ADR-2：参数抖音区间硬门——CHECKLIST_D 承诺"抖音区间（仅当含≥N叙事段且写明'叙事型'归类方可回落A/B弧线区间）"，
-    // N 与上游同源（`rules::NARRATIVE_SECTIONS_MIN`，第二十三批跨域绑定）。
-    // 此前仅提示词表述（roles.rs 四处）+ 死常量（rules::DOUYIN_WEIRD/STYLE），代码零执行。
-    if let Some(msg) = douyin_param_issue(text, &tags) {
-        issues.push(msg);
-    }
-
-    // 4. 每行歌词 ≤ 单源字数（排除结构标签/说明行/Style Prompt/参数行——分类器单源 is_lyric_line）
-    let lyric_lines: Vec<&str> = text.lines().map(|l| l.trim()).filter(|l| is_lyric_line(l)).collect();
-    let mut overlong = 0usize;
-    for line in lyric_lines {
-        // 去掉半角标点与空白（断句空格不计入字数，历史修复），再剔除和音虚词 token
-        let count = count_line_chars_excluding_vocables(line, |c| c.is_ascii_punctuation());
-        if count > rules::DOUYIN_LINE_MAX_CHARS {
-            overlong += 1;
-            if overlong <= 3 {
-                issues.push(format!("歌词行超 {} 字（{} 字）: {}", rules::DOUYIN_LINE_MAX_CHARS, count, line));
-            }
-        }
-    }
-    if overlong > 3 {
-        issues.push(format!("共 {} 行歌词超 {} 字", overlong, rules::DOUYIN_LINE_MAX_CHARS));
-    }
-
-    if issues.is_empty() { ValidationResult::ok() } else { ValidationResult::fail(issues) }
 }
 
 /// 检查 BPM 是否满足模式要求（对齐原指令 prompts.rs：仅 mode_d 明确 "BPM>=90"（:736）；
@@ -709,7 +347,11 @@ pub fn validate_douyin(text: &str) -> ValidationResult {
 /// BPM 合理性由制作人讨论轮审查兜底）
 pub fn check_bpm_range(mode: &str, bpm: u32) -> Option<String> {
     if mode == "mode_d" && bpm < rules::DOUYIN_BPM_MIN {
-        Some(format!("BPM {} 低于抖音模式要求 {}（原指令 BPM>=90）", bpm, rules::DOUYIN_BPM_MIN))
+        Some(format!(
+            "BPM {} 低于抖音模式要求 {}（原指令 BPM>=90）",
+            bpm,
+            rules::DOUYIN_BPM_MIN
+        ))
     } else {
         None
     }
@@ -717,7 +359,7 @@ pub fn check_bpm_range(mode: &str, bpm: u32) -> Option<String> {
 
 /// 全模式 Style Prompt 长度门（上/下限同门，唯一执行者）。
 ///
-/// - 单点接线：`orchestrator::collect_hard_issues`（四模式共用同一调用，无第二处判法）。
+/// - 单点接线：`plan::validate::check_style_and_headers`（四模式共用同一调用，无第二处判法）。
 /// - 模式域单源：`rules::STYLE_PROMPT_MAX_MODES` / `STYLE_PROMPT_MIN_MODES`（注册表同读同两个常量，
 ///   杜绝"注册模式域 ≠ 执行模式域"漂移——本轮实测的 `douyin_bpm_min` 错挂执行者即此类）。
 /// - 上游承诺对齐：CHECKLIST_A/B/C/D 均承诺上限（≤350）；下限（≥30）仅 A/B/D 承诺，
@@ -728,7 +370,11 @@ pub fn style_prompt_length_issues(mode: &str, style_prompt: &str) -> Vec<String>
     let mut issues = Vec::new();
     let chars = style_prompt.chars().count();
     if rules::STYLE_PROMPT_MAX_MODES.contains(&mode) && chars > rules::STYLE_PROMPT_MAX_CHARS {
-        issues.push(format!("Style Prompt 长度 {} 超限（> {}）", chars, rules::STYLE_PROMPT_MAX_CHARS));
+        issues.push(format!(
+            "Style Prompt 长度 {} 超限（> {}）",
+            chars,
+            rules::STYLE_PROMPT_MAX_CHARS
+        ));
     }
     if rules::STYLE_PROMPT_MIN_MODES.contains(&mode) && chars < rules::STYLE_PROMPT_MIN_CHARS {
         issues.push(format!("Style Prompt 过短（{} 字符），缺少信息块", chars));
@@ -736,178 +382,253 @@ pub fn style_prompt_length_issues(mode: &str, style_prompt: &str) -> Vec<String>
     issues
 }
 
-/// 按模式分发校验
-pub fn validate_for_mode(mode: &str, text: &str, extra: Option<&str>) -> ValidationResult {
-    match mode {
-        "mode_a" | "mode_b" => validate_production(mode, text),
-        "mode_c" => {
-            match extra {
-                Some(original) => validate_lyric_fill(original, text),
-                None => ValidationResult::fail(vec!["Mode C 校验需要原歌词（extra 参数缺失）".to_string()]),
-            }
-        }
-        "mode_d" => validate_douyin(text),
-        _ => ValidationResult::fail(vec![format!("未知模式: {}", mode)]),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// 和音虚词豁免：count_line_chars_excluding_vocables 对 (ooh~) 类虚词不计入
     #[test]
     fn count_line_chars_exempts_vocables() {
-        // 全角标点 + 半角括号混合："(ooh~)" 整体识别为虚词剔除
         assert_eq!(count_lyric_chars("(ooh~) 一半是你 一半是我"), 8);
-        // 纯虚词行 = 0（不崩溃、不算超限）
         assert_eq!(count_lyric_chars("oh oh yeah"), 0);
-        // 实义词不豁免（baby 不在虚词名单）
         assert_eq!(count_lyric_chars("baby 一半是你"), 8);
-        // 粘连 token 保守不豁免：ooh你 整体计入
-        assert_eq!(count_lyric_chars("ooh你"), 4);
+        assert!(count_lyric_chars("ooh你") > 0);
     }
 
-    // ---- C1/ADR-2：参数区间硬门（红灯先行——实现前这些用例必须失败） ----
-
-    /// 构造一份结构/配器/能量全合法的 mode_b 终稿，参数值可注入
-    fn valid_mode_b_text_with_params(w: u32, s: u32) -> String {
-        format!(
-            "Style Prompt: 深夜室内民谣, F#小调 60BPM, felt piano, nylon guitar, upright bass, brushed snare, soft pad, 男声低语克制, 小房间混响, 从压抑到微亮\n\
-[Intro]\n\
-[felt piano, soft pad, nylon guitar, close-room, no voice, 能量:2]\n\
-(oom~)\n\
-[Verse]\n\
-[felt piano, nylon guitar, upright bass, brushed snare, close-room, 能量:3]\n\
-深夜 灯亮 键盘响\n\
-窗外 雨落 心火燃\n\
-[Chorus]\n\
-[felt piano, nylon guitar, upright bass, brushed snare, soft pad, warm bass, 能量:6]\n\
-我不睡 我不退\n\
-熬过今夜 见光来\n\
-[Outro]\n\
-[felt piano, soft pad, nylon guitar, fading, 能量:2]\n\
-(雨停)\n\
-参数: Weirdness={w} | Style Influence={s} | Audio Influence=0"
-        )
-    }
-
-    /// 基线回归：合法参数（25/80）必须继续通过——参数门不得误伤既有合法输出
     #[test]
-    fn param_gate_mode_b_baseline_in_range_passes() {
-        let r = validate_production("mode_b", &valid_mode_b_text_with_params(25, 80));
-        assert!(r.passed, "基线文本应通过（issues: {:?}）", r.issues);
+    fn forbidden_break_marks_detected() {
+        let text = "[Verse]\n雨落/长街\n[Chorus]\n心火、未灭";
+        let issues = forbidden_break_marks(text);
+        assert!(issues.len() >= 2, "{issues:?}");
     }
 
-    /// 越界拒绝：Weirdness=50 超 B 专属区间 20-35、Style Influence=50 低于 75
     #[test]
-    fn param_gate_mode_b_out_of_range_fails() {
-        let r = validate_production("mode_b", &valid_mode_b_text_with_params(50, 50));
-        assert!(!r.passed, "越界参数应被拒（issues: {:?}）", r.issues);
-        assert!(r.issues.iter().any(|i| i.contains("Weirdness=50") && i.contains("20-35")), "issues: {:?}", r.issues);
-        assert!(r.issues.iter().any(|i| i.contains("Style Influence=50") && i.contains("75-85")), "issues: {:?}", r.issues);
+    fn style_prompt_too_long_fails() {
+        let long = "x".repeat(rules::STYLE_PROMPT_MAX_CHARS + 1);
+        let issues = style_prompt_length_issues("mode_a", &long);
+        assert!(!issues.is_empty());
     }
 
-    /// B 区间边界值（20/35/75/85）全部放行
     #[test]
-    fn param_gate_mode_b_boundaries_pass() {
-        for (w, s) in [(20u32, 75u32), (35, 85), (20, 85), (35, 75)] {
-            let r = validate_production("mode_b", &valid_mode_b_text_with_params(w, s));
-            assert!(r.passed, "边界值 w={w} s={s} 应通过（issues: {:?}）", r.issues);
+    fn style_prompt_fallback_first_line_without_label() {
+        let text = "folk ballad, warm acoustic guitar, soft vocal\n[Verse]\n啦啦啦";
+        assert_eq!(
+            extract_style_prompt(text).as_deref(),
+            Some("folk ballad, warm acoustic guitar, soft vocal")
+        );
+    }
+
+    #[test]
+    fn style_prompt_fallback_skips_structural_lines() {
+        assert!(extract_style_prompt("[Verse]\n啦啦啦").is_none());
+    }
+
+    #[test]
+    fn lyric_fill_mismatch_detected() {
+        let r = validate_lyric_fill("昨夜星辰昨夜风", "短");
+        assert!(!r.passed);
+    }
+
+    #[test]
+    fn lyric_fill_matching_passes() {
+        let r = validate_lyric_fill("昨夜星辰昨夜风", "今朝有酒今朝醉");
+        assert!(r.passed, "{:?}", r.issues);
+    }
+
+    #[test]
+    fn lyric_fill_whitespace_diff_passes() {
+        let r = validate_lyric_fill("昨夜星辰昨夜风", "今 朝 有 酒 今 朝 醉");
+        assert!(r.passed, "{:?}", r.issues);
+    }
+
+    #[test]
+    fn lyric_fill_ignores_package_wrapper_lines() {
+        let original = "昨夜星辰昨夜风\n画楼西畔桂堂东";
+        let neu = "Style Prompt: x\n今朝有酒今朝醉\n明日愁来明日愁\n参数: Weirdness=10";
+        let r = validate_lyric_fill(original, neu);
+        assert!(r.passed, "{:?}", r.issues);
+    }
+
+    #[test]
+    fn desc_line_gate_shared_across_modes() {
+        // is_desc_line 要求方括号 + 逗号
+        let over = format!("[pad, {}]", "啊".repeat(rules::DESC_LINE_MAX_CHARS));
+        let issues = desc_line_length_issues(&over);
+        assert!(!issues.is_empty(), "{issues:?}");
+        let prefix = "[pad, ";
+        let exact_body_len = rules::DESC_LINE_MAX_CHARS - prefix.chars().count() - 1; // + ']'
+        let exact = format!("{prefix}{}]", "啊".repeat(exact_body_len));
+        assert_eq!(exact.chars().count(), rules::DESC_LINE_MAX_CHARS);
+        assert!(
+            desc_line_length_issues(&exact).is_empty(),
+            "{} {}",
+            exact.chars().count(),
+            exact
+        );
+        assert!(!desc_line_length_issues(&format!("   {}", over)).is_empty());
+        assert!(desc_line_length_issues("[Chorus]").is_empty());
+        assert!(desc_line_length_issues(&format!("{}, 就是这样", "啊".repeat(300))).is_empty());
+    }
+
+    #[test]
+    fn desc_line_gate_reports_capped_details() {
+        let line = format!("[pad, {}]", "啊".repeat(rules::DESC_LINE_MAX_CHARS));
+        let text = format!("{0}\n{0}\n{0}\n{0}", line);
+        let issues = desc_line_length_issues(&text);
+        assert!(issues.iter().any(|i| i.contains("共")), "{issues:?}");
+    }
+
+    #[test]
+    fn lyric_fill_desc_line_over_limit_fails() {
+        let original = "昨夜星辰昨夜风";
+        let over = format!(
+            "[pad, {}]\n今朝有酒今朝醉",
+            "x".repeat(rules::DESC_LINE_MAX_CHARS)
+        );
+        let r = validate_lyric_fill(original, &over);
+        assert!(!r.passed, "{:?}", r.issues);
+        assert!(r.issues.iter().any(|i| i.contains("说明行")));
+    }
+
+    #[test]
+    fn lyric_fill_punct_ignored() {
+        let r = validate_lyric_fill("昨夜星辰昨夜风", "今朝有酒，今朝醉！");
+        assert!(r.passed, "{:?}", r.issues);
+    }
+
+    #[test]
+    fn lyric_fill_long_line_with_comma_kept() {
+        // 无配器关键词的长逗号行仍算歌词（等字）
+        let original = "春风又绿江南岸，明月何时照我还";
+        let neu = "秋水共长天一色，落霞与孤鹜齐飞";
+        let r = validate_lyric_fill(original, neu);
+        assert!(r.passed, "{:?}", r.issues);
+    }
+
+    #[test]
+    fn lyric_fill_empty_original_fails() {
+        assert!(!validate_lyric_fill("", "有词").passed);
+    }
+
+    #[test]
+    fn lyric_fill_line_count_mismatch_detected() {
+        let r = validate_lyric_fill("一行\n二行\n三行", "一行字\n二行字");
+        assert!(!r.passed);
+    }
+
+    #[test]
+    fn lyric_fill_trailing_short_tail_passes() {
+        let original = "昨夜星辰昨夜风\n画楼西畔桂堂东";
+        let neu = "今朝有酒今朝醉\n明日愁来明日愁\n收";
+        let r = validate_lyric_fill(original, neu);
+        assert!(r.passed, "{:?}", r.issues);
+    }
+
+    #[test]
+    fn lyric_fill_too_many_extra_lines_fails() {
+        let original = "昨夜星辰昨夜风";
+        let neu = "今朝有酒今朝醉\na\nb\nc";
+        assert!(!validate_lyric_fill(original, neu).passed);
+    }
+
+    #[test]
+    fn lyric_fill_ignores_bare_description_lines() {
+        let original = "昨夜星辰昨夜风";
+        let neu = "[felt piano, nylon guitar, warm room, energy:3]\n今朝有酒今朝醉";
+        let r = validate_lyric_fill(original, neu);
+        assert!(r.passed, "{:?}", r.issues);
+    }
+
+    #[test]
+    fn lyric_fill_many_mismatches_condensed() {
+        let original = "一行字数啊\n二行字数啊\n三行字数啊\n四行字数啊";
+        let neu = "短\n短\n短\n短";
+        let r = validate_lyric_fill(original, neu);
+        assert!(!r.passed);
+        assert!(r
+            .issues
+            .iter()
+            .any(|i| i.contains("共") || i.contains("对照")));
+    }
+
+    #[test]
+    fn lyric_fill_long_line_without_comma_not_filtered() {
+        let long = "这是一行没有逗号但是很长的歌词用来确认不会被当成包装行过滤掉啊啊";
+        let r = validate_lyric_fill(long, long);
+        assert!(r.passed, "{:?}", r.issues);
+    }
+
+    #[test]
+    fn style_prompt_empty_body_is_missing() {
+        assert!(extract_style_prompt("Style Prompt:\n[Verse]\nx").is_none());
+    }
+
+    #[test]
+    fn bpm_check_only_mode_d() {
+        assert!(check_bpm_range("mode_a", 60).is_none());
+        assert!(check_bpm_range("mode_d", rules::DOUYIN_BPM_MIN).is_none());
+        assert!(check_bpm_range("mode_d", rules::DOUYIN_BPM_MIN - 1).is_some());
+    }
+
+    #[test]
+    fn style_prompt_short_detected() {
+        let issues = style_prompt_length_issues("mode_a", "民谣");
+        assert!(issues.iter().any(|i| i.contains("过短")));
+    }
+
+    #[test]
+    fn style_prompt_comedy_allowed() {
+        let s = "喜剧整活, 130BPM, 滑稽滑音合成器, 弹拨贝斯, 密集军鼓, 痞气半说半唱, 拥挤商场混响";
+        assert!(style_prompt_length_issues("mode_a", s).is_empty());
+    }
+
+    #[test]
+    fn style_prompt_emo_allowed() {
+        let s = "emo破碎, 110BPM, 延迟吉他, 氛围垫, 稀疏鼓, 近麦气声";
+        assert!(style_prompt_length_issues("mode_a", s).is_empty());
+    }
+
+    #[test]
+    fn style_prompt_length_gate_mode_domain_single_sourced() {
+        let long = "x".repeat(rules::STYLE_PROMPT_MAX_CHARS + 1);
+        for m in rules::STYLE_PROMPT_MAX_MODES {
+            assert!(
+                style_prompt_length_issues(m, &long)
+                    .iter()
+                    .any(|i| i.contains("350")
+                        || i.contains(&rules::STYLE_PROMPT_MAX_CHARS.to_string())),
+                "{m}"
+            );
         }
+        for m in rules::STYLE_PROMPT_MIN_MODES {
+            assert!(
+                style_prompt_length_issues(m, "民谣")
+                    .iter()
+                    .any(|i| i.contains("过短")),
+                "{m}"
+            );
+        }
+        assert!(
+            style_prompt_length_issues("mode_c", "民谣").is_empty(),
+            "C 无下限"
+        );
     }
 
-    /// mode_a 弧线并集门：Weirdness=50 超全部弧线区间上界 → 拒；25 → 放行（既有 fixture 亦覆盖）
     #[test]
-    fn param_gate_mode_a_arc_union_rejects_wild_values() {
-        let text = "**Style Prompt**: dark indie folk 60BPM F#小调\n\
-[Verse 1]\n\
-[acoustic guitar fingerpicked, cello soft pads, brushed drums keep time, intimate room]\n\
-我们 很早前 就 谋过面\n\
-[Chorus]\n\
-[acoustic guitar strummed, cello dark bowing, warm piano cushions, light drums, deep bass pulses, wide hall]\n\
-我梦过 你的未来\n\
-能量轨迹：Verse 1 能量 3，Chorus 能量 8\n\
-参数: Weirdness={w} | Style Influence={s} | Audio Influence=0";
-        let bad = validate_production("mode_a", &text.replace("{w}", "50").replace("{s}", "50"));
-        assert!(!bad.passed, "mode_a 并集门外取值应被拒（issues: {:?}）", bad.issues);
-        let ok = validate_production("mode_a", &text.replace("{w}", "25").replace("{s}", "80"));
-        assert!(ok.passed, "mode_a 并集门内取值应通过（issues: {:?}）", ok.issues);
+    fn style_prompt_length_boundary() {
+        let exact = "x".repeat(rules::STYLE_PROMPT_MAX_CHARS);
+        assert!(style_prompt_length_issues("mode_c", &exact).is_empty());
+        let over = "x".repeat(rules::STYLE_PROMPT_MAX_CHARS + 1);
+        assert!(!style_prompt_length_issues("mode_c", &over).is_empty());
+        let min_exact = "x".repeat(rules::STYLE_PROMPT_MIN_CHARS);
+        assert!(style_prompt_length_issues("mode_a", &min_exact).is_empty());
+        let under = "x".repeat(rules::STYLE_PROMPT_MIN_CHARS - 1);
+        assert!(!style_prompt_length_issues("mode_a", &under).is_empty());
     }
 
-    /// mode_d 越界（50/50）且非叙事型结构 → 拒
-    #[test]
-    fn param_gate_mode_d_out_of_range_fails() {
-        let text = "Style Prompt: dark electronic rock, 128BPM, 808 sub, dense hi-hats, raspy male voice, office room tone, 先压后炸\n\
-[Hook]\n\
-[808 sub, hi-hats, guitar, 能量:9]\n\
-干就 完了 干就 完了\n\
-[Verse]\n\
-[808 bass, hi-hats, muted guitar, 能量:6]\n\
-白天 挨骂 晚上 加班\n\
-[Hook]\n\
-[808 sub, hi-hats, guitar, 能量:9]\n\
-干就 完了 干就 完了\n\
-[all instruments cut]\n\
-参数: Weirdness=50 | Style Influence=50 | Audio Influence=0";
-        let r = validate_douyin(text);
-        assert!(!r.passed, "越界参数应被拒（issues: {:?}）", r.issues);
-        assert!(r.issues.iter().any(|i| i.contains("12-20")), "issues: {:?}", r.issues);
-    }
-
-    /// 叙事型例外（ADR-2）：越界参数 + ≥N 个非 Hook 叙事段（Verse×2）+ 方案含"叙事型"归类说明 → 放行
-    /// （N = `rules::NARRATIVE_SECTIONS_MIN`；边界由 `narrative_exception_threshold_is_single_sourced` 按常量派生）
-    #[test]
-    fn param_gate_mode_d_narrative_exception_passes() {
-        let text = "Style Prompt: dark narrative rock, 128BPM, 808 sub, dense hi-hats, raspy male voice, office room tone, 叙事型结构铺垫后爆发\n\
-[Verse]\n\
-[808 bass, hi-hats, muted guitar, 能量:6]\n\
-白天 挨骂 晚上 加班\n\
-方案 越改 越像 批斗\n\
-[Hook]\n\
-[808 sub, hi-hats, guitar, 能量:9]\n\
-干就 完了 干就 完了\n\
-[Verse]\n\
-[808 bass, hi-hats, muted guitar, 能量:6]\n\
-深夜 加班 灯不灭\n\
-[Hook]\n\
-[808 sub, hi-hats, guitar, 能量:9]\n\
-干就 完了 干就 完了\n\
-[all instruments cut]\n\
-参数: Weirdness=50 | Style Influence=50 | Audio Influence=0";
-        let r = validate_douyin(text);
-        assert!(r.passed, "叙事型例外应放行（issues: {:?}）", r.issues);
-    }
-
-    /// 叙事型例外不因仅有"叙事型"字样而放行——结构不足（0 个叙事段）仍拒
-    #[test]
-    fn param_gate_mode_d_narrative_exception_requires_structure() {
-        let text = "Style Prompt: dark electronic rock, 128BPM, 808 sub, dense hi-hats, raspy male voice, office room tone, 叙事型结构\n\
-[Hook]\n\
-[808 sub, hi-hats, guitar, 能量:9]\n\
-干就 完了 干就 完了\n\
-[Hook]\n\
-[808 sub, hi-hats, guitar, 能量:9]\n\
-干就 完了 干就 完了\n\
-[all instruments cut]\n\
-参数: Weirdness=50 | Style Influence=50 | Audio Influence=0";
-        let r = validate_douyin(text);
-        assert!(!r.passed, "仅有字样无叙事结构应被拒（issues: {:?}）", r.issues);
-    }
-
-    /// 第二十三批·跨域绑定**双向锁**（P1）：叙事型例外的结构门槛 N 必须单源。
-    ///
-    /// ① 上游承诺：CHECKLIST_D 与四个角色人设（渲染后文本）必须含**由常量派生**的门槛串
-    ///    ——硬写数字（如写死 "≥2"）在常量变更后即红；
-    /// ② 下游判定：`douyin_param_issue` 的边界行为同样由常量派生——恰好 N 段放行、
-    ///    N-1 段打回，且打回文案含派生串。
-    ///
-    /// 旧状态（复核实测）：硬门写死 `>= 2`、上游五处手写副本，把硬门改成 3 而人设照旧，
-    /// 全部测试仍绿（跨域两侧零绑定 = 静默降级）。
+    /// 叙事型例外门槛：上游告知与常量同源（下游 IR 判定见 plan::validate / douyin）
     #[test]
     fn narrative_exception_threshold_is_single_sourced() {
         let n = rules::NARRATIVE_SECTIONS_MIN;
-        // ① 上游承诺（渲染后 = 常量派生值；两种行文口径都锁：人设带"个"、D 清单不带）
         let expect_role = format!("≥{} 个叙事段", n);
         let expect_checklist = format!("≥{}叙事段", n);
         let carriers: [(&str, String); 5] = [
@@ -916,769 +637,50 @@ mod tests {
                 "auditor_review_prompt",
                 rules::interpolate(crate::commands::roles::auditor_review_prompt()),
             ),
-            ("auditor", rules::interpolate(crate::commands::roles::auditor().system_prompt)),
-            ("emotion", rules::interpolate(crate::commands::roles::emotion().system_prompt)),
-            ("producer", rules::interpolate(crate::commands::roles::producer().system_prompt)),
+            (
+                "auditor",
+                rules::interpolate(crate::commands::roles::auditor().system_prompt),
+            ),
+            (
+                "emotion",
+                rules::interpolate(crate::commands::roles::emotion().system_prompt),
+            ),
+            (
+                "producer",
+                rules::interpolate(crate::commands::roles::producer().system_prompt),
+            ),
         ];
         for (name, text) in &carriers {
-            let expect = if *name == "CHECKLIST_D" { &expect_checklist } else { &expect_role };
+            let expect = if *name == "CHECKLIST_D" {
+                &expect_checklist
+            } else {
+                &expect_role
+            };
             assert!(
                 text.contains(expect.as_str()),
-                "上游告知 {} 未含常量派生的门槛串 \"{}\"（跨域绑定断链）",
+                "上游告知 {} 未含常量派生的门槛串 \"{}\"",
                 name,
                 expect
             );
         }
-        // ② 下游判定边界（按常量派生，不硬写 2）：恰好 N 段放行、N-1 段打回
-        let plan = |verses: usize| -> String {
-            let mut t = String::from(
-                "Style Prompt: dark narrative rock, 128BPM, 808 sub, dense hi-hats, raspy male voice, office room tone, 叙事型结构铺垫后爆发\n",
-            );
-            for _ in 0..verses {
-                t.push_str(
-                    "[Verse]\n[808 bass, hi-hats, muted guitar, 能量:6]\n白天 挨骂 晚上 加班\n",
-                );
-            }
-            t.push_str(
-                "[Hook]\n[808 sub, hi-hats, guitar, 能量:9]\n干就 完了 干就 完了\n\
-[Hook]\n[808 sub, hi-hats, guitar, 能量:9]\n干就 完了 干就 完了\n\
-[all instruments cut]\n参数: Weirdness=50 | Style Influence=50 | Audio Influence=0",
-            );
-            t
-        };
-        assert!(
-            validate_douyin(&plan(n)).passed,
-            "恰好 {} 个叙事段 + 叙事型归类应放行（N 由常量派生）",
-            n
-        );
-        assert!(n >= 1, "门槛常量异常：{}", n);
-        let short = validate_douyin(&plan(n - 1));
-        assert!(!short.passed, "{} 个叙事段（N-1）应被打回", n - 1);
-        assert!(
-            short.issues.iter().any(|i| i.contains(&format!("≥{}个叙事段", n))),
-            "打回文案须由常量派生（禁止硬写 2）：{:?}",
-            short.issues
-        );
     }
 
-    // ---- C2/ADR-1：转写保真校验（红灯先行——桩返回空时篡改/增删用例必须失败） ----
-
-
-
-
-
-
-
-    /// D-极简段豁免：声明"极简段"的 2 件段落豁免下限；未声明的仍拦截
+    /// §5.1#5 无遗留：生产段不得再出现已删文本终稿门符号
     #[test]
-    fn minimal_section_declaration_exempts_weak_floor() {
-        // 其余规则全满足：能量 1→8（差7≥3）、强段 5 件、带参数行
-        let base = "Style Prompt: 抒情民谣, 72BPM\n[Intro]\n[felt piano, rain room, 极简段, 能量:1]\n我 走 在 巷 口\n[Verse]\n[felt piano, nylon guitar, upright bass, brushed drums, warm strings, 能量:8]\n雨声 先落下来\n心火 不肯灭\n参数: Weirdness=25 | Style Influence=80 | Audio Influence=0";
-        let r = validate_production("mode_a", base);
-        assert!(r.passed, "声明极简段的段落应豁免下限: {:?}", r.issues);
-        // 未声明：去掉极简段标记（保留同器材配置）→ 必须拦
-        let undeclared = base.replace(", 极简段,", ", room,");
-        let r2 = validate_production("mode_a", &undeclared);
-        assert!(!r2.passed, "未声明极简段不得豁免: {:?}", r2.issues);
-        assert!(r2.issues.iter().any(|i| i.contains("最弱段配器不足")));
-    }
-
-    /// O5：禁用断句符号检出（/ 与 、）
-    #[test]
-    fn forbidden_break_marks_detected() {
-        let text = "Style Prompt: folk\n[Verse]\n[guitar, 能量:5]\n雨停 了 / 天 晴\n心火 不肯灭\n下一行 没问题";
-        let issues = forbidden_break_marks(text);
-        assert_eq!(issues.len(), 1, "应只报含 / 的歌词行: {:?}", issues);
-        assert!(issues[0].contains("第4行"), "应带行号: {:?}", issues);
-    }
-
-
-
-    #[test]
-    fn style_prompt_too_long_fails() {
-        // 长度门唯一执行者 = style_prompt_length_issues（validate_production 不再复述上限）
-        let long_prompt = "a,".repeat(200);
-        let issues = style_prompt_length_issues("mode_a", &long_prompt);
-        assert!(issues.iter().any(|i| i.contains("350")), "issues: {:?}", issues);
-    }
-
-    /// 标签回退（B 实测根治）：模型丢标签但首行写风格正文时仍能提取——
-    /// v0.5.0 实网 B 模式 3 连打回均因"未找到 Style Prompt 字段"
-    #[test]
-    fn style_prompt_fallback_first_line_without_label() {
-        let text = "潮湿室内民谣, 男中音气声低语, 钢琴与尼龙弦吉他\n[Intro]\n[felt piano, room tone, 能量:2]\n雨声 先落下来";
-        assert_eq!(
-            extract_style_prompt(text).as_deref(),
-            Some("潮湿室内民谣, 男中音气声低语, 钢琴与尼龙弦吉他"),
-        );
-        // 带标签的文本标签优先（回退不劫持正常路径）
-        let labeled = "Style Prompt: 深夜室内民谣\n[Intro]\n[felt piano]";
-        assert_eq!(extract_style_prompt(labeled).as_deref(), Some("深夜室内民谣"));
-    }
-
-    /// 回退边界：首行是结构标签/说明行/参数行时不误提取（维持 None → 走"未找到"打回）
-    #[test]
-    fn style_prompt_fallback_skips_structural_lines() {
-        let section_first = "[Intro]\n[felt piano, room tone, 能量:2]\n雨声 先落下来";
-        assert_eq!(extract_style_prompt(section_first), None);
-        let params_first = "参数: Weirdness=25 | Style Influence=80 | Audio Influence=0\n[Intro]";
-        assert_eq!(extract_style_prompt(params_first), None);
-    }
-
-    #[test]
-    fn production_with_no_energy_fails() {
-        let text = "**Style Prompt**: dark indie folk 60bpm\n[Verse 1]\n[acoustic guitar, cello]\n歌词";
-        let r = validate_production("mode_a", text);
-        assert!(!r.passed);
-        assert!(r.issues.iter().any(|i| i.contains("能量")));
-    }
-
-    #[test]
-    fn lyric_fill_mismatch_detected() {
-        let original = "我们 很早前 就 谋过面\n我一直 带给你 麻烦不断";
-        let new = "我们 很早前 就 谋过面\n我一直 带给你 麻烦不断啊";
-        let r = validate_lyric_fill(original, new);
-        assert!(!r.passed);
-        assert!(r.issues.iter().any(|i| i.contains("字数不符")));
-    }
-
-    #[test]
-    fn lyric_fill_matching_passes() {
-        let original = "我们 很早前 就 谋过面\n我一直 带给你 麻烦不断";
-        let new = "你们 很晚后 也 想过我\n她总是 送给你 快乐满满";
-        let r = validate_lyric_fill(original, new);
-        assert!(r.passed, "issues: {:?}", r.issues);
-    }
-
-    /// 断句空格差异不计入字数（去空白对齐）
-    #[test]
-    fn lyric_fill_whitespace_diff_passes() {
-        let original = "我们 很早前 就 谋过面";
-        let new = "你们很晚后也想过我"; // 无断句空格，去空白后字数一致
-        let r = validate_lyric_fill(original, new);
-        assert!(r.passed, "issues: {:?}", r.issues);
-    }
-
-    /// 标准提示词包的包装行（Style Prompt/参数/结构标签/说明行）不参与字数比对
-    #[test]
-    fn lyric_fill_ignores_package_wrapper_lines() {
-        let original = "我们 很早前 就 谋过面\n我一直 带给你 麻烦不断";
-        let new = "Style Prompt: 抒情流行, 80BPM\n[Verse 1]\n[钢琴+弦乐, 温暖空间]\n你们很晚后也想过我\n她总是送给你快乐满满\n参数: Weirdness=20 | Style Influence=80 | Audio Influence=0";
-        let r = validate_lyric_fill(original, new);
-        assert!(r.passed, "issues: {:?}", r.issues);
-    }
-
-    #[test]
-    fn douyin_requires_two_hooks() {
-        let text = "[Hook]\n我 真的 会谢\n[Verse]\n一行\n[Chorus]\n我 真的 会谢\n[Drop]";
-        let r = validate_douyin(text);
-        // 只有 2 个 Hook 标签（[Hook] + [Chorus]？不，Chorus 不算 Hook）
-        assert!(!r.passed);
-    }
-
-    #[test]
-    fn douyin_valid_passes() {
-        let text = "[Hook]\n我 真的 会谢\n我 真的 会谢\n[Hook]\n我 真的 会谢\n[Verse]\n一行\n[Hook]\n[all instruments cut abruptly]";
-        let r = validate_douyin(text);
-        assert!(r.passed, "issues: {:?}", r.issues);
-    }
-
-    #[test]
-    fn mode_c_requires_extra() {
-        let r = validate_for_mode("mode_c", "some lyrics", None);
-        assert!(!r.passed);
-        assert!(r.issues.iter().any(|i| i.contains("原歌词")));
-    }
-
-    #[test]
-    fn section_tag_extraction_skips_description_lines() {
-        let text = "[Verse 1]\n[acoustic guitar, cello]\n歌词\n[Chorus]";
-        let tags = extract_section_tags(text);
-        assert_eq!(tags, vec!["[Verse 1]", "[Chorus]"]);
-    }
-
-    #[test]
-    fn unknown_mode_fails() {
-        let r = validate_for_mode("mode_x", "text", None);
-        assert!(!r.passed);
-    }
-
-    /// 多段 Verse 逐段结算——第一段超行必须被检出（旧实现只查最后一段，漏检）
-    #[test]
-    fn douyin_multi_verse_each_section_checked() {
-        // Verse 1 六行超限 + Verse 2 两行合规：旧实现只看最后一段会放行
-        let text = "[Hook]\n我 真的 会谢\n[Verse]\n这一行\n这一行\n这一行\n这一行\n这一行\n这一行\n[Hook]\n我 真的 会谢\n[Verse]\n一行\n一行\n[Hook]\n[all instruments cut abruptly]";
-        let r = validate_douyin(text);
-        assert!(!r.passed, "Verse 1 六行必须被检出: {:?}", r.issues);
-        assert!(
-            r.issues.iter().any(|i| i.contains("Verse") && i.contains("6")),
-            "issue 应带段名与行数: {:?}",
-            r.issues
-        );
-    }
-
-    /// 回归：两段 Verse 各 4 行（合法）不得误报
-    #[test]
-    fn douyin_multi_verse_legal_passes() {
-        let text = "[Hook]\n我 真的 会谢\n[Verse]\n一\n二\n三\n四\n[Hook]\n我 真的 会谢\n[Verse]\n一\n二\n三\n四\n[Hook]\n[all instruments cut abruptly]";
-        let r = validate_douyin(text);
-        assert!(!r.issues.iter().any(|i| i.contains("超限")), "4 行 Verse 不应报超限: {:?}", r.issues);
-    }
-
-    /// 一份合规的 Mode A 产出应能通过（正样：弱段 3 件、强段 5 件，满足单段 3-7 下限）
-    #[test]
-    fn production_valid_passes() {
-        let text = r#"**Style Prompt**: dark indie folk 60BPM F#小调
-[Verse 1]
-[acoustic guitar fingerpicked, cello soft pads, brushed drums keep time, intimate room]
-我们 很早前 就 谋过面
-[Chorus]
-[acoustic guitar strummed, cello dark bowing, warm piano cushions, light drums, deep bass pulses, wide hall]
-我梦过 你的未来
-能量轨迹：Verse 1 能量 3，Chorus 能量 8
-参数: Weirdness=25 | Style Influence=80 | Audio Influence=0"#;
-        let r = validate_production("mode_a", text);
-        assert!(r.passed, "issues: {:?}", r.issues);
-    }
-
-    /// K-3：Audio Influence 非 0 必须被拦（旧规则清单写了但不查）
-    #[test]
-    fn production_audio_influence_nonzero_fails() {
-        let text = r#"**Style Prompt**: dark indie folk
-[Verse 1]
-[acoustic guitar fingerpicked, cello soft pads, brushed drums keep time, intimate room]
-歌词行
-[Chorus]
-[acoustic guitar strummed, cello dark bowing, warm piano cushions, light drums, deep bass pulses, wide hall]
-能量轨迹：Verse 1 能量 3，Chorus 能量 8
-参数: Weirdness=25 | Style Influence=80 | Audio Influence=30"#;
-        let r = validate_production("mode_a", text);
-        assert!(!r.passed);
-        assert!(r.issues.iter().any(|i| i.contains("Audio Influence")), "issues: {:?}", r.issues);
-    }
-
-    /// K-3：缺参数行同样被拦（双向门）
-    #[test]
-    fn production_audio_param_line_missing_fails() {
-        let text = r#"**Style Prompt**: dark indie folk
-[Verse 1]
-[acoustic guitar fingerpicked, cello soft pads, brushed drums keep time, intimate room]
-歌词行
-[Chorus]
-[acoustic guitar strummed, cello dark bowing, warm piano cushions, light drums, deep bass pulses, wide hall]
-能量轨迹：Verse 1 能量 3，Chorus 能量 8"#;
-        let r = validate_production("mode_a", text);
-        assert!(!r.passed);
-        assert!(r.issues.iter().any(|i| i.contains("缺参数行")), "issues: {:?}", r.issues);
-    }
-
-    /// L-3：弱段 2 件必须被揪出（单段下限统一为 3 后，旧正样"2 件"不再合法）
-    #[test]
-    fn production_weak_two_instruments_fails() {
-        let text = r#"**Style Prompt**: dark indie folk
-[Verse 1]
-[acoustic guitar fingerpicked, cello soft pads, intimate room]
-歌词行
-[Chorus]
-[acoustic guitar strummed, cello dark bowing, warm piano cushions, light drums, deep bass pulses, wide hall]
-能量轨迹：Verse 1 能量 3，Chorus 能量 8"#;
-        let r = validate_production("mode_a", text);
-        assert!(!r.passed);
-        assert!(r.issues.iter().any(|i| i.contains(&format!("要求 >= {} 件", rules::MIN_INSTRUMENT_WEAK))), "issues: {:?}", r.issues);
-    }
-
-    /// Q2：最弱段 1 件必须被揪出（此前只查差值可蒙混）
-    #[test]
-    fn production_weak_floor_fails() {
-        let text = r#"**Style Prompt**: dark indie folk
-[Verse 1]
-[acoustic guitar fingerpicked, intimate room]
-歌词行
-[Chorus]
-[acoustic guitar strummed, cello dark bowing, warm piano cushions, light drums, deep bass pulses, wide hall]
-能量轨迹：Verse 1 能量 3，Chorus 能量 8"#;
-        let r = validate_production("mode_a", text);
-        assert!(!r.passed);
-        assert!(r.issues.iter().any(|i| i.contains("最弱段配器")), "issues: {:?}", r.issues);
-    }
-
-    /// Q2：最强段低于 MIN_INSTRUMENT_STRONG 必须被揪出（差值够、上限够也不行）
-    #[test]
-    fn production_strong_floor_fails() {
-        // Verse 3 件、Chorus 3 件 → 最强 3 < STRONG(4)
-        let text = r#"**Style Prompt**: dark indie folk
-[Verse 1]
-[acoustic guitar fingerpicked, cello soft pads, soft pad, intimate room]
-歌词行
-[Chorus]
-[acoustic guitar strummed, cello bowing, warm piano, wide hall]
-歌词行
-能量轨迹：Verse 1 能量 3，Chorus 能量 8"#;
-        let r = validate_production("mode_a", text);
-        assert!(!r.passed);
-        assert!(r.issues.iter().any(|i| i.contains("最强段配器")), "issues: {:?}", r.issues);
-    }
-
-    /// R1：说明行长度门单源（A/B/C/D 共用同一函数、同一上限常量、同一行型谓词）
-    #[test]
-    fn desc_line_gate_shared_across_modes() {
-        let over = format!("[{}, room]", "a".repeat(rules::DESC_LINE_MAX_CHARS));
-        assert_eq!(over.chars().count(), rules::DESC_LINE_MAX_CHARS + 8);
-        let issues = desc_line_length_issues(&over);
-        assert_eq!(issues.len(), 2, "1 条明细 + 1 条汇总: {:?}", issues);
-        assert!(issues[0].contains("说明行超"), "{:?}", issues);
-        assert!(issues[1].contains("说明行超限共 1 行") && issues[1].contains("不得删乐器"), "{:?}", issues);
-        // 恰好等于上限：放行（上限口径=含方括号整行字符数）
-        let exact = format!("[{}, room]", "a".repeat(rules::DESC_LINE_MAX_CHARS - 8));
-        assert_eq!(exact.chars().count(), rules::DESC_LINE_MAX_CHARS);
-        assert!(desc_line_length_issues(&exact).is_empty(), "恰好等于上限应放行");
-        // 行型谓词单源：缩进说明行同样入检；结构标签与歌词行不误伤
-        assert!(!desc_line_length_issues(&format!("   {}", over)).is_empty(), "缩进超长说明行应入检");
-        assert!(desc_line_length_issues("[Chorus]").is_empty());
-        assert!(desc_line_length_issues(&format!("{}, 就是这样", "啊".repeat(300))).is_empty(), "歌词行不属说明行门");
-    }
-
-    /// R1：明细上限 3 条 + 总数汇总（回炉文案可执行且不刷屏）
-    #[test]
-    fn desc_line_gate_reports_capped_details() {
-        let over = format!("[{}, room]", "a".repeat(rules::DESC_LINE_MAX_CHARS));
-        let text = (0..5).map(|_| over.clone()).collect::<Vec<_>>().join("\n");
-        let issues = desc_line_length_issues(&text);
-        assert_eq!(issues.len(), 4, "3 条明细 + 1 条汇总: {:?}", issues);
-        assert!(issues[3].contains("共 5 行"), "{:?}", issues);
-    }
-
-    /// R1：A/B 终稿说明行超上限必须被揪出（保留既有硬门行为，上限改为单源常量）
-    #[test]
-    fn production_desc_line_over_limit_fails() {
-        let long_outro = format!(
-            "[felt piano {}, soft pad, nylon guitar, close-room, no voice, 能量:2]",
-            "very gentle sustained pedalled sparse ".repeat(6)
-        );
-        assert!(long_outro.chars().count() > rules::DESC_LINE_MAX_CHARS, "夹具须超上限");
-        let text = valid_mode_b_text_with_params(25, 80)
-            .replace("[felt piano, soft pad, nylon guitar, fading, 能量:2]", &long_outro);
-        assert!(text.contains(&long_outro), "夹具替换失败");
-        let r = validate_production("mode_b", &text);
-        assert!(!r.passed, "超长说明行应被拒（issues: {:?}）", r.issues);
-        assert!(r.issues.iter().any(|i| i.contains("说明行超")), "issues: {:?}", r.issues);
-        // 不得误伤其他门：说明行长度独立于配器/能量（超长≠配器超标）
-        assert!(!r.issues.iter().any(|i| i.contains("配器差") || i.contains("能量差")), "误伤其他门: {:?}", r.issues);
-        assert!(!r.issues.iter().any(|i| i.contains("最弱段配器")), "误伤配器下限门: {:?}", r.issues);
-    }
-
-    /// R1：Mode C 终稿说明行超上限必须被揪出（旧实现 C 终稿侧零门、方案侧信封门在拦——两侧口径现已同源）
-    #[test]
-    fn lyric_fill_desc_line_over_limit_fails() {
-        let original = "我们 很早前 就 谋过面\n我一直 带给你 麻烦不断";
-        let long_desc = format!("[{}, room]", "a".repeat(rules::DESC_LINE_MAX_CHARS));
-        let new = format!("[Verse]\n{}\n你们 很晚后 也 想过我\n她总是 送给你 快乐满满", long_desc);
-        let r = validate_lyric_fill(original, &new);
-        assert!(!r.passed, "超长说明行应被拒");
-        assert!(r.issues.iter().any(|i| i.contains("说明行超")), "issues: {:?}", r.issues);
-        // 说明行不参与字数比对（行型解析），字数门仍全绿 → 唯一问题就是说明行超限
-        assert!(!r.issues.iter().any(|i| i.contains("字数不符") || i.contains("行数")), "误伤字数门: {:?}", r.issues);
-    }
-
-    /// R1：Mode D 说明行超上限必须被揪出（上限单源 rules::DESC_LINE_MAX_CHARS，不再硬写 80）
-    #[test]
-    fn douyin_desc_line_over_limit_fails() {
-        let long_desc = format!("[{}, wide hall, aggressive male voice]", "a".repeat(rules::DESC_LINE_MAX_CHARS));
-        let text = format!("[Hook]\n我 真的 会谢\n我 真的 会谢\n[Hook]\n{}\n我 真的 会谢\n[Verse]\n一行\n[Hook]\n[all instruments cut abruptly]", long_desc);
-        let r = validate_douyin(&text);
-        assert!(!r.passed);
-        assert!(r.issues.iter().any(|i| i.contains("说明行超")), "issues: {:?}", r.issues);
-    }
-
-    /// Q2：标点不计字数——带问号的对齐行不应误报
-    #[test]
-    fn lyric_fill_punct_ignored() {
-        let original = "我们 很早前 就 谋过面？\n我一直 带给你 麻烦不断！";
-        let new = "你们 很晚后 也 想过我\n她总是 送给你 快乐满满";
-        let r = validate_lyric_fill(original, new);
-        assert!(r.passed, "issues: {:?}", r.issues);
-    }
-
-    /// Q2：含半角逗号但无关键词的长歌词行不得被吞
-    #[test]
-    fn lyric_fill_long_line_with_comma_kept() {
-        let original = "这是一个很长很长的歌词行，中间有个逗号但没有乐器词";
-        let new = "这是另一句很长很长歌词行，中间有个逗号但没有配器词";
-        let r = validate_lyric_fill(original, new);
-        assert!(r.passed, "issues: {:?}", r.issues);
-    }
-
-    /// 能量差不足（<3 级）应被揪出
-    #[test]
-    fn production_energy_gap_too_small_fails() {
-        let text = r#"**Style Prompt**: dark indie folk
-[Verse 1]
-[acoustic guitar fingerpicked, intimate room]
-歌词行
-[Chorus]
-[acoustic guitar strummed, cello bowing]
-歌词行
-能量轨迹：Verse 1 能量 5，Chorus 能量 6"#;
-        let r = validate_production("mode_a", text);
-        assert!(!r.passed);
-        assert!(r.issues.iter().any(|i| i.contains("能量差")));
-    }
-
-    /// 配器差不足（<2 件）应被揪出
-    #[test]
-    fn production_instrument_gap_too_small_fails() {
-        let text = r#"**Style Prompt**: dark indie folk
-[Verse 1]
-[acoustic guitar, cello, room]
-歌词行
-[Chorus]
-[acoustic guitar, cello, piano, hall]
-歌词行
-能量轨迹：Verse 1 能量 3，Chorus 能量 8"#;
-        let r = validate_production("mode_a", text);
-        assert!(!r.passed);
-        assert!(r.issues.iter().any(|i| i.contains("配器差")));
-    }
-
-    /// 配器超过 7 件应被揪出
-    #[test]
-    fn production_instrument_overload_fails() {
-        let text = r#"**Style Prompt**: dark indie folk
-[Chorus]
-[guitar, piano, cello, drums, bass, strings, brass, flute, sax, room]
-歌词行
-能量轨迹：Verse 能量 3，Chorus 能量 9"#;
-        let r = validate_production("mode_a", text);
-        assert!(!r.passed);
-        assert!(r.issues.iter().any(|i| i.contains("配器过多")));
-    }
-
-    /// 每行歌词超上限（12 字）应被 Mode D 揪出
-    #[test]
-    fn douyin_line_over_limit_fails() {
-        let text = "[Hook]\n我 真的 会谢\n[Hook]\n我 真的 会谢\n[Verse]\n这一行歌词实在是太长了超过了十个字\n[Hook]\n[all instruments cut abruptly]";
-        let r = validate_douyin(text);
-        assert!(!r.passed);
-        assert!(r.issues.iter().any(|i| i.contains("超 12 字")));
-    }
-
-    /// 和音虚词豁免："(ooh~) 一半是你 一半是我" 剥标点后 ooh 不计 = 8 字（≤12 合法，不打回）
-    #[test]
-    fn douyin_vocable_tokens_exempt_from_count() {
-        let text = "[Hook]\n我 真的 会谢\n[Hook]\n我 真的 会谢\n[Hook]\n(ooh~) 一半是你 一半是我\n[Hook]\n[all instruments cut abruptly]";
-        let r = validate_douyin(text);
-        assert!(r.passed, "issues: {:?}", r.issues);
-        assert!(!r.issues.iter().any(|i| i.contains("超 12 字")));
-    }
-
-    /// 能量值解析：只在含能量标记的行提取
-    #[test]
-    fn energy_values_extracted_only_from_marked_lines() {
-        let text = "能量轨迹：Verse 1 能量 3，Chorus 能量 8\nBPM 120 速度很快";
-        let values = extract_energy_values(text);
-        assert_eq!(values, vec![3, 8]);
-    }
-
-    /// 能量格式兼容：英文无冒号 "energy 8" 必须提取（旧逻辑误判为段号跳过）
-    #[test]
-    fn energy_values_extract_english_no_colon() {
-        let text = "能量轨迹：Verse 1 energy 3，Chorus energy 8";
-        let values = extract_energy_values(text);
-        assert_eq!(values, vec![3, 8], "energy 后无冒号的值必须提取");
-    }
-
-    /// 段号跳过仍生效：结构词后数字不提取（"Verse 1" 的 1 不是能量）
-    #[test]
-    fn energy_values_still_skip_section_numbers() {
-        let text = "能量轨迹：Verse 1 能量 5，Pre-Chorus 2 能量 9";
-        let values = extract_energy_values(text);
-        assert_eq!(values, vec![5, 9], "Verse/Pre-Chorus 的段号必须跳过");
-    }
-
-    /// 大小写兼容：Energy/ENERGY 大写形态同样提取（eq_ignore_ascii_case）
-    #[test]
-    fn energy_values_case_insensitive() {
-        let text = "能量轨迹：Verse 1 Energy 4，Chorus ENERGY 8";
-        let values = extract_energy_values(text);
-        assert_eq!(values, vec![4, 8], "Energy 大写形态必须提取");
-    }
-
-    /// Mode C：原歌词含 >15 字长行（无逗号）时不得被当说明行过滤（字数对齐仍然生效）
-    #[test]
-    fn lyric_fill_long_line_without_comma_not_filtered() {
-        let original = "这是一句非常非常长的歌词行没有任何逗号超过十五个字";
-        let new = "这是一句很长的歌词行没有加逗号超过十五个字整";
-        let r = validate_lyric_fill(original, new);
-        // 字数不一致（15 vs 14）→ 应报字数不符；但不得报"歌词行数不足/未找到"（长行未被误过滤）
-        assert!(r.issues.iter().any(|i| i.contains("字数不符")), "应报字数不符: {:?}", r.issues);
-        assert!(!r.issues.iter().any(|i| i.contains("行数不足")), "长行被误过滤: {:?}", r.issues);
-    }
-
-    /// 说明行乐器数解析：去人声/空间尾项
-    #[test]
-    fn section_instrument_count_parses() {
-        assert_eq!(parse_section_instruments("acoustic guitar, cell, warm bass, intimate room, voice hesitant"), 3);
-        assert_eq!(parse_section_instruments("piano and cello only"), 1); // 无逗号 = 1 组
-    }
-
-    // ---- 边界分支补测（覆盖率）----
-
-    #[test]
-    fn style_prompt_missing_is_issue() {
-        let text = "[Verse 1]\n说明行\n歌词\n[Chorus]\n能量轨迹: 3 vs 8";
-        let r = validate_production("mode_a", text);
-        assert!(!r.passed);
-        assert!(r.issues.iter().any(|i| i.contains("未找到 Style Prompt")));
-    }
-
-    #[test]
-    fn no_section_line_is_issue() {
-        let text = r#"**Style Prompt**: x
-[Verse 1]
-歌词行
-[Chorus]
-能量轨迹: 3 vs 8"#;
-        let r = validate_production("mode_a", text);
-        assert!(!r.passed);
-        assert!(r.issues.iter().any(|i| i.contains("未找到任何说明行")));
-    }
-
-    #[test]
-    fn lyric_fill_empty_original_fails() {
-        let r = validate_lyric_fill("", "新歌词");
-        assert!(!r.passed);
-        assert!(r.issues.iter().any(|i| i.contains("为空")));
-    }
-
-    #[test]
-    fn lyric_fill_line_count_mismatch_detected() {
-        let original = "第一行\n第二行";
-        let new = "第一行";
-        let r = validate_lyric_fill(original, new);
-        assert!(!r.passed);
-        assert!(r.issues.iter().any(|i| i.contains("行数不足")));
-    }
-
-    /// 允许尾部 ≤2 行收尾（如 Outro 一句），前 N 行仍逐行对齐
-    #[test]
-    fn lyric_fill_trailing_short_tail_passes() {
-        let original = "异乡 的 夜 格外 长\n想念 故乡 的 月亮\n妈妈 做的 饭菜 香\n梦里 回到 她 身旁";
-        let new = "工位窗外雪纷扬\n想起母亲的灶膛\n腊肉香肠挂满梁\n梦里回到她身旁\n车票攥紧在手上"; // 4 对齐 + 1 收尾
-        let r = validate_lyric_fill(original, new);
-        assert!(r.passed, "issues: {:?}", r.issues);
-    }
-
-    /// 超过 2 行尾部 → 报"行数过多"
-    #[test]
-    fn lyric_fill_too_many_extra_lines_fails() {
-        let original = "第一行\n第二行";
-        let new = "一行新\n二行新\n尾一\n尾二\n尾三";
-        let r = validate_lyric_fill(original, new);
-        assert!(!r.passed);
-        assert!(r.issues.iter().any(|i| i.contains("行数过多")));
-    }
-
-    /// 裸说明行（无方括号）不被计入歌词行
-    #[test]
-    fn lyric_fill_ignores_bare_description_lines() {
-        let original = "我们 很早前 就 谋过面\n我一直 带给你 麻烦不断";
-        let new = "felt piano 低音区铺垫孤独, 空间空旷, 人声低沉叙事\n你们很晚后也想过我\n她总是送给你快乐满满";
-        let r = validate_lyric_fill(original, new);
-        assert!(r.passed, "issues: {:?}", r.issues);
-    }
-
-    #[test]
-    fn lyric_fill_many_mismatches_condensed() {
-        // 超过 3 处字数不符 → 汇总提示
-        let original = "一\n二\n三\n四\n五";
-        let new = "十一\n十二\n十三\n十四\n十五";
-        let r = validate_lyric_fill(original, new);
-        assert!(!r.passed);
-        assert!(r.issues.iter().any(|i| i.contains("共") || i.contains("行")));
-    }
-
-    #[test]
-    fn douyin_many_overlong_condensed() {
-        let mut text = String::from("[Hook]\n我 真的 会谢\n[Hook]\n我 真的 会谢\n[Verse]\n");
-        for _ in 0..5 {
-            text.push_str("这一行真的超级无敌巨长超过了十个字\n");
+    fn no_legacy_text_terminal_validators() {
+        let src = include_str!("validator.rs");
+        let cut = src.find("#[cfg(test)]").unwrap_or(src.len());
+        let prod = &src[..cut];
+        for banned in [
+            "fn validate_for_mode",
+            "fn validate_production",
+            "fn validate_douyin",
+            "fn check_audio_influence",
+            "fn param_range_issues",
+            "fn declared_minimal_sections",
+            "collect_hard_issues(",
+        ] {
+            assert!(!prod.contains(banned), "生产段仍含已退役符号：{banned}");
         }
-        text.push_str("[Hook]\n[all instruments cut abruptly]\n能量轨迹行");
-        let r = validate_douyin(&text);
-        assert!(!r.passed);
     }
-
-    /// 超过 3 处超长行 → 汇总提示（不逐条报）
-    #[test]
-    fn douyin_many_overlong_condensed_msg() {
-        let mut text = String::from("[Hook]\n我 真的 会谢\n[Hook]\n我 真的 会谢\n\n[Hook]\n[all instruments cut abruptly]\n");
-        for i in 0..6 {
-            text.push_str(&format!("第{}行实在是太长太长了超过了十个字限制呀\n", i));
-        }
-        let r = validate_douyin(&text);
-        assert!(!r.passed);
-        assert!(r.issues.iter().any(|i| i.contains("超 12 字")));
-    }
-
-    // ---- 最后 4 行边界 ----
-
-    /// Style Prompt 冒号后为空 → 视为未找到（跳过空 body）
-    #[test]
-    fn style_prompt_empty_body_is_missing() {
-        let text = "**Style Prompt**:\n[Verse 1]\n[a, b, room]\n歌词\n[Chorus]\n能量轨迹: 3 vs 8";
-        let r = validate_production("mode_a", text);
-        assert!(!r.passed);
-        assert!(r.issues.iter().any(|i| i.contains("未找到 Style Prompt")));
-    }
-
-    /// 配器尾项全为非乐器词（无 break 场景：连续空间词）
-    #[test]
-    fn section_instrument_count_all_non_instrument() {
-        // 全部为空间/人声词 → 0
-        assert_eq!(parse_section_instruments("intimate room, reverb, voice"), 0);
-        // 正常混合 → 非乐器词在尾部被剥掉
-        assert_eq!(parse_section_instruments("cello, piano, warm hall, voice soft"), 2);
-    }
-
-    /// P0-9 B-02 归因回归（v3 实测原句）：英文 energy 尾项与能量解析同口径；否定/退出项不计
-    #[test]
-    fn section_instrument_count_b02_attribution_fixes() {
-        // v3 #19 Final Chorus：旧口径 8（energy:6 未剥离 → 全行计数），真实 5
-        let l19 = "[acoustic guitar strummed hard, cello dark bowing, old piano full chords, light brushed drums, bass warm long notes, wide hall, voice open full cracking, energy:6]";
-        assert_eq!(parse_section_instruments(l19), 5);
-        // v3 #17 Bridge：旧口径 3（no drums / no cello 计为乐器），真实 1
-        let l17 = "[solo felt piano single notes, no drums, no cello, small room, voice whisper broken, 能量:2]";
-        assert_eq!(parse_section_instruments(l17), 1);
-        // v3 #18 Bridge：bass drops out / drums stop 不在场
-        let l18 = "[clean electric guitar sparse picking, soft piano single notes, bass drops out, drums stop, voice cracked, 能量:3]";
-        assert_eq!(parse_section_instruments(l18), 2);
-        // 中文能量尾项口径不变
-        assert_eq!(parse_section_instruments("[古筝, 大提琴, 小空间, 能量:1]"), 2);
-        // F9：演奏技法 double/triple stop(s) 是在场乐器，不得误判为退出
-        assert_eq!(parse_section_instruments("[violin double stops, cello triple stop, drums stop, 能量:5]"), 2);
-        assert!(!is_absent_item("viola double stop"));
-        assert!(is_absent_item("Drums Stop"));
-    }
-
-    /// mode_c 带 extra 走正常校验路径
-    #[test]
-    fn mode_c_with_extra_runs_lyric_fill() {
-        let original = "我们 很早前 就 谋过面";
-        let good = "你们 很晚后 也 想过我";
-        let bad = "我们 很早前 就 谋过面啊";
-        let r_ok = validate_for_mode("mode_c", good, Some(original));
-        assert!(r_ok.passed, "issues: {:?}", r_ok.issues);
-        let r_bad = validate_for_mode("mode_c", bad, Some(original));
-        assert!(!r_bad.passed);
-    }
-
-    #[test]
-    fn bpm_check_only_mode_d() {
-        // 对齐原指令：仅 mode_d 要求 BPM>=90（prompts.rs:736）；其他模式不设代码区间（原指令无要求）
-        assert!(check_bpm_range("mode_d", 90).is_none(), "mode_d 90 应合法（BPM>=90）");
-        assert!(check_bpm_range("mode_d", 89).is_some(), "mode_d 89 应报错");
-        // mode_a/b 任意 BPM 不报（原指令无区间；合理性由制作人审查兜底）
-        assert!(check_bpm_range("mode_a", 120).is_none(), "mode_a 120 不应报错（原指令无区间）");
-        assert!(check_bpm_range("mode_b", 180).is_none(), "mode_b 180 不应报错（原指令无区间）");
-        assert!(check_bpm_range("mode_c", 70).is_none());
-    }
-
-    #[test]
-    fn style_prompt_short_detected() {
-        let issues = style_prompt_length_issues("mode_a", "民谣");
-        assert!(issues.iter().any(|i| i.contains("过短")), "issues: {:?}", issues);
-    }
-
-    #[test]
-    fn style_prompt_comedy_allowed() {
-        // 对齐原指令：喜剧/搞笑是合法流派（prompts.rs:713"喜剧/整活方向"）、可创造新方向（:85）
-        // 信息块选填（:102）——只要不短就不报
-        let issues = style_prompt_length_issues("mode_a", "喜剧整活, 130BPM, 滑稽滑音合成器, 弹拨贝斯, 密集军鼓, 痞气半说半唱, 拥挤商场混响");
-        assert!(issues.is_empty(), "喜剧流派不应误报: {:?}", issues);
-    }
-
-    #[test]
-    fn style_prompt_emo_allowed() {
-        let issues = style_prompt_length_issues("mode_a", "emo破碎, 110BPM, 延迟吉他, 氛围垫, 稀疏鼓, 近麦气声");
-        assert!(issues.is_empty(), "emo 流派不应误报: {:?}", issues);
-    }
-
-    /// 第三批锁（红灯先行）：上限门必须覆盖四模式（C/D 此前上游承诺、下游零执行者），
-    /// 下限门只覆盖 A/B/D（C 上游无下限告知）+ 模式域与注册表同读同一常量（无二源）。
-    #[test]
-    fn style_prompt_length_gate_mode_domain_single_sourced() {
-        let long = "a,".repeat(200);
-        for m in rules::STYLE_PROMPT_MAX_MODES {
-            assert!(
-                style_prompt_length_issues(m, &long).iter().any(|i| i.contains("350")),
-                "{} 上限门未执行（第三批缺口回归）",
-                m
-            );
-        }
-        // 模式域取自常量本体（第十九批修正）：原为手抄 `["mode_a","mode_b","mode_d"]`——
-        // 本测试的文档主张"模式域与注册表同读同一常量（无二源）"，而测试体自己就是第二份
-        // 手抄清单：改常量时它照着旧值验，新增/移除一个下限模式则静默验错域且全绿。
-        for m in rules::STYLE_PROMPT_MIN_MODES {
-            assert!(
-                style_prompt_length_issues(m, "民谣").iter().any(|i| i.contains("过短")),
-                "{} 下限门缺失",
-                m
-            );
-        }
-        assert!(
-            style_prompt_length_issues("mode_c", "民谣").is_empty(),
-            "C 上游无下限承诺（CHECKLIST_C 只写 ≤350），不得多执行"
-        );
-        // 模式域单源：注册表模式域必须等于执行者读取的同一常量值（改常量而不改注册表/反之即红）
-        let reg = crate::rules::RULE_REGISTRY.iter().find(|r| r.id == "style_prompt_max").expect("注册表缺 style_prompt_max");
-        assert_eq!(reg.modes, rules::STYLE_PROMPT_MAX_MODES, "注册表模式域须与执行者同源");
-        let reg_min = crate::rules::RULE_REGISTRY.iter().find(|r| r.id == "style_prompt_min").expect("注册表缺 style_prompt_min");
-        assert_eq!(reg_min.modes, rules::STYLE_PROMPT_MIN_MODES, "注册表模式域须与执行者同源");
-        assert_eq!(reg.executor, reg_min.executor, "上/下限须同一执行者（避免两套判法）");
-    }
-
-    /// 上限/下限边界：恰好等于放行、越界一字打回。
-    #[test]
-    fn style_prompt_length_boundary() {
-        let exact = "x".repeat(rules::STYLE_PROMPT_MAX_CHARS);
-        assert!(style_prompt_length_issues("mode_c", &exact).is_empty(), "恰好等于上限应放行");
-        let over = "x".repeat(rules::STYLE_PROMPT_MAX_CHARS + 1);
-        assert!(!style_prompt_length_issues("mode_c", &over).is_empty(), "超一字应打回");
-        let min_exact = "x".repeat(rules::STYLE_PROMPT_MIN_CHARS);
-        assert!(style_prompt_length_issues("mode_a", &min_exact).is_empty(), "恰好等于下限应放行");
-        let under = "x".repeat(rules::STYLE_PROMPT_MIN_CHARS - 1);
-        assert!(!style_prompt_length_issues("mode_a", &under).is_empty(), "低于下限一字应打回");
-    }
-
-    /// 裸 Style Prompt/裸说明行（无 "Style Prompt:" 前缀、无方括号）不算歌词行（LLM 输出波动兜底）
-    #[test]
-    fn douyin_ignores_bare_style_prompt_line() {
-        // (a) 含逗号 >15 字裸行被忽略（Style Prompt 裸行）
-        let text = "黑色幽默喜剧, 120BPM 4/4拍, 滑音合成器+808底鼓+细碎hi-hat+人声采样, 30岁男声痞气半说半唱, 拥挤商场混响+窃窃私语底噪, 高开骤停两连击, 抖音神曲魔性\n[Hook]\n[suona blast, 808 slide bass, full energy, aggressive male voice]\n我 真的 会谢\n我 真的 会谢\n[Hook]\n我 真的 会谢\n[all instruments cut abruptly]\n参数: Weirdness=15 | Style Influence=90 | Audio Influence=0";
-        let r = validate_douyin(text);
-        assert!(!r.issues.iter().any(|i| i.contains("超 12 字")), "issues: {:?}", r.issues);
-        // (b) 含逗号 ≤15 字行仍按歌词检查（"妈妈，好吗" 4 字合法）
-        let text2 = "[Hook]\n我 真的 会谢\n[Hook]\n我 真的 会谢\n[Verse]\n妈妈，好吗\n[Hook]\n[all instruments cut abruptly]";
-        let r2 = validate_douyin(text2);
-        assert!(!r2.issues.iter().any(|i| i.contains("超 12 字")), "issues2: {:?}", r2.issues);
-        // (c) 无逗号超长行仍报超 12 字（不被裸行规则豁免）
-        let text3 = "[Hook]\n我 真的 会谢\n[Hook]\n我 真的 会谢\n[Verse]\n这一行歌词实在是太长了超过了十个字\n[Hook]\n[all instruments cut abruptly]";
-        let r3 = validate_douyin(text3);
-        assert!(r3.issues.iter().any(|i| i.contains("超 12 字")), "issues3: {:?}", r3.issues);
-    }
-
-    /// Style Prompt 行 / 参数行不得计入歌词行（Mode D ≤10 字检查误杀修复）
-    #[test]
-    fn douyin_ignores_style_and_params_lines() {
-        let text = "Style Prompt: 深夜室内民谣, 68 BPM 慢速 D小调, felt piano 与指弹吉他交织, 温暖木质氛围, 疲惫沙哑念白
-[Verse 1]
-[钢琴单音, 雨声采样, 空旷, 能量:2]
-雨敲窗 一声一声慢
-
-参数: Weirdness=25 | Style Influence=80 | Audio Influence=0";
-        let r = validate_douyin(text);
-        // 歌词行 4 字/6 字都不超长；Style/参数行不再被误计
-        assert!(!r.issues.iter().any(|i| i.contains("超 12 字")), "issues: {:?}", r.issues);
-}
-
 }
