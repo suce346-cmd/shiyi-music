@@ -38,3 +38,11 @@ describe("parseEnergy", () => {
     ]);
   });
 });
+
+describe("parseEnergy × render_suno 单行段头（全量复审 2026-10-20）", () => {
+  it("[Label | cues, energy N] → 标签取自同行，能量从显示中摘除", () => {
+    const r = parseEnergy("[Intro | rain ambience, guzheng, energy 1, instrumental]\n[Post-Chorus 2 | piano, energy 7]\n夜很长");
+    expect(r.sections).toEqual([{ label: "Intro", energy: 1 }, { label: "Post-Chorus2", energy: 7 }]);
+    expect(r.display).not.toMatch(/energy/);
+  });
+});

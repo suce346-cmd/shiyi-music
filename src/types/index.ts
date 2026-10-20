@@ -177,6 +177,8 @@ export type PipelineEvent =
   | { type: "backoff_end"; attempt: number }
   /** P1-2 结构化阶段进度（该阶段无 token 流；parsed 时 preview 为结构化摘要） */
   | { type: "phase_progress"; role: PipelineRoleKey; phase: PhaseKind; preview: string | null }
+  /** 终版 SongPlan（审核员定稿后一次）→ 历史条目 song_plan */
+  | { type: "final_plan"; song_plan: unknown }
   /** P1-13 文本评估 Judge（仅 text_eval_judge=true 时发出） */
   | {
       type: "text_eval";

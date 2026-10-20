@@ -20,6 +20,9 @@
 | 钥匙串条目 `-A`（任意应用可读） | adhoc 签名每次构建签名变化，限定应用 ACL 会导致自身读不到 | 不买 Apple 开发者账号（F6）；本机单用户 | 正式签名后去掉 `-A`，改应用 ACL |
 | 无代码签名 / 公证 / 自动更新 | — | 自用不分发（D1） | 签名、公证、更新器 |
 
+## fake-IP 代理（2026-10-20 全量复审）
+Clash/Surge 等 TUN fake-IP 模式把域名解析到 `198.18.0.0/15`。`validate_url` 对**域名解析结果**放行该段（IP 字面量仍拒），否则经代理的所有网关都被误拒。守护：`models::tests::fake_ip_range_only_for_resolved_domains`。
+
 ## 待用户在 Mac 上验证（box 为 Linux，macOS 分支不编译）
 1. `cargo test --lib keychain`（`cli_round_trip` 用隔离账户 `test:shiyi:*` 走新的 stdin 写入路径，**不触碰 `global`**）。
 2. GUI：设置中修改一次 Key → 重启 → Key 仍在。

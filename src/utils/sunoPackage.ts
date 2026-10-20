@@ -54,3 +54,13 @@ export function settingsShowsVarietyZero(settings: string): boolean {
 }
 
 export { ANCHORS };
+
+/** 全量复审 2026-10-20：历史条目落盘字段（song_plan + rendered）。
+ *  此前 HistoryEntry.song_plan/rendered 类型已存在但从未写入。非 Suno 包 → 不写 rendered。 */
+export function historyPlanFields(raw: string, songPlan: unknown): { song_plan?: unknown; rendered?: { title: string | null; style: string; lyrics: string; exclude: string; settings: string } } {
+  const out: { song_plan?: unknown; rendered?: { title: string | null; style: string; lyrics: string; exclude: string; settings: string } } = {};
+  if (songPlan != null) out.song_plan = songPlan;
+  const p = parseSunoPackage(raw);
+  if (p.isPackage) out.rendered = { title: p.title || null, style: p.style, lyrics: p.lyrics, exclude: p.exclude, settings: p.settings };
+  return out;
+}

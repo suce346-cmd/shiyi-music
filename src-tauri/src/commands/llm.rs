@@ -492,8 +492,26 @@ pub(crate) fn structured_unsupported_error(model: &str) -> AppError {
 }
 
 /// 模型正文 → JSON → 本地 schema 校验 → 类型化。失败 = Parse，detail 含 JSON 路径。
+/// 全量复审 2026-10-20：推理模型/部分网关在 json_object 或 none 档会把 JSON 包在
+/// `<think>…</think>` 前缀或 ```json 围栏里。只剥这两种外壳，不做任何"修复"（内容仍须原样合法 + 过 schema）。
+pub(crate) fn strip_structured_wrappers(raw: &str) -> &str {
+    let mut s = raw.trim();
+    if s.starts_with("<think>") {
+        if let Some(end) = s.find("</think>") {
+            s = s[end + "</think>".len()..].trim();
+        }
+    }
+    if let Some(rest) = s.strip_prefix("```") {
+        let rest = rest.strip_prefix("json").or_else(|| rest.strip_prefix("JSON")).unwrap_or(rest);
+        if let Some(inner) = rest.trim_end().strip_suffix("```") {
+            s = inner.trim();
+        }
+    }
+    s
+}
+
 pub(crate) fn parse_structured<T: serde::de::DeserializeOwned>(raw: &str, schema: &Value) -> Result<(T, Value), AppError> {
-    let v: Value = serde_json::from_str(raw.trim()).map_err(|e| {
+    let v: Value = serde_json::from_str(strip_structured_wrappers(raw)).map_err(|e| {
         AppError::new(ErrorKind::Parse, format!("结构化输出不是合法 JSON: {}", e))
     })?;
     crate::plan::schema::check(schema, &v).map_err(|errs| {
@@ -575,7 +593,13 @@ async fn probe_one(client: &Client, url: &str, api_key: &str, model: &str, mode:
     let status = r.status().as_u16();
     let outcome = crate::llm_caps::classify_probe_status(status);
     match outcome {
-        crate::llm_caps::ProbeOutcome::Supported => Ok(outcome),
+        crate::llm_caps::ProbeOutcome::Supported => {
+            // 全量复审 2026-10-20：200 不等于真支持——有网关静默忽略 response_format 返回散文。
+            // 读正文：非空且剥壳后不是 JSON → 本档 Rejected；空正文（推理模型 token 被 reasoning 吃光）
+            // 或 body 读不出 → 仍按 Supported（只凭状态码，与旧行为一致，不误降档）。
+            let body: Option<Value> = r.json().await.ok();
+            Ok(crate::llm_caps::classify_probe_body(body.as_ref()))
+        }
         crate::llm_caps::ProbeOutcome::Fatal => {
             let err = r.text().await.unwrap_or_else(|_| "unknown error".to_string());
             Err(AppError::api_status(status, &truncate_err(&err)))
@@ -1084,6 +1108,28 @@ mod tests {
     }
 
     /// 非流式 usage 提取——正常返回 Some，缺字段/全零为 None
+    /// 全量复审 2026-10-20：推理模型字段（reasoning / reasoning_details）不得混入正文
+    #[test]
+    fn reasoning_fields_never_leak_into_content() {
+        let j = serde_json::json!({"choices":[{"message":{"role":"assistant","content":"","reasoning":"x","reasoning_details":[{"type":"reasoning.text","text":"x"}]},"finish_reason":"length"}]});
+        assert!(extract_message(&j).is_none(), "空正文+reasoning → None（走降级/截断判定）");
+        let j2 = serde_json::json!({"choices":[{"message":{"content":"{\"a\":1}","reasoning":"long"}}]});
+        assert_eq!(extract_message(&j2).unwrap().0, "{\"a\":1}");
+        let (mut full, mut fr, mut u) = (String::new(), None, TokenUsage::default());
+        let r = parse_sse_line(r#"data: {"choices":[{"delta":{"reasoning":"think","reasoning_details":[{"text":"t"}]}}]}"#, &mut full, &mut fr, &mut u);
+        assert!(r.map(|s| s.is_empty()).unwrap_or(true) && full.is_empty(), "reasoning delta 不进正文");
+        parse_sse_line(r#"data: {"choices":[{"delta":{"content":"hi","reasoning":"z"}}]}"#, &mut full, &mut fr, &mut u);
+        assert_eq!(full, "hi");
+    }
+
+    #[test]
+    fn structured_wrappers_stripped_only_think_and_fence() {
+        assert_eq!(strip_structured_wrappers("<think>abc</think>\n{\"a\":1}"), "{\"a\":1}");
+        assert_eq!(strip_structured_wrappers("```json\n{\"a\":1}\n```"), "{\"a\":1}");
+        assert_eq!(strip_structured_wrappers(" {\"a\":1} "), "{\"a\":1}");
+        assert_eq!(strip_structured_wrappers("Here: {\"a\":1}"), "Here: {\"a\":1}", "散文前缀不修复");
+    }
+
     #[test]
     fn extract_message_returns_usage() {
         let ok = serde_json::json!({

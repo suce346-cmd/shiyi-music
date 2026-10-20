@@ -53,6 +53,12 @@ pub(crate) fn extract_energy_values(text: &str) -> Vec<u32> {
 /// 兼容四种标注格式：能量:X / 能量 X / energy:X / energy X（与前端 parseEnergy 同格式族），
 /// 只取含标记的行；区间值（如 energy 3-4）取两端各算一个值（min/max 覆盖）。
 pub(crate) fn plan_energy_range(text: &str) -> Option<(u32, u32)> {
+    // 全量复审 2026-10-20：生产传入的 plan 是 SongPlan 紧凑 JSON（单行），文本扫描会把
+    // schema_version/variety/target_seconds 等 ≤10 的数字误算成能量（min 被拉到 0/1）。
+    // JSON 形态按结构化字段读 `sections[].energy`。
+    if let Some(r) = song_plan_energy_range(text) {
+        return r;
+    }
     let vals = extract_energy_values(text);
     match (vals.iter().min(), vals.iter().max()) {
         (Some(&a), Some(&b)) => Some((a, b)),
@@ -60,8 +66,26 @@ pub(crate) fn plan_energy_range(text: &str) -> Option<(u32, u32)> {
     }
 }
 
+/// SongPlan JSON → Some(能量区间)（无 energy 字段 → Some(None)）；非 SongPlan JSON → None（走文本扫描）
+fn song_plan_energy_range(text: &str) -> Option<Option<(u32, u32)>> {
+    let v: serde_json::Value = serde_json::from_str(text.trim()).ok()?;
+    let secs = v.get("sections")?.as_array()?;
+    let es: Vec<u32> = secs.iter().filter_map(|s| s.get("energy")?.as_u64()).map(|e| e as u32).collect();
+    Some(match (es.iter().min(), es.iter().max()) {
+        (Some(&a), Some(&b)) => Some((a, b)),
+        _ => None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn song_plan_json_uses_section_energy_fields() {
+        let j = r#"{"schema_version":1,"settings":{"variety":0},"sections":[{"energy":3,"target_seconds":2},{"energy":8}]}"#;
+        assert_eq!(super::plan_energy_range(j), Some((3, 8)));
+        assert_eq!(super::plan_energy_range(r#"{"sections":[{"energy":null}]}"#), None);
+    }
+
     use super::*;
 
     /// 四种标注格式（能量:/能量 /energy:/energy）全部兼容，min/max 正确

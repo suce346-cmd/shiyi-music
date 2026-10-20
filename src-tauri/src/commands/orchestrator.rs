@@ -1306,7 +1306,7 @@ async fn produce_final_text<R: Runtime>(
         crate::knowledge::VOCAL_MIX_INJECT_MAX_CHARS,
     ));
     system.push_str(final_pack_lang_directive(request));
-    let (package, findings, _final_plan) = plan_flow::auditor_finalize(
+    let (package, findings, final_plan) = plan_flow::auditor_finalize(
         app,
         request,
         &plan,
@@ -1318,6 +1318,12 @@ async fn produce_final_text<R: Runtime>(
         system,
     )
     .await?;
+    if let Ok(v) = serde_json::to_value(&final_plan) {
+        let _ = app.emit(
+            "pipeline",
+            crate::models::PipelineEnvelope::new(run_id.to_string(), PipelineEvent::FinalPlan { song_plan: v }),
+        );
+    }
     Ok((package, findings))
 }
 

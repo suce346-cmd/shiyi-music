@@ -331,6 +331,12 @@ pub(crate) fn plan_energy_range_str(plan: &str) -> Option<(u32, u32)> {
 /// 提取值限 30-300（防 "能量:8 BPM 范围说明" 这类邻近数字误命中）。
 /// char_indices/chars 全字符遍历——禁止字节索引切片（多字节字符内部切片会 panic）。
 pub(crate) fn plan_bpm_value(plan: &str) -> Option<u32> {
+    // 全量复审 2026-10-20：生产 plan 为 SongPlan JSON（`"bpm":90`），文本规则恒取不到 → 读结构化字段
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(plan.trim()) {
+        if v.get("sections").is_some() {
+            return v.pointer("/global/bpm").and_then(|b| b.as_u64()).and_then(|b| sanity_bpm(b as u32));
+        }
+    }
     let upper = plan.to_uppercase();
     let pos = upper.find("BPM")?;
     // "120BPM" / "120 BPM"：BPM 前的最后一个数字段（trim_end 允许 "68 BPM" 的间隔空格）
@@ -2266,6 +2272,15 @@ mod tests {
         assert_eq!(plan_energy_range_str(plan), Some((2, 9)));
         // 无能量标注 → None
         assert_eq!(plan_energy_range_str("BPM 120 深夜民谣"), None);
+    }
+
+    /// SongPlan JSON：BPM 读 global.bpm（文本规则对 `"bpm":90` 恒失配）
+    #[test]
+    fn plan_bpm_value_reads_song_plan_json() {
+        let p = crate::commands::plan_flow::plan_to_checkpoint(&crate::plan::fixtures::minimal_plan());
+        let want = crate::plan::fixtures::minimal_plan().global.bpm.map(|b| b as u32);
+        assert_eq!(plan_bpm_value(&p), want);
+        assert!(want.is_some());
     }
 
     /// BPM 提取：数字前紧邻中文/全角字符时不得 panic（char 边界安全），BPM 值正确

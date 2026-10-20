@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 pub use crate::plan::LyricLang;
 use std::collections::HashMap;
+use serde_json::Value as JsonValue;
 use crate::errors::{AppError, ErrorKind};
 use crate::rules::{FEEDBACK_MAX_CHARS, INPUT_MAX_CHARS};
 
@@ -513,6 +514,16 @@ mod tests {
         }
     }
 
+    /// fake-IP 代理：域名解析到 198.18/15 放行，字面量 198.18.x.x 仍拒（rejects 用例保留）
+    #[test]
+    fn fake_ip_range_only_for_resolved_domains() {
+        assert!(is_fake_ip_proxy_range("198.18.0.1".parse().unwrap()));
+        assert!(is_fake_ip_proxy_range("198.19.255.1".parse().unwrap()));
+        assert!(!is_fake_ip_proxy_range("198.20.0.1".parse().unwrap()));
+        assert!(!is_fake_ip_proxy_range("10.0.0.1".parse().unwrap()));
+        assert!(validate_url("http://198.18.0.1/v1").is_err(), "字面量仍拒");
+    }
+
     /// S-1：公网 IP 直连通过（用 IP 字面量避免单测依赖 DNS；真实域名由无头实网测试覆盖）
     #[test]
     fn validate_url_allows_public() {
@@ -836,6 +847,7 @@ pub fn validate_url(raw: &str) -> Result<(), String> {
         return Err("URL 主机不允许指向 localhost".to_string());
     }
     let port = url.port_or_known_default().unwrap_or(443);
+    let literal = host.parse::<std::net::IpAddr>().is_ok();
     let ips: Vec<std::net::IpAddr> = match host.parse::<std::net::IpAddr>() {
         Ok(ip) => vec![ip],
         Err(_) => {
@@ -848,11 +860,30 @@ pub fn validate_url(raw: &str) -> Result<(), String> {
         }
     };
     for ip in ips {
+        // 全量复审 2026-10-20：Clash/Surge 等 fake-IP 代理把**域名**解析到 198.18.0.0/15，
+        // 旧实现把所有经代理的公网网关一并拒掉（box 实测 amr-link 域名 → 198.18.0.1）。
+        // 仅对域名解析结果放行该段；IP 字面量 198.18.x.x 仍拒（基准测试段不应被直接填写）。
+        if !literal && is_fake_ip_proxy_range(ip) {
+            continue;
+        }
         if is_forbidden_ip(ip) {
             return Err(format!("URL 解析到内网/环回/保留地址（{}），已拒绝", ip));
         }
     }
     Ok(())
+}
+
+/// fake-IP 代理段 198.18.0.0/15（RFC 2544 基准段，Clash/Surge TUN 模式的域名映射池）
+fn is_fake_ip_proxy_range(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            let [a, b, _, _] = v4.octets();
+            a == 198 && (18..=19).contains(&b)
+        }
+        std::net::IpAddr::V6(v6) => v6
+            .to_ipv4_mapped()
+            .is_some_and(|v4| is_fake_ip_proxy_range(std::net::IpAddr::V4(v4))),
+    }
 }
 
 /// 内网/保留 IP 判定（纯函数可测；手写区间避免 std 未稳定的 is_global/is_unique_local）
@@ -1048,8 +1079,13 @@ pub enum PipelineEvent {
     /// P1-2 结构化阶段进度（该阶段不出 token 流）：structuring = 正在输出方案；
     /// parsed = 已通过本地 schema 校验，preview 为人类可读摘要（供圆桌面板结构化预览）。
     PhaseProgress { role: PipelineRole, phase: PhaseKind, preview: Option<String> },
+    /// 全量复审 2026-10-20：终版 SongPlan（审核员定稿后发出一次），前端随历史条目落盘
+    /// `song_plan`（此前 HistoryEntry.song_plan 类型存在但永不写入）。
     /// P1-13 文本评估（仅当 text_eval_judge=true）：七维分数 + 小样本声明。
     /// `lines` = `"id:score:note"`，避免嵌套类型干扰 wire 锁字段抽取。
+    FinalPlan {
+        song_plan: JsonValue,
+    },
     TextEval {
         total: u8,
         lines: Vec<String>,

@@ -78,24 +78,61 @@ fn init_warn_logging_once() {
 
 /// 无头执行：mock_app 拿句柄 → run_pipeline_with_timeout 直调（不走窗口）。
 /// 事件发射在 mock 下为空操作；终稿文本即断言对象。
-async fn run_headless(
+/// 全量复审 2026-10-20：订阅 "pipeline" 事件（mock 运行时同样派发），终稿后对事件流做结构化断言。
+async fn run_headless_with(
     mode: Mode,
     user_input: &str,
     original_lyrics: Option<&str>,
     timeout: Duration,
-) -> Option<String> {
+    tweak: impl FnOnce(&mut PipelineRequest),
+) -> Option<(String, Vec<serde_json::Value>)> {
+    use tauri::Listener;
     init_warn_logging_once();
     let cfg = test_config()?;
     let app = tauri::test::mock_app();
     let handle = app.handle().clone();
-    let req = make_request(&cfg, mode, user_input, original_lyrics);
+    let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::<serde_json::Value>::new()));
+    let sink = events.clone();
+    handle.listen_any("pipeline", move |e| {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(e.payload()) {
+            sink.lock().unwrap().push(v["event"].clone());
+        }
+    });
+    let mut req = make_request(&cfg, mode, user_input, original_lyrics);
+    tweak(&mut req);
     match orchestrator::run_pipeline_with_timeout(handle, req, timeout).await {
-        Ok(text) => Some(text),
+        Ok(text) => {
+            let ev = events.lock().unwrap().clone();
+            Some((text, ev))
+        }
         Err(e) => {
             println!("HEADLESS-FAIL kind={:?} msg={}", e.kind, e.message);
             None
         }
     }
+}
+
+/// 事件流断言：最后一次 audit_result.pass=true、无 degraded、final_plan 可解析且再过 plan::validate + render_suno
+fn assert_events_pass(mode: Mode, events: &[serde_json::Value], original_lyrics: Option<&str>) -> suno_prompt_generator_lib::plan::SongPlan {
+    use suno_prompt_generator_lib::plan::{render_suno, schema, validate};
+    let types: Vec<&str> = events.iter().filter_map(|e| e["type"].as_str()).collect();
+    println!("HEADLESS-EVENTS {}: {:?}", match_mode(&mode), {
+        let mut c = std::collections::BTreeMap::<&str, usize>::new();
+        for t in &types { *c.entry(t).or_default() += 1; }
+        c
+    });
+    let degraded: Vec<_> = events.iter().filter(|e| e["type"] == "degraded").collect();
+    assert!(degraded.is_empty(), "不应降级: {degraded:?}");
+    let last_audit = events.iter().rev().find(|e| e["type"] == "audit_result").expect("应有 audit_result");
+    assert_eq!(last_audit["pass"], true, "终审未过: {last_audit}");
+    let fp = events.iter().rev().find(|e| e["type"] == "final_plan").expect("应有 final_plan 事件");
+    let plan = schema::parse_song_plan(&fp["song_plan"]).expect("final_plan 应过 schema");
+    let ctx = validate::ValidateCtx { mode: mode.to_str_name(), converged: None, original_lyrics };
+    let issues = validate::validate(&plan, &ctx);
+    assert!(validate::passed(&issues), "final_plan 复验未过: {:?}", issues.iter().map(|i| i.line()).collect::<Vec<_>>());
+    let r = render_suno::render(&plan);
+    assert!(!r.style.trim().is_empty() && !r.lyrics.trim().is_empty(), "render_suno 产物不应为空");
+    plan
 }
 
 /// P4/§6.2 集成断言（C1-C5 升级的新规则）：终稿必须通过全部硬校验（含 C1 参数门/C2 保真链路）。
@@ -130,11 +167,12 @@ fn assert_final_passes_hard_validation(mode: Mode, text: &str, original_lyrics: 
 #[tokio::test]
 #[ignore]
 async fn headless_mode_a() {
-    let text = run_headless(
+    let (text, events) = run_headless_with(
         Mode::ModeA,
         "[Verse]\n深夜灯亮键盘响\n窗外雨落心火燃\n[Chorus]\n我不睡我不退\n熬过今夜见光来",
         None,
         Duration::from_secs(8 * 60),
+        |_| {},
     )
     .await
     .expect("Mode A 无头实网应产出终稿（R1 保底 + R2 流式重试已落地）");
@@ -146,6 +184,7 @@ async fn headless_mode_a() {
         text.chars().take(200).collect::<String>()
     );
     assert_final_passes_hard_validation(Mode::ModeA, &text, None);
+    assert_events_pass(Mode::ModeA, &events, None);
     println!("HEADLESS-A-OK chars={}", text.chars().count());
 }
 
@@ -153,16 +192,18 @@ async fn headless_mode_a() {
 #[tokio::test]
 #[ignore]
 async fn headless_mode_b() {
-    let text = run_headless(
+    let (text, events) = run_headless_with(
         Mode::ModeB,
         "雨天街角错过的那把伞",
         None,
         Duration::from_secs(8 * 60),
+        |_| {},
     )
     .await
     .expect("Mode B 无头实网应产出终稿");
     assert!(!text.trim().is_empty(), "Mode B 终稿不应为空");
     assert_final_passes_hard_validation(Mode::ModeB, &text, None);
+    assert_events_pass(Mode::ModeB, &events, None);
     println!("HEADLESS-B-OK chars={}", text.chars().count());
 }
 
@@ -170,33 +211,42 @@ async fn headless_mode_b() {
 #[tokio::test]
 #[ignore]
 async fn headless_mode_c() {
-    let text = run_headless(
+    let (text, events) = run_headless_with(
         Mode::ModeC,
         "深夜加班的坚持",
         Some("昨夜星辰昨夜风\n画楼西畔桂堂东\n身无彩凤双飞翼"),
         Duration::from_secs(8 * 60),
+        |_| {},
     )
     .await
     .expect("Mode C 无头实网应产出终稿（原词直传 + 重试不丢词）");
     assert!(!text.trim().is_empty(), "Mode C 终稿不应为空");
     assert_final_passes_hard_validation(Mode::ModeC, &text, Some("昨夜星辰昨夜风\n画楼西畔桂堂东\n身无彩凤双飞翼"));
+    assert_events_pass(Mode::ModeC, &events, Some("昨夜星辰昨夜风\n画楼西畔桂堂东\n身无彩凤双飞翼"));
     println!("HEADLESS-C-OK chars={}", text.chars().count());
 }
 
-/// Mode D：短灵感 → 抖音神曲（终稿非空；座位=6；最长链 12 分钟预算）
+/// Mode D：短灵感 → 抖音神曲（场景=dance + 文本评估 Judge 开；最长链 12 分钟预算）
 #[tokio::test]
 #[ignore]
 async fn headless_mode_d() {
-    let text = run_headless(
+    let (text, events) = run_headless_with(
         Mode::ModeD,
         "深夜加班打工人的心酸和坚持，要炸，要洗脑循环",
         None,
         Duration::from_secs(12 * 60),
+        |r| {
+            r.douyin_scene = Some("dance".into());
+            r.text_eval_judge = Some(true);
+        },
     )
     .await
-    .expect("Mode D 无头实网应产出终稿（R4 错峰 + R1 保底已落地）");
+    .expect("Mode D 无头实网应产出终稿");
     assert!(!text.trim().is_empty(), "Mode D 终稿不应为空");
-    assert_final_passes_hard_validation(Mode::ModeD, &text, None);
+    let plan = assert_events_pass(Mode::ModeD, &events, None);
+    let dy = serde_json::to_value(&plan.mode_meta).unwrap();
+    assert_eq!(dy["douyin"]["scene"], "dance", "场景应由请求盖写: {dy}");
+    assert!(events.iter().any(|e| e["type"] == "text_eval"), "Judge 开启应发 text_eval");
     println!("HEADLESS-D-OK chars={}", text.chars().count());
 }
 

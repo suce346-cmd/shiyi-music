@@ -22,6 +22,7 @@ import { formatUrlIssue } from "./utils/urlGuard";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import type { AppError, Mode, ChatMessage, ChatTurn, HistoryEntry, LLMStatus, ExpertCard, PipelineRoleKey, StreamChunk, StructuredMode } from "./types";
 import { acceptStreamChunk } from "./utils/streamChunk";
+import { historyPlanFields } from "./utils/sunoPackage";
 import { MODE_LABELS, errKind, errText, isCancelledError, capKey, STRUCTURED_MODES } from "./types";
 import { probeStructuredCaps, withProbedCap, effectiveMode } from "./utils/structuredCaps";
 import { t } from "./i18n";
@@ -422,9 +423,9 @@ export default function App() {
     setHistoryEntries(updated); scheduleSave(updated);
   }, [scheduleSave]);
 
-  const updateHistoryEntry = useCallback((id: string, output: string, conv: ChatTurn[], usage?: { prompt_tokens: number; completion_tokens: number }) => {
+  const updateHistoryEntry = useCallback((id: string, output: string, conv: ChatTurn[], usage?: { prompt_tokens: number; completion_tokens: number }, planFields?: Partial<Pick<HistoryEntry, "song_plan" | "rendered">>) => {
     const updated = historyRef.current.map(e =>
-      e.id === id ? { ...e, output, conversation: conv, usage: usage ?? e.usage, timestamp: Date.now() } : e
+      e.id === id ? { ...e, ...(planFields ?? {}), output, conversation: conv, usage: usage ?? e.usage, timestamp: Date.now() } : e
     );
     setHistoryEntries(updated); scheduleSave(updated);
   }, []);
@@ -494,6 +495,7 @@ export default function App() {
         ...(pipeline.validationRef.current
           ? { validation_passed: pipeline.validationRef.current.passed }
           : {}),
+        ...historyPlanFields(raw, pipeline.finalPlanRef.current),
       };
       setCurrentHistoryId(entry.id);
       const updated = [entry, ...historyRef.current];
@@ -634,7 +636,7 @@ export default function App() {
       { role: "assistant", content: raw },
     ];
     if (currentHistoryId) {
-      updateHistoryEntry(currentHistoryId, raw, allTurns, { ...pipeline.usageRef.current });
+      updateHistoryEntry(currentHistoryId, raw, allTurns, { ...pipeline.usageRef.current }, historyPlanFields(raw, pipeline.finalPlanRef.current));
     } else {
       saveToHistory(conversation[0]?.content || lastUserInput, raw, allTurns, mode, { ...pipeline.usageRef.current });
     }
@@ -702,7 +704,7 @@ export default function App() {
         { role: "assistant", content: raw },
       ];
       if (currentHistoryId) {
-        updateHistoryEntry(currentHistoryId, raw, allTurns, { ...pipeline.usageRef.current });
+        updateHistoryEntry(currentHistoryId, raw, allTurns, { ...pipeline.usageRef.current }, historyPlanFields(raw, pipeline.finalPlanRef.current));
       } else {
         saveToHistory(conversation[0]?.content || lastUserInput, raw, allTurns, mode, { ...pipeline.usageRef.current });
       }

@@ -294,6 +294,7 @@ export function usePipeline() {
    * 不读 state——pipeline.validation 在保存闭包里定格为点击时的 null（validation_passed
    * 恒缺的根因，与 usageRef 当初的归零同构） */
   const validationRef = useRef<{ passed: boolean; issues: string[] } | null>(null);
+  const finalPlanRef = useRef<unknown>(null);
   /** 后端元数据（启动获取一次；失败回退本地缓存/内置表，不阻断） */
   const [meta, setMeta] = useState<PipelineMeta | null>(() => {
     try {
@@ -420,12 +421,13 @@ export function usePipeline() {
             validation: null,
           }));
           validationRef.current = null;
+          finalPlanRef.current = null;
           updateExpert("auditor", { status: "working", note: "结构化定稿中…" });
           break;
         case "audit_result":
           updateExpert("auditor", {
             status: "done",
-            note: e.pass ? "定稿完成" : `格式问题 ${e.findings.length} 条`,
+            note: e.pass ? "定稿完成" : `硬校验未通过 ${e.findings.length} 条`,
           });
           setState((prev) => ({
             ...prev,
@@ -528,6 +530,10 @@ export function usePipeline() {
           // P1-2：结构化阶段无 token 流，以进度+解析后预览代替
           updateExpert(e.role, { status: "working", note: phaseProgressNote(e.phase, e.preview) });
           break;
+        case "final_plan": {
+          finalPlanRef.current = e.song_plan ?? null;
+          break;
+        }
         case "text_eval": {
           // P1-13：旁路 Judge 结果（仅 settings.textEvalJudge=true 时后端才发）
           const dims = (e.lines || []).join(" ");
@@ -594,6 +600,7 @@ export function usePipeline() {
       usageRef.current = { ...ZERO_USAGE };
       degradedRef.current = [];
       validationRef.current = null;
+      finalPlanRef.current = null;
 
       try {
         await startListening(token, runId);
@@ -690,6 +697,7 @@ export function usePipeline() {
       usageRef.current = { ...ZERO_USAGE };
       degradedRef.current = [];
       validationRef.current = null;
+      finalPlanRef.current = null;
     },
     [cleanup]
   );
@@ -745,5 +753,5 @@ export function usePipeline() {
 
   // 保留 run/refine/reset 命名（App 调用不变）+ B3 的 cancel + A9 的 getRunId + R3 的 resume
   // C5：degradedRef / validationRef 与 usageRef 同模式——历史保存同源读取（ref 不受闭包定格影响）
-  return { ...state, run, refine, reset, cancel, getRunId, resume, decideGate, usageRef, degradedRef, validationRef };
+  return { ...state, run, refine, reset, cancel, getRunId, resume, decideGate, usageRef, degradedRef, validationRef, finalPlanRef };
 }

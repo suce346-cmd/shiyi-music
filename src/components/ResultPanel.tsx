@@ -27,6 +27,8 @@ interface EnergySection {
 /// Suno 不识别数值标注，显示/复制时从说明行摘出，作为独立能量板块展示。
 /// 结构标签行（[Verse 1]/[Chorus 2] 等，支持编号）作为段落名关联到后续说明行
 const TAG_RE = /^\[(Final Chorus|Verse|Pre-Chorus|Chorus|Bridge|Outro|Hook|Drop|Intro|Interlude|Beat Switch)( \d+)?\]/;
+/// render_suno 单行段头 `[Verse 1 | cue, energy N]`（标签为 SongPlan 自由文本，不限上表）
+const HEAD_RE = /^\[([^\]|]+?)\s*\|/;
 /// 能量标注：吃掉前导逗号/空格（", 能量:2" / " 能量:2" / "energy 3-4" / "energy:8" 都干净移除）。
 /// 兼容中文/英文与单值/区间——LLM 在纯英文说明行时可能输出 "energy X-Y"。
 const ENERGY_RE = /[,，\s]*(?:能量[:：]?\s*|energy\s*[:：]?\s*)(\d{1,2})(?:\s*-\s*(\d{1,2}))?/i;
@@ -43,6 +45,9 @@ export function parseEnergy(text: string): { display: string; sections: EnergySe
         currentLabel = tag[2] ? `${tag[1]}${tag[2].trim()}` : tag[1];
         return line;
       }
+      // 全量复审 2026-10-20：render_suno 输出 `[Label | cue, energy N]` 单行头——标签与能量同行
+      const head = line.match(HEAD_RE);
+      if (head) currentLabel = head[1].trim().replace(/\s+(\d+)$/, "$1");
       const em = line.match(ENERGY_RE);
       if (em && line.trim().startsWith("[")) {
         // 单值取 X；区间（energy 3-4）取上限作为段落能量强度

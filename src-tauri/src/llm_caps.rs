@@ -191,3 +191,30 @@ mod tests {
         assert!(!response_format_rejection(""));
     }
 }
+
+/// 200 响应正文分类（见 llm::probe_one）：content 非空且非 JSON → Rejected，否则 Supported。
+pub fn classify_probe_body(body: Option<&serde_json::Value>) -> ProbeOutcome {
+    let content = body.and_then(|b| b["choices"][0]["message"]["content"].as_str()).unwrap_or("");
+    let c = crate::commands::llm::strip_structured_wrappers(content);
+    if c.is_empty() || serde_json::from_str::<serde_json::Value>(c).is_ok() {
+        ProbeOutcome::Supported
+    } else {
+        ProbeOutcome::Rejected
+    }
+}
+
+#[cfg(test)]
+mod probe_body_tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn probe_body_content_aware() {
+        let m = |c: serde_json::Value| json!({"choices":[{"message":{"role":"assistant","content":c,"reasoning":"think...","reasoning_details":[{"type":"reasoning.text"}]}}]});
+        assert_eq!(classify_probe_body(Some(&m(json!("{\"ok\":true}")))), ProbeOutcome::Supported);
+        assert_eq!(classify_probe_body(Some(&m(json!("```json\n{\"ok\":true}\n```")))), ProbeOutcome::Supported);
+        assert_eq!(classify_probe_body(Some(&m(json!("")))), ProbeOutcome::Supported, "reasoning 吃光 token");
+        assert_eq!(classify_probe_body(Some(&m(json!(null)))), ProbeOutcome::Supported);
+        assert_eq!(classify_probe_body(Some(&m(json!("Sure! Here is JSON")))), ProbeOutcome::Rejected);
+        assert_eq!(classify_probe_body(None), ProbeOutcome::Supported);
+    }
+}

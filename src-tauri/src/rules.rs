@@ -3260,7 +3260,7 @@ mod tests {
     }
 
     /// 上游承诺必须与下游执行者同域（R1 根因的镜像）：mode_d 的配器/能量硬门没有执行者
-    /// （`validate_for_mode("mode_d")` → `validate_douyin` 不查件数与能量差），故其 prompt
+    /// （`plan::validate` 的 D 模式分支不查件数与能量差），故其 prompt
     /// 不得引用这些 A/B 专属阈值占位符——引用了就是"上游立下没人执行的承诺"，与"上游零告知"
     /// 一样制造降级环（已改写为带参考件数的设计方向）。反向断言防误删把 A/B 门一起削弱。
     #[test]
@@ -3552,14 +3552,14 @@ const PLAN_FIELD_CONTRACT: &str = "【SongPlan 字段契约（最高优先级：
 6. 歌词 → sections[].lines；参数 → settings（variety=${VARIETY}；reference_audio 默认 false，为 true 时 audio_influence 可非 0）；notes 写分析/裁决，不渲染。\n7. D 模式另填 mode_meta.douyin（clip/hook_line/loop_tail；scene 由请求盖写勿自选）；mix 含 M-01+M-06；negative 含 long intro/slow build/fade out。\n8. 可选文本层（默认 null=关闭）：pronunciation_hints（多音字/发音）、persona（声音指纹）、series_context（专辑/系列一致性）。";
 
 /// 说明行契约正文（单源：本文件唯一一份；数值一律 `${占位符}`）。
-const DESC_LINE_CONTRACT: &str = "【说明行契约（全模式统一）】每段说明行形如 [乐器1+行为, 乐器2+行为, …, ${DESC_LINE_SPACE_SLOT}, 人声状态]（A/B 模式另在行尾标 能量:X），整行含方括号 ≤${DESC_LINE_MAX} 字符。上限宽松：不得为缩短而删乐器或行为动词（最强段 ≥${MIN_INSTRUMENT_STRONG} 件、单段 ${INSTRUMENT_RANGE} 件照常执行），也不得靠堆修饰词占满；超过上限的说明行会被 plan::validate 硬校验拦下。\n\
+const DESC_LINE_CONTRACT: &str = "【说明行契约（全模式统一）】每段说明行形如 [乐器1+行为, 乐器2+行为, …, ${DESC_LINE_SPACE_SLOT}, 人声状态]（由渲染器从 SongPlan 字段拼出；A/B 能量只填该段 energy 字段），整行含方括号 ≤${DESC_LINE_MAX} 字符。上限宽松：不得为缩短而删乐器或行为动词（最强段 ≥${MIN_INSTRUMENT_STRONG} 件、单段 ${INSTRUMENT_RANGE} 件照常执行），也不得靠堆修饰词占满；超过上限的说明行会被 plan::validate 硬校验拦下。\n\
 1. 乐器主次：乐器逐个列名 + 行为动词，按主次排列（主奏在前、支撑次之、色彩点缀最后）；禁 full band 等笼统写法。\n\
 2. 槽位齐全：每段说明行必须同时含乐器集、${DESC_LINE_SPACE_SLOT}（声场或力度动态，如 close room / wide hall / 突转）、人声状态——缺任一槽位即格式缺陷（制作人逐段核对，校验员在定稿人补齐）。\n\
 3. 人声映射：每段说明行的人声状态必须能映射到 Style Prompt 的人声描述序列（高能段用开放真声形态、低能段用气声/假声形态），不得自造与 Style Prompt 无关的人声描述。\n\
-4. 能量标注：A/B 模式每段说明行末尾必须标 能量:X（${ENERGY_SCALE}）——必须用中文'能量:X'格式、X 为 ${ENERGY_SCALE} 单值，禁英文 energy、禁区间写法（如 8-9）。";
+4. 能量标注：A/B 模式每段必填 energy 字段（${ENERGY_SCALE} 单值整数，禁区间）；渲染器统一输出为 energy N——不得把能量写进 positive_local 等文本字段（会重复且触发 Style English 校验）。";
 
 /// 极简段豁免条款（单源；**仅 A/B 适用**）：下游执行者 = `plan::validate::section_floor`
-/// 过滤 + `validate_production` 的 mode_a/mode_b 最弱段下限检查。
+/// 过滤 + `plan::validate` 的 mode_a/mode_b 最弱段下限检查。
 ///
 /// 上下游同域修复（2026-09-18，审计 #20 延伸）：旧版此条款只写在 `prompts.rs` 的 mode_a 一处
 /// （还额外限死"Bridge/Intro"与"1-2 件"），mode_b **零告知**，而 A/B 两模式的说明行规则又写着
