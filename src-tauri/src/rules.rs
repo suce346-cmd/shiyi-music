@@ -728,7 +728,10 @@ pub const PROSE_SOURCE_FILES: &[&str] = &["commands/prompts.rs", "commands/roles
 
 /// `PROSE_CARRIERS` 之外的散文定义显式豁免（名 → 理由）。
 /// 只用于"形似散文、实际不进 LLM 上下文"的定义；进上下文的一律登记，不得豁免。
-pub const PROSE_CARRIER_EXEMPT: &[(&str, &str)] = &[];
+pub const PROSE_CARRIER_EXEMPT: &[(&str, &str)] = &[(
+    "RESEARCH",
+    "plan/suno_profile.rs：Suno 限制的事实来源标注，只经 get_suno_meta 给前端展示，不进 LLM 上下文",
+)];
 
 pub const PROSE_CARRIERS: &[ProseCarrier] = &[
     ProseCarrier { name: "CHECKLIST_A", text: CHECKLIST_A, csv_locked: &[] },

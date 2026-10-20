@@ -5,6 +5,7 @@ pub mod errors;
 pub mod knowledge;
 pub mod logging;
 pub mod models;
+pub mod plan;
 pub mod rules;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -44,7 +45,8 @@ pub fn run() {
             commands::history::history_export_text,
             commands::logdir::open_log_dir,
             commands::logdir::open_config_dir,
-            commands::orchestrator::pipeline_resume
+            commands::orchestrator::pipeline_resume,
+            plan::suno_profile::get_suno_meta
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

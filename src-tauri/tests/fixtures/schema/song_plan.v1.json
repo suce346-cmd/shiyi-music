@@ -1,0 +1,279 @@
+{
+  "$defs": {
+    "GlobalStyle": {
+      "additionalProperties": false,
+      "properties": {
+        "arc": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bpm": {
+          "maximum": 220,
+          "minimum": 40,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "genre": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "instruments": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "meter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mix": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "negative": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "vocal": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "arc",
+        "bpm",
+        "genre",
+        "instruments",
+        "key",
+        "meter",
+        "mix",
+        "negative",
+        "vocal"
+      ],
+      "type": "object"
+    },
+    "LyricsLang": {
+      "enum": [
+        "zh",
+        "en"
+      ],
+      "type": "string"
+    },
+    "ModeMeta": {
+      "additionalProperties": false,
+      "properties": {
+        "lyrics_lang": {
+          "$ref": "#/$defs/LyricsLang"
+        }
+      },
+      "required": [
+        "lyrics_lang"
+      ],
+      "type": "object"
+    },
+    "Section": {
+      "additionalProperties": false,
+      "properties": {
+        "energy": {
+          "maximum": 10,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "instruments": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/SectionKind"
+        },
+        "label": {
+          "type": "string"
+        },
+        "lines": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "minimal": {
+          "type": "boolean"
+        },
+        "negative_local": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "positive_local": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "target_seconds": {
+          "maximum": 600,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "energy",
+        "instruments",
+        "kind",
+        "label",
+        "lines",
+        "minimal",
+        "negative_local",
+        "positive_local",
+        "target_seconds"
+      ],
+      "type": "object"
+    },
+    "SectionKind": {
+      "enum": [
+        "intro",
+        "verse",
+        "pre_chorus",
+        "chorus",
+        "hook",
+        "post_chorus",
+        "bridge",
+        "interlude",
+        "drop",
+        "breakdown",
+        "outro",
+        "end"
+      ],
+      "type": "string"
+    },
+    "SunoSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "audio_influence": {
+          "maximum": 100,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "style_influence": {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "variety": {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "vocal_gender": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VocalGender"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "weirdness": {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "audio_influence",
+        "style_influence",
+        "variety",
+        "vocal_gender",
+        "weirdness"
+      ],
+      "type": "object"
+    },
+    "VocalGender": {
+      "enum": [
+        "male",
+        "female"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "global": {
+      "$ref": "#/$defs/GlobalStyle"
+    },
+    "mode_meta": {
+      "$ref": "#/$defs/ModeMeta"
+    },
+    "notes": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "schema_version": {
+      "maximum": 1,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "sections": {
+      "items": {
+        "$ref": "#/$defs/Section"
+      },
+      "type": "array"
+    },
+    "settings": {
+      "$ref": "#/$defs/SunoSettings"
+    },
+    "title": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "global",
+    "mode_meta",
+    "notes",
+    "schema_version",
+    "sections",
+    "settings",
+    "title"
+  ],
+  "title": "SongPlan",
+  "type": "object"
+}
