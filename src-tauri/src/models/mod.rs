@@ -341,6 +341,7 @@ mod tests {
         assert!(edge.validate().is_ok());
         // generation 越界经 validate_request 透出
         let mut req = PipelineRequest { structured_caps: None,
+        douyin_scene: None,
             output_lang: "zh".into(),
             mode: Mode::ModeB,
             user_input: "雨天".into(),
@@ -376,6 +377,7 @@ mod tests {
     fn validate_request_rejects_bad_input() {
         fn good() -> PipelineRequest {
             PipelineRequest { structured_caps: None,
+            douyin_scene: None,
                 output_lang: "zh".into(),
                 mode: Mode::ModeB,
                 user_input: "雨天".into(),
@@ -495,6 +497,7 @@ mod tests {
     fn validate_request_rejects_role_override_internal_url() {
         fn good() -> PipelineRequest {
             PipelineRequest { structured_caps: None,
+            douyin_scene: None,
                 output_lang: "zh".into(),
                 mode: Mode::ModeB,
                 user_input: "雨天".into(),
@@ -705,6 +708,9 @@ pub struct PipelineRequest {
     /// P1-2：结构化能力探测缓存（键 = `llm_caps::cap_key(base_url, model)`）；旧前端无此字段 → None
     #[serde(default)]
     pub structured_caps: Option<HashMap<String, crate::llm_caps::StructuredMode>>,
+    /// D 模式场景（P1-7）：缺省/非法 → 后端写 daily + scene_source=default
+    #[serde(default)]
+    pub douyin_scene: Option<String>,
 }
 
 /// output_lang 缺省值：全中文（现状行为）。

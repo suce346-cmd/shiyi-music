@@ -10,6 +10,7 @@
 //! - 无嵌套可选对象以外的多态；全部字段在 schema 中 required（Option → 可为 null），
 //!   `additionalProperties:false`——与 OpenAI `json_schema strict` 兼容（schema.rs 统一后处理）。
 
+pub mod douyin;
 pub mod render_suno;
 pub mod schema;
 pub mod suno_profile;
@@ -131,11 +132,14 @@ pub enum LyricLang {
     En,
 }
 
-/// 各模式专属字段（§2.3）。D 模式字段（场景/片段/Hook）随 P1-7 加入。
+/// 各模式专属字段（§2.3）。D 模式字段见 `douyin`（P1-7）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ModeMeta {
     pub lyrics_lang: LyricLang,
+    /// D 模式必填；其他模式显式 null（P1-7；schema required + null，与 notes 同口径）
+    #[serde(default)]
+    pub douyin: Option<douyin::DouyinModeMeta>,
 }
 
 /// Host 阶段产物（schema `plan_ir.v1`）：与 SongPlan 同形——讨论轮对它做结构化 patch（P1-3），
@@ -195,7 +199,7 @@ pub mod fixtures {
                 vocal_gender: Some(VocalGender::Female),
                 audio_influence: None,
             },
-            mode_meta: ModeMeta { lyrics_lang: LyricLang::Zh },
+            mode_meta: ModeMeta { lyrics_lang: LyricLang::Zh, douyin: None },
             notes: None,
         }
     }

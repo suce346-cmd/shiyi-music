@@ -174,7 +174,9 @@ pub async fn host_initial_plan<R: Runtime>(
     super::orchestrator::emit_usage(app, PipelineRole::Host, &resp, run_id);
     let preview = Some(format!("title={:?} sections={}", ir.0.title, ir.0.sections.len()));
     emit_progress(app, run_id, PipelineRole::Host, PhaseKind::Parsed, preview);
-    Ok(ir.0)
+    let mut plan = ir.0;
+    stamp_douyin_scene(req, &mut plan);
+    Ok(plan)
 }
 
 /// Host 汇总：结构化 HostSummary。
@@ -215,7 +217,9 @@ pub async fn host_summarize_plan<R: Runtime>(
         PhaseKind::Parsed,
         Some(format!("sections={} tasks_empty={}", summary.plan.sections.len(), summary.next_tasks.is_empty())),
     );
-    Ok((summary.plan, summary.next_tasks.trim().to_string()))
+    let mut plan = summary.plan;
+    stamp_douyin_scene(req, &mut plan);
+    Ok((plan, summary.next_tasks.trim().to_string()))
 }
 
 /// 角色审改：结构化 ReviewOut。
@@ -278,6 +282,7 @@ pub async fn auditor_finalize<R: Runtime>(
     let original = req.original_lyrics_text();
 
     let mut plan = converged.clone();
+    stamp_douyin_scene(req, &mut plan);
     let ctx0 = ValidateCtx {
         mode: mode_name,
         original_lyrics: original,
@@ -318,6 +323,7 @@ pub async fn auditor_finalize<R: Runtime>(
         let (next, resp) = llm::call_llm_structured::<SongPlan>(&call, messages, budget, Some(&hook)).await?;
         super::orchestrator::emit_usage(app, PipelineRole::Auditor, &resp, run_id);
         plan = next;
+        stamp_douyin_scene(req, &mut plan);
         emit_progress(
             app,
             run_id,
@@ -404,6 +410,16 @@ pub fn apply_pointer(plan: &mut Value, pointer: &str, content: Value) -> Result<
 
 fn unescape_pointer_token(t: &str) -> String {
     t.replace("~1", "/").replace("~0", "~")
+}
+
+/// P1-7：D 模式场景由请求盖写（不信任模型）；非 D 清掉 douyin 字段以免误报。
+fn stamp_douyin_scene(req: &PipelineRequest, plan: &mut SongPlan) {
+    if req.mode.to_str_name() != "mode_d" {
+        plan.mode_meta.douyin = None;
+        return;
+    }
+    let (scene, source) = crate::plan::douyin::resolve_request_scene(req.douyin_scene.as_deref());
+    crate::plan::douyin::apply_scene_to_plan(plan, scene, source);
 }
 
 #[cfg(test)]

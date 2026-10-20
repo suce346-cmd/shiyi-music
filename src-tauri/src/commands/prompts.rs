@@ -774,6 +774,16 @@ ${VOCAL_DIM_COUNT_CN}维思考检查表（音域/音色/发声/颤音/咬字/节
 ## Suno 参数
 Weirdness: ${DOUYIN_WEIRD_RANGE} | Style Influence: ${DOUYIN_STYLE_RANGE} | Audio Influence = 0（无参考音频时）
 
+## D 模式 V2 硬规则（P1-7，写入 mode_meta.douyin；场景由请求盖写勿自选）
+
+- 产出约 45–75 秒短歌 + 指定可剪 15 秒片段（clip.start_section/end_section/seconds=15）
+- 首段 Hook/Chorus 冷开，或 Intro.target_seconds≤${DOUYIN_V2_INTRO_MAX} 且下一段即 Hook
+- Hook 落地 ≤${DOUYIN_V2_HOOK_LAND}s；核心 hook_line ${DOUYIN_V2_HOOK_LINES} 句、合计 ≤${DOUYIN_V2_HOOK_CHARS} 字，主句全曲重复 ≥${DOUYIN_V2_HOOK_REPEAT}
+- Verse 可省，若有 ≤${DOUYIN_V2_VERSE_MAX} 行；每行 ≤${DOUYIN_V2_LINE_MAX} 字
+- BPM 落在请求场景区间（emotion 80–100 / daily 100–120 / dance 120–140 / story 90–110 / guofeng 90–130）
+- ending：loop_tail=true 回 Hook，或末段硬停/[End]
+- global.negative 必含 long intro、slow build、fade out；mix 必含 M-01 与 M-06（phone-speaker friendly）
+
 ## 输出映射（SongPlan 字段——输出结构由 JSON schema 约束，见《SongPlan 字段契约》）
 
 你的输出 = 一个 SongPlan JSON 对象。方法论五步与字段的映射：

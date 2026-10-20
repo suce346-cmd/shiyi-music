@@ -2999,6 +2999,7 @@ mod tests {
 
     fn make_request(overrides: Option<std::collections::HashMap<PipelineRole, crate::models::RoleApiOverride>>) -> PipelineRequest {
         PipelineRequest { structured_caps: None,
+        douyin_scene: None,
             output_lang: "zh".into(),
             mode: Mode::ModeB,
             user_input: "雨天".into(),

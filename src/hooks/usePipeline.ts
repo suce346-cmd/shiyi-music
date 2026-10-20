@@ -116,6 +116,8 @@ export interface PipelineRunOptions {
   extra?: string;
   /** Mode C 原歌词独立字段（替代 extra 字符串拼接） */
   originalLyrics?: string;
+  /** P1-7：D 模式场景 */
+  douyinScene?: string;
   /** 角色发言回调：每个专家产出/主持收口/校验结果时调用（追加到对话流） */
   onSpeech?: (speech: ChatTurn) => void;
 }
@@ -129,6 +131,8 @@ export interface PipelineRefineOptions {
   extra?: string;
   /** Mode C 原歌词独立字段 */
   originalLyrics?: string;
+  /** P1-7：D 模式场景 */
+  douyinScene?: string;
   /** 优化模式——fast=增量（后端按反馈路由，显式 targets 透传），full=全量重跑 */
   refineMode?: "fast" | "full";
   /** 显式增量目标（fast 且前端预估命中时透传；缺省由后端自动路由） */
@@ -220,6 +224,7 @@ export function buildPipelineRequest(
     output_lang: opts.settings.outputLang ?? "zh",
     // P1-2：探测缓存透传（后端按 角色显式 → 缓存 → 缺省 json_object 解析档位）
     structured_caps: sanitizeStored(opts.settings).structuredCaps,
+    douyin_scene: opts.douyinScene,
   };
 }
 

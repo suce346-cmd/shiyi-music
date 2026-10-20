@@ -407,7 +407,7 @@ export default function App() {
     runId: string,
     runMode: Mode,
     userInput: string,
-    extra?: { originalLyrics: string },
+    extra?: { originalLyrics?: string; douyinScene?: string },
   ) => {
     const token = ++runTokenRef.current; // 作废旧 run
     setStatus("loading"); writeStreamText(""); clearRunError();
@@ -433,6 +433,7 @@ export default function App() {
         settings,
         extra: undefined,
         originalLyrics,
+        douyinScene: runMode === "mode_d" ? (extra?.douyinScene ?? "daily") : undefined,
         // 专家发言实时追加到对话流（记录进 speechLog，结束时合并，不进入 chatHistoryRef）
         onSpeech: (speech) => {
           // 阶段0流式结束后清空中间态流式文本（首个专家发言时），避免统领全文重复显示
@@ -513,7 +514,7 @@ export default function App() {
     }
   }, [settings, ensureLlmListener, pipeline]);
 
-  const handleGenerate = useCallback(async (userInput: string, extra?: { originalLyrics: string }) => {
+  const handleGenerate = useCallback(async (userInput: string, extra?: { originalLyrics?: string; douyinScene?: string }) => {
     // 忙时入队（当前有运行项）——排队顺序执行，不作废在途任务
     if (pipeline.active) {
       queue.push({
@@ -568,6 +569,7 @@ export default function App() {
         settings,
         extra: undefined,
         originalLyrics,
+        douyinScene: mode === "mode_d" ? "daily" : undefined,
         refineMode,
         lastOutputPartial,
         refineTargets: refineMode === "fast" && estimated.length > 0 ? estimated : undefined,
@@ -650,6 +652,7 @@ export default function App() {
         settings,
         extra: undefined,
         originalLyrics,
+        douyinScene: mode === "mode_d" ? "daily" : undefined,
         onSpeech: (speech) => {
           if (speechLogRef.current.length === 0) writeStreamText("");
           speechLogRef.current.push(speech);

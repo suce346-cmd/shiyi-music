@@ -5,6 +5,7 @@ import { readTextFile } from "@tauri-apps/plugin-fs";
 import type { Mode, AppSettings, Locale } from "../types";
 import { t } from "../i18n";
 import { isSubmitHotkey, isImportableFile } from "../utils/hotkeys";
+import SceneSelector from "./SceneSelector";
 
 interface Props {
   mode: Mode;
@@ -13,7 +14,7 @@ interface Props {
   /** 界面语言（缺省中文） */
   locale?: Locale;
   /** mode_c 时附带原歌词独立字段（不再拼字符串） */
-  onGenerate: (userInput: string, extra?: { originalLyrics: string }) => void;
+  onGenerate: (userInput: string, extra?: { originalLyrics?: string; douyinScene?: string }) => void;
   /** Cmd/Ctrl+K 聚焦时由 App 层调用 */
   inputRef?: React.RefObject<HTMLTextAreaElement | null>;
 }
@@ -25,6 +26,7 @@ export default function InputPanel({ mode, disabled, settings, onGenerate, input
   const [newTheme, setNewTheme] = useState("");
   /** 拖拽提示（非文本文件/读取失败时显示） */
   const [dropMsg, setDropMsg] = useState("");
+  const [douyinScene, setDouyinScene] = useState<string | null>(null);
   const localRef = useRef<HTMLTextAreaElement | null>(null);
   /** 当前模式主输入框 */
   const mainRef = inputRef ?? localRef;
@@ -33,7 +35,7 @@ export default function InputPanel({ mode, disabled, settings, onGenerate, input
     if (!settings.apiKey) return;
     let userInput = "";
     // mode_c 原歌词独立字段直传——新主题即 userInput，原歌词走 extra.originalLyrics
-    let extra: { originalLyrics: string } | undefined;
+    let extra: { originalLyrics?: string; douyinScene?: string } | undefined;
     if (mode === "mode_a") {
       userInput = lyrics;
       if (lyrics.trim().length < 10) return;
@@ -44,6 +46,9 @@ export default function InputPanel({ mode, disabled, settings, onGenerate, input
     } else {
       userInput = inspiration;
       if (!inspiration.trim()) return;
+      if (mode === "mode_d") {
+        extra = { ...(extra ?? {}), douyinScene: douyinScene ?? "daily" };
+      }
     }
     onGenerate(userInput, extra);
   };
@@ -157,6 +162,16 @@ export default function InputPanel({ mode, disabled, settings, onGenerate, input
               className={`${inputClass} h-20`} placeholder={`${t(locale, "input.ph.theme")}${t(locale, "input.ph.suffix.submit")}）`} disabled={disabled} />
           </div>
         </>
+      )}
+
+      {mode === "mode_d" && (
+        <SceneSelector
+          locale={locale}
+          disabled={disabled}
+          inspiration={inspiration}
+          value={douyinScene}
+          onChange={setDouyinScene}
+        />
       )}
 
       {(mode === "mode_b" || mode === "mode_d") && (

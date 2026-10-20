@@ -1,5 +1,79 @@
 {
   "$defs": {
+    "DouyinClip": {
+      "additionalProperties": false,
+      "properties": {
+        "end_section": {
+          "type": "string"
+        },
+        "seconds": {
+          "maximum": 15,
+          "minimum": 15,
+          "type": "integer"
+        },
+        "start_section": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "end_section",
+        "seconds",
+        "start_section"
+      ],
+      "type": "object"
+    },
+    "DouyinModeMeta": {
+      "additionalProperties": false,
+      "properties": {
+        "clip": {
+          "$ref": "#/$defs/DouyinClip"
+        },
+        "hook_line": {
+          "type": "string"
+        },
+        "loop_tail": {
+          "type": "boolean"
+        },
+        "scene": {
+          "$ref": "#/$defs/DouyinScene"
+        },
+        "scene_source": {
+          "$ref": "#/$defs/SceneSource"
+        }
+      },
+      "required": [
+        "clip",
+        "hook_line",
+        "loop_tail",
+        "scene",
+        "scene_source"
+      ],
+      "type": "object"
+    },
+    "DouyinScene": {
+      "oneOf": [
+        {
+          "const": "emotion",
+          "type": "string"
+        },
+        {
+          "const": "daily",
+          "type": "string"
+        },
+        {
+          "const": "dance",
+          "type": "string"
+        },
+        {
+          "const": "story",
+          "type": "string"
+        },
+        {
+          "const": "guofeng",
+          "type": "string"
+        }
+      ]
+    },
     "GlobalStyle": {
       "additionalProperties": false,
       "properties": {
@@ -83,14 +157,33 @@
     "ModeMeta": {
       "additionalProperties": false,
       "properties": {
+        "douyin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DouyinModeMeta"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "lyrics_lang": {
           "$ref": "#/$defs/LyricLang"
         }
       },
       "required": [
+        "douyin",
         "lyrics_lang"
       ],
       "type": "object"
+    },
+    "SceneSource": {
+      "enum": [
+        "user",
+        "default"
+      ],
+      "type": "string"
     },
     "Section": {
       "additionalProperties": false,

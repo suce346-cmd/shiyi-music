@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **[P1-7] D 模式 V2 + 场景选择**：`plan/douyin.rs`（DouyinScene/BPM 带/suggest_scenes/validate_douyin_v2）、`DOUYIN_V2_*` 常量；`mode_meta.douyin`；请求 `douyin_scene` 后端盖写；`douyin_scene_keywords.csv`；前端 `SceneSelector`；vocal_mix 增 M-06 phone-speaker friendly，D 硬门要求 M-01+M-06；Exclude 必含 long intro/slow build/fade out。
 - **[补丁] 抖音叙事弧线专行（add_douyin_arc）**：新增 10 条 `style_arc_d_*`（scenario=douyin，Style Influence 与 A/B 弧线同值），供 D 叙事型回落在 suno_rules 内看到弧线引导；A/B/C 仍只吃 `style_arc_*`（normal）。职责与子集绑定同步；对照表见 `docs/qa/p1-6-scenario-reclass.md`。
 - **[P1-6] Scenario 词表闭合（C-02，RULE-SCENARIO-VOCAB）**：`knowledge::Scenario` 登记 `all/douyin/normal`；`suno_rules.csv` 26 行改值（17 行未知值重分类 + 抖音/中文改 token，逐行表见 `docs/qa/p1-6-scenario-reclass.md`）；未知值 fail-closed（不注入 + 启动 error + 守护测试红）；审改角色 suno_rules 子集路径补过场景门（旧实现绕过）。mode_d 注入 27/40（旧 38/40）。
 - **[残留清理] 定稿人设与前端标签**：`roles::auditor()` 人设重写为结构化 PlanIR 定稿人（输出完整 SongPlan JSON，规则全走 `${占位符}`），`produce_final_text` 改读该单源并按角色绑定注入 suno_rules；删除前端 `envelope_fallback`「格式降级」标签（旧历史不再兼容回放）；UI/README/i18n「格式输出」措辞改为定稿；守护测试扩至前端 TS/TSX 与旧端口措辞。

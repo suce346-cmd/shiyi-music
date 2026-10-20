@@ -48,7 +48,9 @@ pub fn run() {
             commands::logdir::open_log_dir,
             commands::logdir::open_config_dir,
             commands::orchestrator::pipeline_resume,
-            plan::suno_profile::get_suno_meta
+            plan::suno_profile::get_suno_meta,
+            plan::douyin::get_douyin_meta,
+            plan::douyin::suggest_douyin_scenes
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

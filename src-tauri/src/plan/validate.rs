@@ -33,7 +33,7 @@ pub struct Issue {
 }
 
 impl Issue {
-    fn hard(code: &'static str, path: impl Into<String>, message: impl Into<String>) -> Self {
+    pub(crate) fn hard(code: &'static str, path: impl Into<String>, message: impl Into<String>) -> Self {
         Self { code, path: path.into(), message: message.into(), severity: Severity::Hard }
     }
     fn warn(code: &'static str, path: impl Into<String>, message: impl Into<String>) -> Self {
@@ -347,26 +347,9 @@ fn check_lyric_lines(p: &SongPlan, mode: &str, out: &mut Vec<Issue>) {
 
 /// D 模式结构门（原 `validate_douyin` 迁 IR）：Hook 次数、Verse 行数、结尾骤停
 fn check_douyin(p: &SongPlan, out: &mut Vec<Issue>) {
-    let hooks = p.sections.iter().filter(|s| s.kind == SectionKind::Hook || s.label.to_lowercase().contains("hook")).count();
-    if hooks < rules::HOOK_MIN_COUNT {
-        out.push(Issue::hard("hook_count", "/sections", format!("Hook {hooks} 次 < 下限 {}", rules::HOOK_MIN_COUNT)));
-    }
-    for (i, s) in p.sections.iter().enumerate() {
-        let n = s.lines.iter().filter(|l| !l.trim().is_empty()).count();
-        if s.kind == SectionKind::Verse && n > rules::VERSE_MAX_LINES {
-            out.push(Issue::hard("verse_lines", format!("/sections/{i}/lines"), format!("「{}」{n} 行 > 上限 {}", s.label, rules::VERSE_MAX_LINES)));
-        }
-    }
-    let has_stop = p.sections.last().is_some_and(|s| {
-        s.positive_local.iter().chain(s.negative_local.iter()).any(|c| {
-            let l = c.to_lowercase();
-            l.contains("骤停") || l.contains("abrupt") || l.contains("cut off") || l.contains("all instruments cut") || l.contains("hard stop")
-        })
-    });
-    if !has_stop {
-        out.push(Issue::hard("douyin_stop", "/sections", "末段须在 positive_local 标注骤停（如 \"abrupt stop\" / \"all instruments cut\"）"));
-    }
+    crate::plan::douyin::validate_douyin_v2(p, out);
 }
+
 
 /// 段下限（b02-root-cause.md 结论 2–4）：声明极简 1 / Chorus 类 3 / 其余 2
 pub fn section_floor(s: &super::Section) -> usize {
@@ -612,15 +595,45 @@ mod tests {
     }
 
     fn douyin_plan() -> SongPlan {
+        // 完整 D-V2 合规夹具（与 plan::douyin::tests::d_plan 同口径，精简）
         let mut p = minimal_plan();
-        p.global.bpm = Some(120);
+        p.global.bpm = Some(110);
+        p.global.negative = vec!["long intro".into(), "slow build".into(), "fade out".into()];
+        p.global.mix = vec!["M-01".into(), "M-06".into()];
         p.settings.weirdness = 15;
         p.settings.style_influence = 90;
-        let mut hook = sec(SectionKind::Hook, 8, 3, false);
-        hook.lines = vec!["一刀切下去".into()];
-        let mut end = hook.clone();
-        end.positive_local = vec!["abrupt stop".into()];
-        p.sections = vec![hook, end];
+        let hook_line = "干就完了";
+        p.sections = vec![
+            sec(SectionKind::Hook, 8, 3, false),
+            sec(SectionKind::Verse, 4, 2, false),
+            sec(SectionKind::Hook, 8, 3, false),
+            sec(SectionKind::Hook, 8, 1, false),
+        ];
+        p.sections[0].label = "Hook".into();
+        p.sections[0].target_seconds = Some(8);
+        p.sections[0].lines = vec![hook_line.into(), hook_line.into(), "今晚不睡".into()];
+        p.sections[1].label = "Verse".into();
+        p.sections[1].target_seconds = Some(8);
+        p.sections[1].lines = vec!["灯还亮着".into(), "窗外风大".into()];
+        p.sections[2].label = "Hook 2".into();
+        p.sections[2].target_seconds = Some(8);
+        p.sections[2].lines = vec![hook_line.into(), hook_line.into()];
+        p.sections[3].label = "Hook 3".into();
+        p.sections[3].target_seconds = Some(8);
+        p.sections[3].lines = vec![hook_line.into()];
+        p.sections[3].positive_local = vec!["abrupt stop".into()];
+        p.mode_meta.douyin = Some(crate::plan::douyin::DouyinModeMeta {
+            scene: crate::plan::douyin::DouyinScene::Daily,
+            scene_source: crate::plan::douyin::SceneSource::Default,
+            clip: crate::plan::douyin::DouyinClip {
+                start_section: "Hook".into(),
+                end_section: "Hook".into(),
+                seconds: 15,
+            },
+            hook_line: format!("{hook_line}
+今晚不睡"),
+            loop_tail: true,
+        });
         p
     }
 
@@ -629,13 +642,11 @@ mod tests {
         let p = douyin_plan();
         assert!(passed(&validate(&p, &ctx("mode_d"))), "{:?}", validate(&p, &ctx("mode_d")));
         let mut bad = douyin_plan();
-        bad.global.bpm = Some(80);
-        bad.sections[1].positive_local.clear();
-        bad.sections[1].kind = SectionKind::Outro;
-        bad.sections[1].label = "Outro".into();
+        bad.global.bpm = Some(80); // 日常场景 100–120 外
+        bad.mode_meta.douyin = None;
         bad.sections[0].lines = vec!["这一行歌词明显超过了十二个字的上限".into()];
         let c = codes(&validate(&bad, &ctx("mode_d")));
-        for want in ["bpm", "douyin_stop", "hook_count", "line_too_long"] {
+        for want in ["douyin_meta_missing", "line_too_long"] {
             assert!(c.contains(&want), "缺 {want}: {c:?}");
         }
     }

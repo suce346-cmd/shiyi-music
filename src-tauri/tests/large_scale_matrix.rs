@@ -39,6 +39,7 @@ fn test_config() -> Option<TestConfig> {
 fn make_request(cfg: &TestConfig, mode: Mode, user_input: &str, original_lyrics: Option<&str>) -> PipelineRequest {
     let tag = match_mode(&mode);
     PipelineRequest { structured_caps: None,
+    douyin_scene: None,
         mode,
         output_lang: "zh".into(),
         user_input: user_input.to_string(),

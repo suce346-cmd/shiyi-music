@@ -2347,7 +2347,7 @@ mod tests {
     fn vocal_mix_table_shape_and_ids() {
         let kb = KnowledgeBase::load_embedded().unwrap();
         let rows = vocal_mix_entries(&kb).expect("嵌入版必须含 vocal_mix");
-        assert_eq!(rows.len(), 9, "起步 9 行（人声 4 + 混音 5）");
+        assert_eq!(rows.len(), 10, "人声 4 + 混音 6（含 phone-speaker）");
         let mut ids = std::collections::HashSet::new();
         for e in &rows {
             assert!(ids.insert(e.id.clone()), "id 重复: {}", e.id);
@@ -2358,7 +2358,7 @@ mod tests {
             assert!(!l.split(',').any(|t| { let t = t.trim(); t.starts_with("no ") || t.starts_with("without ") }), "{} label_en 含否定（正向层禁否定）", e.id);
         }
         assert_eq!(rows.iter().filter(|e| e.category == "vocal").count(), 4);
-        assert_eq!(rows.iter().filter(|e| e.category == "mix").count(), 5);
+        assert_eq!(rows.iter().filter(|e| e.category == "mix").count(), 6);
     }
 
     #[test]

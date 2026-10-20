@@ -49,6 +49,13 @@ pub const LYRIC_LINE_CHORUS_MIN: usize = 4;
 pub const LYRIC_LINE_CHORUS_MAX: usize = 9;
 /// D 模式 BPM 下限
 pub const DOUYIN_BPM_MIN: u32 = 90;
+// P1-7：V2 常量定义点 = plan::douyin（此处 re-export 供 RULE_REGISTRY / 插值）
+pub use crate::plan::douyin::{
+    DOUYIN_V2_CLIP_SECONDS, DOUYIN_V2_HOOK_CHARS_MAX, DOUYIN_V2_HOOK_LAND_SEC, DOUYIN_V2_HOOK_LINES_MAX,
+    DOUYIN_V2_HOOK_LINES_MIN, DOUYIN_V2_HOOK_REPEAT_MIN, DOUYIN_V2_INTRO_MAX_SEC, DOUYIN_V2_LINE_MAX_CHARS,
+    DOUYIN_V2_VERSE_MAX_LINES,
+};
+
 /// 全模式说明行上限字符数（含方括号、整行计）。
 /// 单源：上游告知（四模式 checklist + D primer + 说明行契约 + 各角色提示词经 ${DESC_LINE_MAX} 插值）
 /// 与下游强制（plan::validate 说明行长度硬门）
@@ -880,6 +887,13 @@ fn placeholder_pairs() -> Vec<(&'static str, String)> {
         ("${DOUYIN_DURATION_RANGE}", format!("{}-{}", DOUYIN_DURATION_SEC_MIN, DOUYIN_DURATION_SEC_MAX)),
         ("${DOUYIN_HOOK_WINDOW}", DOUYIN_HOOK_WINDOW_SEC.to_string()),
         ("${DOUYIN_INTRO_SPAN}", DOUYIN_INTRO_SPAN_SEC.to_string()),
+        ("${DOUYIN_V2_INTRO_MAX}", crate::plan::douyin::DOUYIN_V2_INTRO_MAX_SEC.to_string()),
+        ("${DOUYIN_V2_HOOK_LAND}", crate::plan::douyin::DOUYIN_V2_HOOK_LAND_SEC.to_string()),
+        ("${DOUYIN_V2_HOOK_CHARS}", crate::plan::douyin::DOUYIN_V2_HOOK_CHARS_MAX.to_string()),
+        ("${DOUYIN_V2_HOOK_LINES}", format!("{}-{}", crate::plan::douyin::DOUYIN_V2_HOOK_LINES_MIN, crate::plan::douyin::DOUYIN_V2_HOOK_LINES_MAX)),
+        ("${DOUYIN_V2_HOOK_REPEAT}", crate::plan::douyin::DOUYIN_V2_HOOK_REPEAT_MIN.to_string()),
+        ("${DOUYIN_V2_VERSE_MAX}", crate::plan::douyin::DOUYIN_V2_VERSE_MAX_LINES.to_string()),
+        ("${DOUYIN_V2_LINE_MAX}", crate::plan::douyin::DOUYIN_V2_LINE_MAX_CHARS.to_string()),
         ("${CHECKED_MIN}", CHECKED_MIN_ITEMS.to_string()),
         ("${VOCAL_DIM_COUNT}", VOCAL_DIM_COUNT.to_string()),
         ("${VOCAL_DIM_COUNT_CN}", cn_numeral(VOCAL_DIM_COUNT)),
@@ -2731,7 +2745,7 @@ const PLAN_FIELD_CONTRACT: &str = "【SongPlan 字段契约（最高优先级：
 3. 说明行 → 每段 instruments + positive_local + energy + negative_local：instruments 只放在场乐器；positive_local 写行为、${DESC_LINE_SPACE_SLOT}、人声状态；energy 为 ${ENERGY_SCALE}（A/B 必填）；段内退出写 negative_local（渲染为 X drop out）。\n\
 4. 极简段 → minimal=true：仅 intro/outro/bridge/interlude 且 energy≤${MINIMAL_ENERGY_MAX}，notes 写理由。\n\
 5. 配器（A/B）：极简 ≥${MIN_INSTRUMENT_MINIMAL}；Chorus 类 ≥${MIN_INSTRUMENT_CHORUS}；其余 ≥${MIN_INSTRUMENT_CORE}；最强 ≥${MIN_INSTRUMENT_STRONG}；差 ≥${MIN_INSTRUMENT_GAP}；上限 ${INSTRUMENT_MAX}。\n\
-6. 歌词 → sections[].lines；参数 → settings（variety=${VARIETY}）；notes 写分析/裁决，不渲染。";
+6. 歌词 → sections[].lines；参数 → settings（variety=${VARIETY}）；notes 写分析/裁决，不渲染。\n7. D 模式另填 mode_meta.douyin（clip/hook_line/loop_tail；scene 由请求盖写勿自选）；mix 含 M-01+M-06；negative 含 long intro/slow build/fade out。";
 
 
 /// 说明行契约正文（单源：本文件唯一一份；数值一律 `${占位符}`）。

@@ -99,3 +99,13 @@ describe("buildPipelineRequest（C-04 单源）", () => {
     }
   });
 });
+
+  it("P1-7：douyin_scene 透传（mode_d）", () => {
+    const req = buildPipelineRequest(
+      "generate",
+      { ...base, mode: "mode_d", settings: makeSettings(), douyinScene: "dance" },
+      "r",
+    );
+    expect(req.douyin_scene).toBe("dance");
+    expect(buildPipelineRequest("generate", { ...base, settings: makeSettings() }, "r").douyin_scene).toBeUndefined();
+  });
