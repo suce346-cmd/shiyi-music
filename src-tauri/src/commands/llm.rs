@@ -1052,3 +1052,111 @@ pub async fn test_api(
         Err(AppError::api_status(status.as_u16(), &truncate_err(&err)))
     }
 }
+
+/// RULE-RUN-ID 集成级（无 GUI）：mock_app + 本地假 SSE 网关，走真实 stream_response 发射路径。
+#[cfg(test)]
+pub(crate) mod stream_it {
+    use super::*;
+    use crate::budget::Budget;
+    use std::io::{Read, Write};
+    use std::sync::{mpsc, Arc, Mutex};
+    use tauri::Listener;
+
+    /// 本地假网关：接受一个连接，按顺序写出 parts；每段前等待 gate（None = 不等）。
+    pub(crate) fn serve_sse(parts: Vec<Vec<u8>>, gate: Option<mpsc::Receiver<()>>) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let mut req = Vec::new();
+            while !req.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = s.read(&mut buf).unwrap();
+                if n == 0 {
+                    break;
+                }
+                req.extend_from_slice(&buf[..n]);
+            }
+            let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n");
+            for (i, p) in parts.into_iter().enumerate() {
+                if i > 0 {
+                    if let Some(g) = &gate {
+                        if g.recv().is_err() {
+                            return;
+                        }
+                    }
+                }
+                if s.write_all(&p).is_err() {
+                    return;
+                }
+                let _ = s.flush();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        });
+        format!("http://{addr}/")
+    }
+
+    pub(crate) fn sse(content: &str) -> Vec<u8> {
+        format!("data: {}\n\n", serde_json::json!({"choices":[{"delta":{"content":content}}]})).into_bytes()
+    }
+
+    pub(crate) async fn open(url: &str) -> reqwest::Response {
+        reqwest::Client::new().get(url).send().await.unwrap()
+    }
+
+    /// 取消 A 后立即开 B：A 停止发射并返回 Cancelled；所有事件都带归属 run_id；
+    /// 按当前 run（B）过滤后正文只含 B 的内容（与前端 acceptStreamChunk 同规则）。
+    #[tokio::test]
+    async fn cancel_then_new_run_chunks_tagged_and_filtered() {
+        let app = tauri::test::mock_app();
+        let handle = app.handle().clone();
+        let events: Arc<Mutex<Vec<StreamChunk>>> = Arc::default();
+        let ev = events.clone();
+        handle.listen_any("llm-chunk", move |e| {
+            let v: serde_json::Value = serde_json::from_str(e.payload()).unwrap();
+            ev.lock().unwrap().push(StreamChunk {
+                run_id: v["run_id"].as_str().unwrap().to_string(),
+                content: v["content"].as_str().unwrap().to_string(),
+            });
+        });
+        let budget: SharedBudget = Arc::new(Budget::with_timeout(std::time::Duration::from_secs(60)));
+        let reserve = std::time::Duration::ZERO;
+
+        let (tx, rx) = mpsc::channel();
+        let url_a = serve_sse(vec![sse("旧A1"), sse("旧A2"), sse("旧A3")], Some(rx));
+        crate::commands::cancel::begin("it-a");
+        let resp_a = open(&url_a).await;
+        let (h2, b2) = (handle.clone(), budget.clone());
+        let task_a = tokio::spawn(async move { stream_response(h2, resp_a, "it-a", &b2, reserve).await });
+        for _ in 0..200 {
+            if !events.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        // 用户点停止 → 立刻开新 run
+        assert!(crate::commands::cancel::request_cancel("it-a"));
+        crate::commands::cancel::begin("it-b");
+        let _ = tx.send(()); // A 的在途数据继续到达
+        let _ = tx.send(());
+        let out_a = task_a.await.unwrap();
+        assert_eq!(out_a.unwrap_err().kind, ErrorKind::Cancelled);
+        crate::commands::cancel::finish("it-a");
+
+        let url_b = serve_sse(vec![sse("新B1"), sse("新B2")], None);
+        let resp_b = open(&url_b).await;
+        let out_b = stream_response(handle.clone(), resp_b, "it-b", &budget, reserve).await.unwrap();
+        crate::commands::cancel::finish("it-b");
+        assert_eq!(out_b.raw, "新B1新B2");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let evs = events.lock().unwrap().clone();
+        assert!(evs.iter().all(|c| c.run_id == "it-a" || c.run_id == "it-b"), "每个 chunk 必须带归属 run_id: {evs:?}");
+        assert!(!evs.iter().any(|c| c.run_id == "it-a" && c.content != "旧A1"), "取消后 A 不得再发射: {evs:?}");
+        let shown: String = evs.iter().filter(|c| c.run_id == "it-b").map(|c| c.content.as_str()).collect();
+        assert_eq!(shown, "新B1新B2");
+        // 结束后迟到的取消不留条目
+        assert!(!crate::commands::cancel::request_cancel("it-a"));
+        assert!(!crate::commands::cancel::is_cancelled("it-a"));
+    }
+}

@@ -2042,7 +2042,7 @@ pub async fn run_pipeline<R: Runtime>(app: AppHandle<R>, request: PipelineReques
     let mut request = request;
     let rid = resolve_run_id(request.run_id.as_deref());
     request.run_id = Some(rid.clone());
-    cancel::reset(&rid);
+    cancel::begin(&rid);
     interject::reset(&rid);
     gate::reset(&rid);
     // #12：开启确认门时整体超时（= 预算）加补偿额度——暂停等待不吞生成预算。
@@ -2546,8 +2546,8 @@ pub async fn pipeline_resume<R: Runtime>(
     let budget = std::sync::Arc::new(Budget::with_timeout(PIPELINE_TIMEOUT));
     // 断点方案直接进阶段 2（转写契约 + 保真/硬校验打回 ≤2 次），与主流程共用 produce_final_text 单源实现
     let mode = &request.mode;
-    // 续跑前清本 id 取消位（与 run_pipeline 入口同语义）；结束无论成败移除（D-06）
-    cancel::reset(&run_id);
+    // 续跑登记活动 run 并清旧取消位（与 run_pipeline 入口同语义）；结束无论成败移除（D-06）
+    cancel::begin(&run_id);
     let out = produce_final_text(&app, &cp.current_plan, mode, &request, &budget, &run_id).await;
     cancel::finish(&run_id);
     let (final_text, _issues) = out?;

@@ -52,7 +52,7 @@ pub(crate) fn drain(run_id: &str) -> Vec<String> {
     slots.remove(run_id).unwrap_or_default()
 }
 
-/// 新 run 清槽（防上一轮残留污染；与 cancel::reset 同位置调用）
+/// 新 run 清槽（防上一轮残留污染；与 cancel::begin 同位置调用）
 pub(crate) fn reset(run_id: &str) {
     let mut slots = SLOTS.lock().unwrap_or_else(|e| e.into_inner());
     slots.remove(run_id);
