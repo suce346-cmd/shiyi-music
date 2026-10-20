@@ -2418,4 +2418,40 @@ mod tests {
         assert!(Scenario::parse("抖音").is_none(), "旧中文取值已退役");
     }
 
+
+    /// add_douyin_arc：D 叙事回落可见 style_arc_d_*（scenario=douyin）；A/B/C 仍只见 style_arc_*（normal）
+    #[test]
+    fn douyin_narrative_arc_rows_mode_gated() {
+        let kb = KnowledgeBase::load_embedded().unwrap();
+        let t = kb.table("suno_rules").unwrap();
+        let idx = t.header_index("scenario").unwrap();
+        let ri = t.header_index("rule").unwrap();
+        let d_arcs: Vec<_> = t
+            .rows
+            .iter()
+            .filter(|r| r[ri].starts_with("style_arc_d_"))
+            .collect();
+        assert_eq!(d_arcs.len(), 10, "须有 10 条抖音叙事弧线");
+        assert!(d_arcs.iter().all(|r| r[idx] == "douyin"), "style_arc_d_* 必须 scenario=douyin");
+        let ab_arcs: Vec<_> = t
+            .rows
+            .iter()
+            .filter(|r| r[ri].starts_with("style_arc_") && !r[ri].starts_with("style_arc_d_"))
+            .collect();
+        assert_eq!(ab_arcs.len(), 10);
+        assert!(ab_arcs.iter().all(|r| r[idx] == "normal"));
+        let d = kb.render_table("suno_rules", None, None, Some("mode_d")).unwrap();
+        let b = kb.render_table("suno_rules", None, None, Some("mode_b")).unwrap();
+        assert!(d.contains("style_arc_d_dry") && !d.contains("style_arc_dry,"), "D 拿 d_ 行、不拿 normal 行");
+        // render 是 markdown 表，规则名独立出现；用换行边界避免 d_dry 误命中 dry
+        assert!(d.contains("style_arc_d_drama"));
+        assert!(!b.contains("style_arc_d_"), "A/B/C 不得注入 douyin 弧线");
+        assert!(b.contains("style_arc_dry"));
+        // 与 A/B 同 Style Influence 结构化区间（dry 78-83）
+        let dry = d_arcs.iter().find(|r| r[ri] == "style_arc_d_dry").unwrap();
+        let vmin = t.header_index("value_min").unwrap();
+        let vmax = t.header_index("value_max").unwrap();
+        assert_eq!((dry[vmin].as_str(), dry[vmax].as_str()), ("78", "83"));
+    }
+
 }

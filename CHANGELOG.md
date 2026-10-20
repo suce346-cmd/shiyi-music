@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **[补丁] 抖音叙事弧线专行（add_douyin_arc）**：新增 10 条 `style_arc_d_*`（scenario=douyin，Style Influence 与 A/B 弧线同值），供 D 叙事型回落在 suno_rules 内看到弧线引导；A/B/C 仍只吃 `style_arc_*`（normal）。职责与子集绑定同步；对照表见 `docs/qa/p1-6-scenario-reclass.md`。
 - **[P1-6] Scenario 词表闭合（C-02，RULE-SCENARIO-VOCAB）**：`knowledge::Scenario` 登记 `all/douyin/normal`；`suno_rules.csv` 26 行改值（17 行未知值重分类 + 抖音/中文改 token，逐行表见 `docs/qa/p1-6-scenario-reclass.md`）；未知值 fail-closed（不注入 + 启动 error + 守护测试红）；审改角色 suno_rules 子集路径补过场景门（旧实现绕过）。mode_d 注入 27/40（旧 38/40）。
 - **[残留清理] 定稿人设与前端标签**：`roles::auditor()` 人设重写为结构化 PlanIR 定稿人（输出完整 SongPlan JSON，规则全走 `${占位符}`），`produce_final_text` 改读该单源并按角色绑定注入 suno_rules；删除前端 `envelope_fallback`「格式降级」标签（旧历史不再兼容回放）；UI/README/i18n「格式输出」措辞改为定稿；守护测试扩至前端 TS/TSX 与旧端口措辞。
 - **[P1-5] vocal_mix 受控词表（M-07）**：新增 `knowledge/vocal_mix.csv`（人声 4 + 混音 5，label_en 去否定写法）；`SongPlan.global.vocal/mix` 只填词表 id，`render_suno` 展开为英文标签；`plan::validate` 新增覆盖门（各类 ≥1、未知 id / 类别错位为硬问题；删表即跳过）；主持人阶段 0/汇总、制作人/校验员审改、校验员定稿注入词表，超 `VOCAL_MIX_INJECT_MAX_CHARS` 只注入 id+label_en；覆盖目录张数判据改为 `EMBEDDED_TABLE_COUNT`=9。

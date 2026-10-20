@@ -414,10 +414,9 @@ fn keyword_table_render(
 // - suno_rules：校验员全量（40 条 < 50 截断上限）；其他角色按规则子集过滤
 // - 思维资产（lyric_craft/compose_craft）：引用必达（prompt 点名核查的编号强制投递）+ 按
 //   与当前方案的内容相关性补足，8 条封顶（必达项数受守护测试约束 ≤ 本上限）
-// - 单角色一次注入总字数封顶：预算按最坏情况**实测**标定（#31 加 aliases 列后重标）：
-//   制作人 = style_genre 3 + instruments 15 + suno_rules 23 + compose_craft 8 → 5017 字（最大）；
-//   情感分析师 3321 / 校验员 3149 / 作词人 2504 / 改词人 1830 / 流行风格分析师 1679；
-//   取 5400 = 实测最大 + 383 字余量（~7.1%；旧值 5200 在扩绑后仅剩 231 字余量，任何一次加表都会假告警）
+// - 单角色一次注入总字数封顶：预算按最坏情况**实测**标定（#31 aliases；add_douyin_arc 再标）：
+//   制作人 mode_d = style_genre 3 + instruments 15 + suno_rules（原子集 + 10 条 style_arc_d_*）+ compose_craft 8 → 5514 字（最大）；
+//   取 6000 = 实测最大 + 486 字余量（~8%）
 // ---------------------------------------------------------------------------
 /// 关键词表（emotions/cliches/hooks）命中条数上限（单源：rules::KEYWORD_MAX_ROWS）
 pub const INJECT_MAX_KEYWORD_ROWS: usize = crate::rules::KEYWORD_MAX_ROWS;
@@ -429,11 +428,11 @@ pub const INJECT_MAX_INSTRUMENTS_ROWS: usize = 15;
 /// 语义：**引用必达行优先占位**（prompt 点名要求核查的编号必须可见，不得被上限截掉），
 /// 余下名额按内容相关性补足——不再是"CSV 前 8 条"（#15 旧行为）。
 pub const INJECT_MAX_CRAFT_ROWS: usize = 8;
-/// 全量表（suno_rules）渲染截断上限（当前 40 条规则，留 10 条余量防静默截断）
-pub const INJECT_MAX_FULL_ROWS: usize = 50;
-/// 单角色一次注入总字数封顶（超过告警；最坏情况 = 制作人四表全命中含 23 条规则子集 + 8 条思维资产，
-/// #31 加 aliases 列后实测 5017 字，取 5400 留 383 字余量；次大为情感分析师 3321 字）
-pub const INJECT_MAX_TOTAL_CHARS: usize = 5400;
+/// 全量表（suno_rules）渲染截断上限（当前 50 条规则 = 40 + 10×style_arc_d_*，留 10 条余量防静默截断）
+pub const INJECT_MAX_FULL_ROWS: usize = 60;
+/// 单角色一次注入总字数封顶（超过告警；最坏情况 = 制作人 mode_d 含 10 条 style_arc_d_*，
+/// add_douyin_arc 实测 5514 字，取 6000 留 ~8% 余量）
+pub const INJECT_MAX_TOTAL_CHARS: usize = 6000;
 /// 完整档案传递原则（2026-09-13，用户设计确认）：方案/修订史全量传给每个角色——
 /// 每个角色拿到的是完整档案（情绪/歌词/编曲/指令/分析），不做信息孤岛。
 /// 旧值 8000 字在 NOTES 分析并入方案后（M1）已达 80%，一旦越线从尾部切掉的
@@ -3442,7 +3441,37 @@ mod tests {
         assert!(d.contains("line_max_chars") && !d.contains("line_chars_verse"), "mode_d 作词人不得拿普通模式行字数规则");
         let pr = roles::role_for(PipelineRole::Producer);
         let pd = inject_knowledge(&kb, pr.knowledge_tables, pr.craft_refs, "", "mode_d", Some(PipelineRole::Producer.storage_key()));
-        assert!(!pd.contains("style_arc_"), "mode_d 制作人不得拿 A/B 弧线引导度行");
+        // 禁止 normal 弧线（style_arc_X）；允许 style_arc_d_*（抖音叙事回落专行）
+        assert!(
+            !pd.contains("style_arc_dry") || pd.contains("style_arc_d_dry"),
+            "sanity"
+        );
+        for name in ["style_arc_dry", "style_arc_high", "style_arc_drama", "style_arc_loop"] {
+            // markdown 单元格：规则名独立出现时前后为 | 或空白；d_ 前缀行不含精确名
+            let banned = format!("| {} |", name);
+            let banned2 = format!("\n{} |", name);
+            assert!(
+                !pd.contains(&banned) && !pd.contains(&banned2) && !pd.lines().any(|l| l.split('|').any(|c| c.trim() == name)),
+                "mode_d 制作人不得拿 A/B 弧线 {name}：{}",
+                pd.lines().filter(|l| l.contains("style_arc_")).take(3).collect::<Vec<_>>().join(" | ")
+            );
+        }
+        assert!(pd.contains("style_arc_d_dry"), "mode_d 制作人须拿抖音叙事弧线");
+    }
+
+
+    /// add_douyin_arc：制作人/情感分析师在 mode_d 经子集路径拿到 style_arc_d_*，mode_b 拿到 style_arc_*
+    #[test]
+    fn douyin_arc_subset_injection_for_producer() {
+        let kb = crate::knowledge::KnowledgeBase::load_embedded().unwrap();
+        let pr = roles::role_for(PipelineRole::Producer);
+        let pd = inject_knowledge(&kb, pr.knowledge_tables, pr.craft_refs, "", "mode_d", Some(PipelineRole::Producer.storage_key()));
+        let pb = inject_knowledge(&kb, pr.knowledge_tables, pr.craft_refs, "", "mode_b", Some(PipelineRole::Producer.storage_key()));
+        assert!(pd.contains("style_arc_d_dry") && !pd.contains("style_arc_dry\n") && !pd.contains("| style_arc_dry |"), "mode_d 制作人须拿 d_ 弧线");
+        // 渲染格式为 markdown；规则名出现在行首 ## 块内
+        assert!(pd.matches("style_arc_d_").count() >= 10 || pd.contains("style_arc_d_loop"));
+        assert!(!pb.contains("style_arc_d_"), "mode_b 不得拿 d_ 弧线");
+        assert!(pb.contains("style_arc_dry"));
     }
 
 }

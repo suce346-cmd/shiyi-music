@@ -23,6 +23,16 @@ style_arc_buildup,normal,80,90,,渐进爆发型引导度：单次长 Build 后�
 style_arc_u,normal,70,82,,U 型引导度：开头宣示中段沉底结尾崛起，中低档给低谷自由空间
 style_arc_singlepeak,normal,75,85,,单峰型引导度：一次大起落峰后即收，中档平衡蓄力与峰值
 style_arc_loop,normal,78,85,,回环型引导度：首尾呼应回到原点，中高档保持动机统一
+style_arc_d_dry,douyin,78,83,,抖音叙事型回落·标准叙事：Style 引导度 78-83，配合 Weirdness 22-28；仅当结构含 ≥2 个叙事段且方案写明「叙事型」时可用（与 A/B style_arc_dry 同值，scenario=douyin 专供 D）
+style_arc_d_high,douyin,85,90,,抖音叙事型回落·全程高能：Style 引导度 85-90，Weirdness 10-15；叙事型例外专用（同 A/B style_arc_high）
+style_arc_d_highlow,douyin,70,80,,抖音叙事型回落·高开低走：Style 引导度 70-80，Weirdness 25-35；叙事型例外专用（同 A/B style_arc_highlow）
+style_arc_d_flat,douyin,80,90,,抖音叙事型回落·平铺氛围：Style 引导度 80-90，Weirdness 15-25；叙事型例外专用（同 A/B style_arc_flat）
+style_arc_d_drama,douyin,75,82,,抖音叙事型回落·起伏戏剧：Style 引导度 75-82，Weirdness 28-35；叙事型例外专用（同 A/B style_arc_drama）
+style_arc_d_stair,douyin,78,88,,抖音叙事型回落·阶梯上升：Style 引导度 78-88，Weirdness 20-28；叙事型例外专用（同 A/B style_arc_stair）
+style_arc_d_buildup,douyin,80,90,,抖音叙事型回落·渐进爆发：Style 引导度 80-90，Weirdness 15-25；叙事型例外专用（同 A/B style_arc_buildup）
+style_arc_d_u,douyin,70,82,,抖音叙事型回落·U 型：Style 引导度 70-82，Weirdness 25-35；叙事型例外专用（同 A/B style_arc_u）
+style_arc_d_singlepeak,douyin,75,85,,抖音叙事型回落·单峰：Style 引导度 75-85，Weirdness 20-30；叙事型例外专用（同 A/B style_arc_singlepeak）
+style_arc_d_loop,douyin,78,85,,抖音叙事型回落·回环：Style 引导度 78-85，Weirdness 20-28；叙事型例外专用（同 A/B style_arc_loop）
 hook_first,douyin,1,,,前 3 秒必须出现 Hook 或强钩子：抖音 3 秒完播率生死线
 stop_mark,douyin,1,,次,结尾骤停标记（骤停/all instruments cut）：抖音结尾留白制造循环播放冲动
 desc_line_max,all,0,200,字符,说明行整行（含方括号）不超过 200 字符：上限宽松但必须保乐器+行为动词，不得为缩短删乐器；超限会被 plan::validate 硬校验拦下
