@@ -414,6 +414,8 @@ fn unescape_pointer_token(t: &str) -> String {
 
 /// P1-7：D 模式场景由请求盖写（不信任模型）；非 D 清掉 douyin 字段以免误报。
 fn stamp_douyin_scene(req: &PipelineRequest, plan: &mut SongPlan) {
+    // §3.8：歌词语言由请求 output_lang 盖写（不让模型自选），validate_lang 据此校验歌词行。
+    plan.mode_meta.lyrics_lang = req.lyric_lang();
     if req.mode.to_str_name() != "mode_d" {
         plan.mode_meta.douyin = None;
         return;
@@ -449,5 +451,19 @@ mod tests {
         let s = review_schema();
         assert_eq!(s["type"], "object");
         assert!(s["properties"]["changes"].is_object() || s["properties"]["changes"]["type"] == "array");
+    }
+
+    #[test]
+    fn stamp_writes_lyrics_lang_from_request() {
+        let mut req: PipelineRequest = serde_json::from_str(
+            r#"{"mode":"mode_b","user_input":"x","model":"m","api_key":"k","base_url":"u","output_lang":"en"}"#,
+        )
+        .unwrap();
+        let mut p = minimal_plan();
+        stamp_douyin_scene(&req, &mut p);
+        assert_eq!(p.mode_meta.lyrics_lang, crate::plan::LyricLang::En);
+        req.output_lang = crate::plan::LyricLang::Zh;
+        stamp_douyin_scene(&req, &mut p);
+        assert_eq!(p.mode_meta.lyrics_lang, crate::plan::LyricLang::Zh);
     }
 }

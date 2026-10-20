@@ -104,6 +104,7 @@ pub fn validate(p: &SongPlan, ctx: &ValidateCtx<'_>) -> Vec<Issue> {
     check_polarity(p, &mut out);
     check_structure(p, &mut out);
     check_vocal_mix_coverage(p, &mut out);
+    out.extend(validate_lang(p));
     if matches!(ctx.mode, "mode_a" | "mode_b") {
         check_arc(p, &mut out);
     }
@@ -837,6 +838,46 @@ fn check_fidelity(base: &SongPlan, fin: &SongPlan, out: &mut Vec<Issue>) {
     }
 }
 
+// ---------------------------------------------------------------------------
+/// §2.3 / §3.8 `validate_lang`：歌词行语言 ↔ `mode_meta.lyrics_lang`（= 请求 output_lang，后端盖写）。
+/// 只读 `sections[].lines`；Style/Exclude 归 §3.7（`style_lang::validate_style_english`），本门不读。
+/// - En：任一歌词行含 CJK → Hard（逐行定位）。
+/// - Zh：全曲无一行含 CJK → Hard（英文和声/拟声行允许混入，整首英文不允许）。
+pub fn validate_lang(p: &SongPlan) -> Vec<Issue> {
+    let is_cjk = |c: char| matches!(c, '\u{4E00}'..='\u{9FFF}' | '\u{3400}'..='\u{4DBF}' | '\u{F900}'..='\u{FAFF}');
+    let mut out = Vec::new();
+    let mut total = 0usize;
+    let mut cjk_lines = 0usize;
+    for (i, s) in p.sections.iter().enumerate() {
+        for (j, l) in s.lines.iter().enumerate() {
+            let l = l.trim();
+            if !l.chars().any(|c| c.is_alphabetic()) {
+                continue;
+            }
+            total += 1;
+            let has = l.chars().any(is_cjk);
+            if has {
+                cjk_lines += 1;
+            }
+            if has && p.mode_meta.lyrics_lang == super::LyricLang::En {
+                out.push(Issue::hard(
+                    "lyrics_lang_mismatch",
+                    format!("/sections/{i}/lines/{j}"),
+                    format!("歌词语言=en，但该行含中文「{l}」"),
+                ));
+            }
+        }
+    }
+    if p.mode_meta.lyrics_lang == super::LyricLang::Zh && total > 0 && cjk_lines == 0 {
+        out.push(Issue::hard(
+            "lyrics_lang_mismatch",
+            "/sections",
+            "歌词语言=zh，但全曲歌词无中文行",
+        ));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1296,5 +1337,31 @@ mod tests {
             all.iter().any(|i| i.code == "vocal_mix_coverage"),
             "validate 未接线覆盖门"
         );
+    }
+
+    #[test]
+    fn validate_lang_two_states() {
+        use crate::plan::LyricLang;
+        let mut p = minimal_plan();
+        assert!(validate_lang(&p).is_empty(), "zh 中文歌词应过");
+        p.sections[1].lines.push("oh yeah".into());
+        assert!(validate_lang(&p).is_empty(), "zh 允许英文和声行");
+        p.mode_meta.lyrics_lang = LyricLang::En;
+        let v = validate_lang(&p);
+        assert!(v.iter().any(|i| i.code == "lyrics_lang_mismatch" && i.path == "/sections/1/lines/0"), "{v:?}");
+        p.sections[1].lines = vec!["rain on the street".into()];
+        assert!(validate_lang(&p).is_empty(), "en 英文歌词应过");
+        p.mode_meta.lyrics_lang = LyricLang::Zh;
+        assert!(codes(&validate(&p, &ctx("mode_b"))).contains(&"lyrics_lang_mismatch"), "zh 全英文须经 validate 打回");
+    }
+
+    #[test]
+    fn validate_lang_ignores_style() {
+        use crate::plan::LyricLang;
+        let mut p = minimal_plan();
+        p.mode_meta.lyrics_lang = LyricLang::En;
+        p.sections[1].lines = vec!["rain".into()];
+        p.global.genre = vec!["民谣".into()];
+        assert!(validate_lang(&p).is_empty(), "Style 中文不归 validate_lang（归 §3.7）");
     }
 }
