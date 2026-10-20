@@ -85,6 +85,8 @@ impl TokenUsage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamChunk {
+    /// RULE-RUN-ID（C-06）：归属 run，前端按当前 run 过滤（旧规则无 id，只靠监听 token，取消/队列交错时串流）
+    pub run_id: String,
     pub content: String,
 }
 
@@ -93,6 +95,15 @@ pub struct StreamChunk {
 mod tests {
     use super::*;
     use serde_json::Value;
+
+    /// RULE-RUN-ID（C-06）：llm-chunk 载荷线协议锁——必须带 run_id（前端 acceptStreamChunk 依赖）
+    #[test]
+    fn stream_chunk_wire_has_run_id() {
+        let v = serde_json::to_value(StreamChunk { run_id: "r1".into(), content: "雨".into() }).unwrap();
+        assert_eq!(v["run_id"], "r1");
+        assert_eq!(v["content"], "雨");
+        assert_eq!(v.as_object().unwrap().len(), 2);
+    }
 
     /// C5/ADR-3：Degraded 事件 wire format 锁——前端 union 依赖 type:"degraded" + flag/detail 字段名
     #[test]

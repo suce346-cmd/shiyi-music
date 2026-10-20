@@ -232,3 +232,10 @@ export interface PipelineRequest {
    *  任何路径漏传即 TS 编译失败（旧 resume 漏传 → 后端缺省 zh，en/mix 设置在续跑被静默忽略）。 */
   output_lang: OutputLang;
 }
+
+/** llm-chunk 流式事件载荷（与后端 models::StreamChunk 对齐）。
+ *  RULE-RUN-ID（C-06）：带归属 run_id，前端只收当前 run 的 chunk。 */
+export interface StreamChunk {
+  run_id: string;
+  content: string;
+}

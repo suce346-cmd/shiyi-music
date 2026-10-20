@@ -2037,8 +2037,11 @@ where
 /// unwind，Cargo.toml 禁设 panic="abort"，改配置前先看这里）+ 整体超时（超时 = abort
 /// 强杀在途任务，非放弃等待）。真实错误统一发 Failed 事件；用户取消发 Cancelled 事件。
 pub async fn run_pipeline<R: Runtime>(app: AppHandle<R>, request: PipelineRequest) -> Result<String, AppError> {
-    // 入口按请求 run_id 清理（与 with_timeout 内解析一致；空请求走全局兼容位）
-    let rid = request.run_id.clone().unwrap_or_default();
+    // RULE-RUN-ID：入口一次性解析 run_id（缺省后端生成）并写回请求，
+    // 与 with_timeout 内解析同源（resolve_run_id），清理/取消/事件三处必为同一 id。
+    let mut request = request;
+    let rid = resolve_run_id(request.run_id.as_deref());
+    request.run_id = Some(rid.clone());
     cancel::reset(&rid);
     interject::reset(&rid);
     gate::reset(&rid);
@@ -2049,7 +2052,24 @@ pub async fn run_pipeline<R: Runtime>(app: AppHandle<R>, request: PipelineReques
     } else {
         PIPELINE_TIMEOUT
     };
-    run_pipeline_with_timeout(app, request, timeout).await
+    let out = run_pipeline_with_timeout(app, request, timeout).await;
+    // D-06：run 结束（任何结局）移除取消条目
+    cancel::finish(&rid);
+    out
+}
+
+/// run_id 解析单源：请求带非空 id 则尊重，否则后端生成 `run-{nanos}`。
+pub(crate) fn resolve_run_id(requested: Option<&str>) -> String {
+    match requested {
+        Some(s) if !s.trim().is_empty() => s.to_string(),
+        _ => format!(
+            "run-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ),
+    }
 }
 
 /// run_pipeline 的可测形态：超时时长参数化（生产 15 分钟，测试注入极小值）
@@ -2066,14 +2086,7 @@ pub async fn run_pipeline_with_timeout<R: Runtime>(
     // 共享预算 = 超时时长——超时守卫是最后防线，预算是事前约束
     let budget = std::sync::Arc::new(Budget::with_timeout(timeout));
     // run_id 归属（请求带则尊重，缺省后端生成）；全部事件包 envelope 发射
-    let run_id = request
-        .run_id
-        .clone()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| format!("run-{}", std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)));
+    let run_id = resolve_run_id(request.run_id.as_deref());
     let emit = |app: &AppHandle<R>, event: PipelineEvent| {
         let _ = app.emit("pipeline", PipelineEnvelope::new(run_id.clone(), event));
     };
@@ -2494,19 +2507,19 @@ pub async fn pipeline_refine(
 
 /// 请求取消指定 run（前端"停止"按钮调，带 run_id）——检查点在下次机会中断
 /// R3：取消同时清检查点，避免"从上次继续"复活已取消任务
-/// Q4修正：空参只置全局位（停空 id 遗留任务）+ 清具名检查点无从谈起故跳过；
-/// 具名任务必须带 id 取消（前端恒传 run_id，此分支仅兼容旧调用）。
+/// RULE-RUN-ID（C-05）：空 run_id 直接拒（旧规则置全局位且无复位点，污染 test_api 直到重启）。
 #[tauri::command]
-pub async fn cancel_pipeline(app: tauri::AppHandle, run_id: Option<String>) {
-    match run_id {
-        Some(rid) if !rid.trim().is_empty() => {
-            cancel::request_cancel(&rid);
-            crate::commands::checkpoint::clear(&app, &rid);
-        }
-        _ => {
-            cancel::request_cancel("");
-        }
+pub async fn cancel_pipeline(app: tauri::AppHandle, run_id: Option<String>) -> Result<(), AppError> {
+    let rid = run_id.unwrap_or_default();
+    if rid.trim().is_empty() {
+        return Err(crate::errors::AppError::new(
+            crate::errors::ErrorKind::Validation,
+            "缺少 run_id，取消无法定向到任务",
+        ));
     }
+    cancel::request_cancel(&rid);
+    crate::commands::checkpoint::clear(&app, &rid);
+    Ok(())
 }
 
 /// 从检查点续跑（前端"从上次继续"按钮调）——断点方案直接进终稿，不重跑讨论轮。
@@ -2533,7 +2546,11 @@ pub async fn pipeline_resume<R: Runtime>(
     let budget = std::sync::Arc::new(Budget::with_timeout(PIPELINE_TIMEOUT));
     // 断点方案直接进阶段 2（转写契约 + 保真/硬校验打回 ≤2 次），与主流程共用 produce_final_text 单源实现
     let mode = &request.mode;
-    let (final_text, _issues) = produce_final_text(&app, &cp.current_plan, mode, &request, &budget, &run_id).await?;
+    // 续跑前清本 id 取消位（与 run_pipeline 入口同语义）；结束无论成败移除（D-06）
+    cancel::reset(&run_id);
+    let out = produce_final_text(&app, &cp.current_plan, mode, &request, &budget, &run_id).await;
+    cancel::finish(&run_id);
+    let (final_text, _issues) = out?;
     crate::commands::checkpoint::clear(&app, &run_id);
     Ok(final_text)
 }
@@ -2600,6 +2617,16 @@ pub async fn round_gate_decide(run_id: Option<String>, decision: String) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// RULE-RUN-ID：run_id 解析单源——非空尊重，空/缺省生成（入口与 with_timeout 同源）
+    #[test]
+    fn resolve_run_id_respects_and_generates() {
+        assert_eq!(resolve_run_id(Some("abc")), "abc");
+        for blank in [None, Some(""), Some("  ")] {
+            let id = resolve_run_id(blank);
+            assert!(id.starts_with("run-") && id.len() > 4, "空 id 应生成：{}", id);
+        }
+    }
 
     /// 测试用嵌入式知识库（宿主/角色注入测试共用，避免逐处 unwrap 噪音）
     fn test_kb() -> KnowledgeBase {

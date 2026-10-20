@@ -19,7 +19,8 @@ import ProviderTemplates from "./components/ProviderTemplates";
 import { modelsForBaseUrl } from "./data/providers";
 import { formatUrlIssue } from "./utils/urlGuard";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import type { AppError, Mode, ChatMessage, ChatTurn, HistoryEntry, LLMStatus, ExpertCard, PipelineRoleKey } from "./types";
+import type { AppError, Mode, ChatMessage, ChatTurn, HistoryEntry, LLMStatus, ExpertCard, PipelineRoleKey, StreamChunk } from "./types";
+import { acceptStreamChunk } from "./utils/streamChunk";
 import { MODE_LABELS, errKind, errText, isCancelledError } from "./types";
 import { t } from "./i18n";
 
@@ -132,15 +133,17 @@ export default function App() {
       llmUnlistenRef.current = null;
     }
     const token = runTokenRef.current; // 捕获当前 run（切模式/新 run 后过期 chunk 丢弃）
-    const un = await listen<{ content: string }>("llm-chunk", (event) => {
+    const un = await listen<StreamChunk>("llm-chunk", (event) => {
       if (token !== runTokenRef.current) return; // 过期 run 的流式 chunk 丢弃
+      // RULE-RUN-ID（C-06）：再按归属 run_id 过滤——token 只能区分"监听代次"，区分不了在途旧流
+      if (!acceptStreamChunk(event.payload, pipeline.getRunId())) return;
       // #10：ref 与 state 同点更新——catch 里固化半成品读 ref（state 闭包停留在生成前的空串）
       streamTextRef.current += event.payload.content;
       setStreamText((prev) => prev + event.payload.content);
       setStatus("streaming");
     });
     llmUnlistenRef.current = un;
-  }, []);
+  }, [pipeline.getRunId]);
 
   // 卸载时清理单例监听
   useEffect(() => {

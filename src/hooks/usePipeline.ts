@@ -618,7 +618,8 @@ export function usePipeline() {
     const runId = runIdRef.current;
     runIdRef.current = "";
     try {
-      await invoke("cancel_pipeline", { runId });
+      // RULE-RUN-ID：后端拒绝空 id 取消（不再有全局取消位），无在途 run 时不发请求
+      if (runId) await invoke("cancel_pipeline", { runId });
     } catch {
       // 取消命令本身失败不展示（已无在途任务可取消时属正常）
     }

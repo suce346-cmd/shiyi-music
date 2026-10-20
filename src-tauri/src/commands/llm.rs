@@ -591,6 +591,7 @@ async fn stream_response<R: Runtime>(
                 let _ = app.emit(
                     "llm-chunk",
                     StreamChunk {
+                        run_id: run_id.to_string(),
                         content: delta,
                     },
                 );
@@ -601,7 +602,7 @@ async fn stream_response<R: Runtime>(
     // 流结束后 flush 残留的不完整行（尾部行修复：尾部 data 行不再静默丢弃）
     if !line_buf.trim().is_empty() {
         if let Some(delta) = parse_sse_line(&line_buf, &mut full_content, &mut finish_reason, &mut stream_usage) {
-            let _ = app.emit("llm-chunk", StreamChunk { content: delta });
+            let _ = app.emit("llm-chunk", StreamChunk { run_id: run_id.to_string(), content: delta });
         }
     }
 
@@ -1016,6 +1017,13 @@ pub async fn test_api(
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let body = test_api_body(&model);
     let budget = Arc::new(Budget::with_timeout(std::time::Duration::from_secs(120)));
+    let test_api_run_id = format!(
+        "test-api-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
     let resp = send_with_retry(
         client
             .post(&url)
@@ -1023,7 +1031,9 @@ pub async fn test_api(
             .header("Content-Type", "application/json")
             .json(&body),
         &budget,
-        "",
+        // RULE-RUN-ID（C-05）：测试连接用独立 id（不与任何流水线 run 共享取消位；无人可取消它，
+        // 旧规则传空 id 读全局取消位，用户空 id"停止"后测试连接永远"已取消"）
+        &test_api_run_id,
         std::time::Duration::ZERO,
         // #27-c：测试连接无流水线 run（不播报退避事件）；退避期间前端"测试中…"即为等待观感
         None,
