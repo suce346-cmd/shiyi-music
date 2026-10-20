@@ -575,11 +575,22 @@ async fn probe_one(client: &Client, url: &str, api_key: &str, model: &str, mode:
     .await?;
     let status = r.status().as_u16();
     let outcome = crate::llm_caps::classify_probe_status(status);
-    if outcome == crate::llm_caps::ProbeOutcome::Fatal {
-        let err = r.text().await.unwrap_or_else(|_| "unknown error".to_string());
-        return Err(AppError::api_status(status, &truncate_err(&err)));
+    match outcome {
+        crate::llm_caps::ProbeOutcome::Supported => Ok(outcome),
+        crate::llm_caps::ProbeOutcome::Fatal => {
+            let err = r.text().await.unwrap_or_else(|_| "unknown error".to_string());
+            Err(AppError::api_status(status, &truncate_err(&err)))
+        }
+        crate::llm_caps::ProbeOutcome::Rejected => {
+            // 只有 body 明示与 response_format 相关才算"本档不支持"；否则当 Fatal，避免把缺模型/欠费误记为 none
+            let err = r.text().await.unwrap_or_else(|_| "unknown error".to_string());
+            if crate::llm_caps::response_format_rejection(&err) {
+                Ok(crate::llm_caps::ProbeOutcome::Rejected)
+            } else {
+                Err(AppError::api_status(status, &truncate_err(&err)))
+            }
+        }
     }
-    Ok(outcome)
 }
 
 /// P1-2 能力探测（设置页"测试连接"成功后调用）：json_schema → json_object → none。
