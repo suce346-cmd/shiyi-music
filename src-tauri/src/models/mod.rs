@@ -123,6 +123,22 @@ mod tests {
     /// 第二十一批更正注记：原注称"前端 union 依赖 type 与字段名，改名即红"——**当时为假**：
     /// 本测试把 Rust 字面量又抄一遍自证，前端零约束（实测改变体名后本测与前端全绿）。
     /// 真正的**跨语言锁**是 `src/test/wireProtocol.test.ts`（前端 `?raw` 读本枚举逐位双向比对）。
+    
+    #[test]
+    fn text_eval_event_wire_format() {
+        let e = PipelineEvent::TextEval {
+            total: 10,
+            lines: vec!["rhyme:2:ok".into()],
+            small_sample: true,
+            note: "小样本".into(),
+        };
+        let v: serde_json::Value = serde_json::to_value(&e).unwrap();
+        assert_eq!(v["type"], "text_eval");
+        assert_eq!(v["total"], 10);
+        assert_eq!(v["small_sample"], true);
+        assert_eq!(v["lines"].as_array().unwrap().len(), 1);
+    }
+
     #[test]
     fn round_gate_events_wire_format() {
         let pending: Value = serde_json::to_value(PipelineEvent::RoundGatePending {
@@ -152,7 +168,16 @@ mod tests {
     }
 
     /// #12 旧请求/旧前端无 round_gate 字段 → None（默认关闭，不擅自暂停）
+    
     #[test]
+    fn text_eval_judge_defaults_off() {
+        let json = r#"{"mode":"mode_b","user_input":"x","model":"m","api_key":"k","base_url":"u"}"#;
+        let req: PipelineRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.text_eval_judge, None);
+        assert!(!crate::text_eval::judge_enabled(req.text_eval_judge));
+    }
+
+#[test]
     fn request_round_gate_defaults_none() {
         let req: PipelineRequest = serde_json::from_str(
             r#"{"mode":"mode_b","user_input":"x","model":"m","api_key":"k","base_url":"u","extra":null}"#,
@@ -342,6 +367,7 @@ mod tests {
         // generation 越界经 validate_request 透出
         let mut req = PipelineRequest { structured_caps: None,
         douyin_scene: None,
+        text_eval_judge: None,
             output_lang: "zh".into(),
             mode: Mode::ModeB,
             user_input: "雨天".into(),
@@ -378,6 +404,7 @@ mod tests {
         fn good() -> PipelineRequest {
             PipelineRequest { structured_caps: None,
             douyin_scene: None,
+            text_eval_judge: None,
                 output_lang: "zh".into(),
                 mode: Mode::ModeB,
                 user_input: "雨天".into(),
@@ -498,6 +525,7 @@ mod tests {
         fn good() -> PipelineRequest {
             PipelineRequest { structured_caps: None,
             douyin_scene: None,
+            text_eval_judge: None,
                 output_lang: "zh".into(),
                 mode: Mode::ModeB,
                 user_input: "雨天".into(),
@@ -711,6 +739,10 @@ pub struct PipelineRequest {
     /// D 模式场景（P1-7）：缺省/非法 → 后端写 daily + scene_source=default
     #[serde(default)]
     pub douyin_scene: Option<String>,
+    /// P1-13 文本评估 Judge（缺省关闭）：Some(true) 才在终稿后调用圆桌同模型打分。
+    /// 成本旁路——绝不可默认开启。
+    #[serde(default)]
+    pub text_eval_judge: Option<bool>,
 }
 
 /// output_lang 缺省值：全中文（现状行为）。
@@ -1022,6 +1054,14 @@ pub enum PipelineEvent {
     /// P1-2 结构化阶段进度（该阶段不出 token 流）：structuring = 正在输出方案；
     /// parsed = 已通过本地 schema 校验，preview 为人类可读摘要（供圆桌面板结构化预览）。
     PhaseProgress { role: PipelineRole, phase: PhaseKind, preview: Option<String> },
+    /// P1-13 文本评估（仅当 text_eval_judge=true）：七维分数 + 小样本声明。
+    /// `lines` = `"id:score:note"`，避免嵌套类型干扰 wire 锁字段抽取。
+    TextEval {
+        total: u8,
+        lines: Vec<String>,
+        small_sample: bool,
+        note: String,
+    },
 }
 
 /// `PipelineEvent::PhaseProgress` 的阶段值（wire = snake_case）。

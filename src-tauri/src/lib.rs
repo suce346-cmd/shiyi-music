@@ -8,6 +8,7 @@ pub mod logging;
 pub mod models;
 pub mod plan;
 pub mod rules;
+pub mod text_eval;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

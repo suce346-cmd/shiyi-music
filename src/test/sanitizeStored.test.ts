@@ -89,6 +89,9 @@ describe("sanitizeStored", () => {
     const G = JSON.parse('{"g":"roundGate"}').g;
     expect(sanitizeStored(JSON.parse(`{"${G}":false}`)).roundGate).toBe(false);
     expect(sanitizeStored(JSON.parse(`{"${G}":true}`)).roundGate).toBe(true);
+    const TEJ = JSON.parse('{"g":"textEvalJudge"}').g;
+    expect(sanitizeStored(JSON.parse(`{"${TEJ}":true}`)).textEvalJudge).toBe(true);
+    expect(sanitizeStored(JSON.parse(`{}`)).textEvalJudge).toBe(false);
     expect(sanitizeStored(JSON.parse(`{"${G}":"yes"}`)).roundGate).toBe(true);
     expect(sanitizeStored({}).roundGate).toBe(true);
   });

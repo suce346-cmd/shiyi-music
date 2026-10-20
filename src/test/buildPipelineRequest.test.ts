@@ -98,7 +98,6 @@ describe("buildPipelineRequest（C-04 单源）", () => {
       expect(other).toEqual(g);
     }
   });
-});
 
   it("P1-7：douyin_scene 透传（mode_d）", () => {
     const req = buildPipelineRequest(
@@ -109,3 +108,16 @@ describe("buildPipelineRequest（C-04 单源）", () => {
     expect(req.douyin_scene).toBe("dance");
     expect(buildPipelineRequest("generate", { ...base, settings: makeSettings() }, "r").douyin_scene).toBeUndefined();
   });
+
+  it("P1-13 text_eval_judge 默认 false，仅 textEvalJudge=true 时为 true", () => {
+    expect(buildPipelineRequest("generate", { ...base, settings: makeSettings() }, "r").text_eval_judge).toBe(false);
+    expect(
+      buildPipelineRequest("generate", { ...base, settings: makeSettings({ textEvalJudge: true }) }, "r")
+        .text_eval_judge,
+    ).toBe(true);
+    expect(
+      buildPipelineRequest("resume", { ...base, settings: makeSettings({ textEvalJudge: true }) }, "r")
+        .text_eval_judge,
+    ).toBe(true);
+  });
+});

@@ -1209,6 +1209,71 @@ pub(crate) fn backoff_hook<R: Runtime>(
 }
 
 
+
+/// P1-13：显式 opt-in 后调用圆桌同模型 Judge；失败只记日志/降级事件，不阻断终稿。
+async fn maybe_run_text_eval<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    request: &PipelineRequest,
+    final_text: &str,
+    budget: &crate::budget::SharedBudget,
+    run_id: &str,
+) {
+    if !crate::text_eval::judge_enabled(request.text_eval_judge) {
+        return;
+    }
+    emit_pipeline_event(
+        app,
+        run_id,
+        PipelineEvent::StepDone {
+            role: PipelineRole::Auditor,
+            summary: "文本评估 Judge 已启用（圆桌同模型，小样本）".into(),
+        },
+    );
+    let gen = request.generation.clone().unwrap_or_default();
+    match crate::text_eval::run_judge(
+        &request.base_url,
+        &request.api_key,
+        &request.model,
+        request.mode.to_str_name(),
+        &request.user_input,
+        final_text,
+        budget,
+        &gen,
+        run_id,
+    )
+    .await
+    {
+        Ok(scores) => {
+            let lines: Vec<String> = scores
+                .dimensions
+                .iter()
+                .map(|d| format!("{}:{}:{}", d.id, d.score, d.note))
+                .collect();
+            emit_pipeline_event(
+                app,
+                run_id,
+                PipelineEvent::TextEval {
+                    total: scores.total,
+                    lines,
+                    small_sample: scores.small_sample,
+                    note: "小样本：人工校准满 40 条且一致率≥80% 前仅供参考".into(),
+                },
+            );
+        }
+        Err(e) => {
+            tracing::warn!(error = %e.message, "文本评估 Judge 失败（不阻断终稿）");
+            emit_pipeline_event(
+                app,
+                run_id,
+                PipelineEvent::Degraded {
+                    flag: "text_eval_degraded".into(),
+                    detail: format!("Judge 失败: {}", e.message),
+                },
+            );
+        }
+    }
+}
+
 async fn produce_final_text<R: Runtime>(
     app: &AppHandle<R>,
     current_plan: &str,
@@ -1788,6 +1853,8 @@ async fn run_pipeline_inner<R: Runtime>(
         "流水线完成"
     );
 
+    maybe_run_text_eval(&app, &request, &final_text, &budget, &run_id).await;
+
     Ok(final_text)
 }
 
@@ -1891,6 +1958,7 @@ pub async fn pipeline_resume<R: Runtime>(
     )
     .await?;
     crate::commands::checkpoint::clear(&app, &run_id);
+    maybe_run_text_eval(&app, &request, &final_text, &budget, &run_id).await;
     Ok(final_text)
 }
 
@@ -3015,6 +3083,7 @@ mod tests {
     fn make_request(overrides: Option<std::collections::HashMap<PipelineRole, crate::models::RoleApiOverride>>) -> PipelineRequest {
         PipelineRequest { structured_caps: None,
         douyin_scene: None,
+        text_eval_judge: None,
             output_lang: "zh".into(),
             mode: Mode::ModeB,
             user_input: "雨天".into(),

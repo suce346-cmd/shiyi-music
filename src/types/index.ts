@@ -31,6 +31,8 @@ export interface AppSettings {
   outputLang?: OutputLang;
   /** P1-2 结构化能力探测缓存（键 = capKey(baseUrl, model)；测试连接成功后写入） */
   structuredCaps?: Record<string, StructuredMode>;
+  /** P1-13 文本评估 Judge（缺省 false）：开启后终稿额外调用圆桌同模型打七维分（有成本） */
+  textEvalJudge?: boolean;
 }
 
 /** 产出语言值域（单源；请求与设置共用）。BLUEPRINT_v2 §3.8 将收敛为 zh/en（另批执行）。 */
@@ -175,7 +177,15 @@ export type PipelineEvent =
   /** #27-c 退避结束、即将重试（前端据此撤下倒计时） */
   | { type: "backoff_end"; attempt: number }
   /** P1-2 结构化阶段进度（该阶段无 token 流；parsed 时 preview 为结构化摘要） */
-  | { type: "phase_progress"; role: PipelineRoleKey; phase: PhaseKind; preview: string | null };
+  | { type: "phase_progress"; role: PipelineRoleKey; phase: PhaseKind; preview: string | null }
+  /** P1-13 文本评估 Judge（仅 text_eval_judge=true 时发出） */
+  | {
+      type: "text_eval";
+      total: number;
+      lines: string[];
+      small_sample: boolean;
+      note: string;
+    };
 
 /**
  * #27-c 退避原因（与 Rust `llm::BackoffReason::as_str` 同源）。
@@ -263,6 +273,8 @@ export interface PipelineRequest {
   output_lang: OutputLang;
   /** P1-2 结构化能力探测缓存透传（旧后端忽略） */
   structured_caps?: Record<string, StructuredMode>;
+  /** P1-13：显式 true 才跑 Judge；缺省/false = 不调用 */
+  text_eval_judge?: boolean;
   /** P1-7：D 模式场景 id（emotion/daily/dance/story/guofeng）；缺省后端写 daily */
   douyin_scene?: string;
 }

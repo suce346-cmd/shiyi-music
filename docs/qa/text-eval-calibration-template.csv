@@ -1,0 +1,2 @@
+sample_id,mode,prompt_id,arrangement_norm,arrangement_diversity,coherence,non_cliche,rhyme,lyric_norm,hook_quality,annotator,notes
+# 填入人工 0–2 分；与 Judge 输出比对后算一致率。至少 40 行有效标注。

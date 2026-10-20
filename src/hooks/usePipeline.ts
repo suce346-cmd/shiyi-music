@@ -225,6 +225,8 @@ export function buildPipelineRequest(
     // P1-2：探测缓存透传（后端按 角色显式 → 缓存 → 缺省 json_object 解析档位）
     structured_caps: sanitizeStored(opts.settings).structuredCaps,
     douyin_scene: opts.douyinScene,
+    // P1-13：文本评估 Judge 旁路（缺省/旧数据 → false，永不擅自调用）
+    text_eval_judge: opts.settings.textEvalJudge === true ? true : false,
   };
 }
 
@@ -526,6 +528,17 @@ export function usePipeline() {
           // P1-2：结构化阶段无 token 流，以进度+解析后预览代替
           updateExpert(e.role, { status: "working", note: phaseProgressNote(e.phase, e.preview) });
           break;
+        case "text_eval": {
+          // P1-13：旁路 Judge 结果（仅 settings.textEvalJudge=true 时后端才发）
+          const dims = (e.lines || []).join(" ");
+          speechCbRef.current?.(
+            makeSpeech(
+              "assistant",
+              `文本评估 Judge 总分 ${e.total}/14${e.small_sample ? "（小样本）" : ""}：${dims}`,
+            ),
+          );
+          break;
+        }
         case "backoff_end":
           // 退避结束、即将发起下一次尝试——撤下倒计时提示
           setState((prev) => ({ ...prev, backoff: null }));

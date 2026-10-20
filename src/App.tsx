@@ -899,6 +899,16 @@ export default function App() {
               onChange={e => { updateSettings({ roundGate: e.target.checked }); setTestResult(null); }}
               className="w-4 h-4 accent-brand-500 cursor-pointer shrink-0" />
           </div>
+          {/* P1-13：文本评估 Judge 旁路，默认关闭；开启才用圆桌同模型打分 */}
+          <div className="flex items-center justify-between gap-2 rounded-lg border border-border/40 bg-surface-0/40 px-3 py-2">
+            <label htmlFor="text-eval-judge" className="text-[11px] text-text-2 cursor-pointer select-none">
+              {t(settings.language, "settings.textEvalJudge")}
+              <span className="block text-[10px] text-text-muted font-normal">{t(settings.language, "settings.textEvalJudge.desc")}</span>
+            </label>
+            <input id="text-eval-judge" type="checkbox" checked={settings.textEvalJudge ?? false}
+              onChange={e => { updateSettings({ textEvalJudge: e.target.checked }); setTestResult(null); }}
+              className="w-4 h-4 accent-brand-500 cursor-pointer shrink-0" />
+          </div>
           {/* 产出语言开关：en 时流水线产出物（方案/歌词/最终提示词包）以英文输出；
               专家讨论与界面语言不变。与后端 output_lang 字段同名单源。 */}
           <div className="flex items-center justify-between gap-2 rounded-lg border border-border/40 bg-surface-0/40 px-3 py-2">
