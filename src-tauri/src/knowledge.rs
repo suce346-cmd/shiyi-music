@@ -225,14 +225,13 @@ pub struct Table {
     pub headers: Vec<String>,
     pub rows: Vec<Vec<String>>,
     /// 加载期跳过的坏行号（1-based 含表头偏移，供日志与测试断言；生产渲染不读）
-    #[allow(dead_code)] // 非测试构建下生产渲染不读此字段
     pub skipped_rows: Vec<usize>,
 }
 
 impl Table {
     /// 按列名过滤行后渲染（conditions: 列名 -> 值片段匹配）
     /// 注：当前 v1 全量注入；为未来按模式差异化筛选预留
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn render_filtered(&self, conditions: &[(&str, &str)], max_rows: Option<usize>) -> String {
         let col_idx: HashMap<&str, usize> = self
             .headers
@@ -276,7 +275,6 @@ impl Table {
     }
 
     /// 表头索引（供校验用）
-    #[allow(dead_code)]
     pub fn header_index(&self, header: &str) -> Option<usize> {
         self.headers.iter().position(|h| h == header)
     }
@@ -503,7 +501,6 @@ pub fn scenario_allows_mode(scenario: &str, mode: &str) -> bool {
 impl KnowledgeBase {
     /// 从目录加载所有 `.csv` 文件（测试与动态加载场景用；生产走 load_embedded）。
     /// 单表解析失败降级——跳过该表并打印警告，不阻断其他表；全失败才报错。
-    #[allow(dead_code)]
     pub fn load(dir: &Path) -> Result<KnowledgeBase, String> {
         let mut kb = KnowledgeBase::default();
         let entries = fs::read_dir(dir)
@@ -543,11 +540,9 @@ impl KnowledgeBase {
         Ok(kb)
     }
 
-    /// 编译期嵌入加载（打包后亦可用，不依赖运行时文件路径）。
-    /// 生产走 shared_knowledge 缓存；测试直调本函数；分发态 dev 目录不存在时兜底。
-    #[allow(dead_code)] // 生产走缓存，测试+兜底保留
+    /// 编译期嵌入加载（测试专用薄壳，P1-J：生产走 shared_knowledge 缓存 → load_embedded_internal）。
     /// 单表解析失败降级——跳过该表并打印警告，其余表照常可用。
-    /// shared_knowledge() 缓存调用内部实现（OnceLock 只初始化一次）。
+    #[cfg(test)]
     pub fn load_embedded() -> Result<KnowledgeBase, String> {
         crate::knowledge::load_embedded_internal()
     }
@@ -1149,7 +1144,6 @@ impl KnowledgeBase {
     }
 
     /// 所有表名
-    #[allow(dead_code)]
     pub fn table_names(&self) -> Vec<String> {
         let mut names: Vec<String> = self.tables.keys().cloned().collect();
         names.sort();

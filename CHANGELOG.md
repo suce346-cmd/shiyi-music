@@ -12,6 +12,7 @@
 - **[S2 修复] B-02 配器门归因 + 计数口径（P0-9）**：11 例配器失败逐例归因（`docs/qa/b02-root-cause.md`）：0 例纯真违规，主因为极简段无出口（9/11）与计数口径（8/11）。修复 `parse_section_instruments`：英文 `energy:` 尾项与能量解析同口径（原整行计为乐器，误报“配器过多 8 件”）、否定/退出项（`no drums`、`bass drops out`）不计。门阈值调整随 P1-4 SongPlan 门一次落地。
 - **[S2 修复] 自用安全基线（C-08/C-12/D-02/D-07，P0-10）**：钥匙串写入改走 `security -i` stdin（密钥不再出现在进程参数，写后读回校验）；前端写文件权限从全盘 `**` 收窄到 `$APPDATA`/`$DOWNLOAD`/`$DOCUMENT`（保存对话框路径运行期自动授权）；信封门日志不再记录模型输出正文；DNS 重绑定等残余风险记录于 `docs/security-self-use.md`。Key 格式不合规（空白/引号/反斜杠/非 ASCII）时写入前拒绝，设置界面在对应输入框下显示“Key 未保存到钥匙串”及原因（原先只打控制台，重启后 Key 静默丢失）。
 - **[S3 修复] 变更记录与 QA 数据重复（C-13/C-14）**：补齐 0.5.5 版本段与本 Unreleased 段；删除 `docs/qa/results_12round_final.jsonl`（与 `results_v4_final.jsonl` 字节相同，MD5 `0ddd1ecc…`）；新增守护单测：当前版本必须有 CHANGELOG 段、`docs/qa/*.jsonl` 不得内容重复。
+- **[S3 清理] 仓库垃圾清理（P1-J，§8 / D10 / D14）**：删除 8 份旧计划文档、`public/tauri.svg`、移动端图标（android/ios）与 Windows Store 图标（均零引用）；`speechOrder.test.ts` 移入 `src/test/`；`.gitignore` 增 `graphify-out/`、`.workbuddy/` 与审计派生物；9 处无主 `#[allow(dead_code)]` 逐个判定（测试专用改 `#[cfg(test)]`，无调用者 `logging::log_dir` 删除，其余为有调用者的 pub 项直接去掉）；Linux 构建的未使用导入告警修复。新增两项守护测试防回流。
 
 ## 0.5.5（2026-09-14 ~ 2026-10-04）钥匙串数据安全 · 产出语言 · 审计批修复
 
@@ -40,7 +41,7 @@
 
 ## 0.5.2（2026-09-08）圆桌逻辑升级——规则闭环 · 转写契约 · 诚实降级
 
-吸收《多Agent协作对话系统》任务书机制设计，对圆桌流水线做逻辑升级（详见 `docs/2026-09-08-roundtable-logic-upgrade-plan.md`，ADR-1/2/3 已 Accepted）。
+吸收《多Agent协作对话系统》任务书机制设计，对圆桌流水线做逻辑升级（原计划文档 `docs/2026-09-08-roundtable-logic-upgrade-plan.md` 已于 P1-J 删除，可经 `git log --all --full-history -- docs/2026-09-08-roundtable-logic-upgrade-plan.md` 找回；ADR-1/2/3 已 Accepted）。
 
 ### 修复（按类根治）
 

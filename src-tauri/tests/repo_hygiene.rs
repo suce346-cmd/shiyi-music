@@ -67,3 +67,46 @@ fn logs_do_not_record_model_output_head() {
     let needle = ["output", "_head"].concat();
     assert_eq!(src.matches(needle.as_str()).count(), 0);
 }
+
+/// P1-J（§5.1 #13）：禁止无主 `#[allow(dead_code)]`——测试专用用 `#[cfg(test)]`，无调用者直接删
+#[test]
+fn no_blanket_dead_code_allows() {
+    let mut hits = Vec::new();
+    let needle = ["#[allow(", "dead_code)]"].concat();
+    fn walk(dir: &Path, needle: &str, hits: &mut Vec<String>) {
+        for e in std::fs::read_dir(dir).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                walk(&p, needle, hits);
+            } else if p.extension().and_then(|x| x.to_str()) == Some("rs") {
+                let s = std::fs::read_to_string(&p).unwrap();
+                if s.contains(needle) {
+                    hits.push(p.display().to_string());
+                }
+            }
+        }
+    }
+    walk(&repo().join("src-tauri/src"), &needle, &mut hits);
+    assert!(hits.is_empty(), "存在 allow(dead_code): {hits:?}");
+}
+
+/// P1-J（§8 / D10 / D14）：已删除资产不得回流
+#[test]
+fn removed_junk_assets_stay_removed() {
+    let r = repo();
+    for p in [
+        "public/tauri.svg",
+        "src-tauri/icons/android",
+        "src-tauri/icons/ios",
+        "src-tauri/icons/StoreLogo.png",
+        "src-tauri/icons/Square30x30Logo.png",
+        "src/utils/speechOrder.test.ts",
+        "docs/2026-09-14-v055-keychain-fix-plan.md",
+    ] {
+        assert!(!r.join(p).exists(), "已清理资产回流: {p}");
+    }
+    let gi = std::fs::read_to_string(r.join(".gitignore")).unwrap();
+    for pat in ["graphify-out/", ".workbuddy/", ".DS_Store"] {
+        assert!(gi.lines().any(|l| l.trim() == pat), ".gitignore 缺 {pat}");
+    }
+}

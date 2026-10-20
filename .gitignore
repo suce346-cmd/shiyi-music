@@ -28,3 +28,11 @@ app-icon.svg
 # Local tool artifacts
 .mimosa
 target/
+
+# 第三方分析产物 / 本地记忆（P1-J）
+graphify-out/
+.workbuddy/
+# 审计文档派生物（md 为真源）
+docs/audit-*/*.html
+docs/audit-*/*.pdf
+docs/audit-*/build.py

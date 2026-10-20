@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { orderRoundSpeech, rosterOrder, assembleFinalTurns } from "./speechOrder";
+import { orderRoundSpeech, rosterOrder, assembleFinalTurns } from "../utils/speechOrder";
 import type { ChatTurn } from "../types";
 
 /** 修复包 D-1（#13 界面层）：专家发言按**阵容序**归位（与后端汇总顺序一致）→

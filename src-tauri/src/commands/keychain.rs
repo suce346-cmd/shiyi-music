@@ -10,6 +10,7 @@
 //! 跨平台：macOS 走 security CLI；Windows/Linux 回退 keyring 库（有正式签名或无需签名）。
 
 use crate::errors::{AppError, ErrorKind};
+#[cfg(target_os = "macos")]
 use std::process::Command;
 
 const SERVICE: &str = "shiyi-music";

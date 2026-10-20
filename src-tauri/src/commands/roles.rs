@@ -18,7 +18,6 @@ pub const REVIEW_SCHEMA_LYRIC: &str = r#"{"agree": true, "checked": ["已核查�
 /// 角色定义
 pub struct Role {
     /// 角色枚举（供身份校验与 event 使用）
-    #[allow(dead_code)]
     pub role: PipelineRole,
     pub name: &'static str,
     pub emoji: &'static str,
