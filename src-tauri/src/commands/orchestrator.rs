@@ -1000,8 +1000,13 @@ fn host_initial_system(mode: &Mode, kb: &KnowledgeBase, plan: &str) -> String {
 /// 阶段 1 汇总/回炉主持人 system：host 统领人设作底座，primer + 阶段0 思维资产 + 清单 +
 /// 信封与阶段 0 同源（汇总期主持人手里同样要有完整规则，否则"修完一处踩另一处"）。
 fn host_summarize_system(mode: &Mode, kb: &KnowledgeBase, plan: &str) -> String {
-    host_system_with(&crate::rules::interpolate(roles::host().system_prompt), mode, kb, plan)
+    let mut s = host_system_with(&crate::rules::interpolate(roles::host().system_prompt), mode, kb, plan);
+    s.push_str("\n\n");
+    s.push_str(crate::rules::HOST_SUMMARY_SHAPE);
+    s
 }
+
+
 
 /// 讨论层产出指令（§3.8）：en = 歌词与方案英文；zh = 空串。Style 恒英文（§3.7），不由此分支控制。
 fn discussion_lang_directive(req: &PipelineRequest) -> &'static str {
@@ -2196,6 +2201,20 @@ mod tests {
             vec![ReviewChange { target: target.to_string(), content: serde_json::Value::String(content.to_string()), reason: "r".to_string() }],
             "总体意见".to_string(),
         )
+    }
+
+    #[test]
+    fn host_summary_shape_declares_wrapper() {
+        // F-O：汇总 system 必须声明 {plan, next_tasks} 包装，且与 schema 顶层 required 一致
+        assert!(crate::rules::HOST_SUMMARY_SHAPE.contains("\"plan\""));
+        assert!(crate::rules::HOST_SUMMARY_SHAPE.contains("\"next_tasks\""));
+        let schema = crate::commands::plan_flow::host_summary_schema();
+        let req: Vec<&str> = schema["required"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+        assert_eq!(req.len(), 2);
+        assert!(req.contains(&"plan") && req.contains(&"next_tasks"));
+        let kb = load_knowledge().expect("kb");
+        let sys = host_summarize_system(&Mode::ModeB, &kb, "{}");
+        assert!(sys.ends_with(crate::rules::HOST_SUMMARY_SHAPE));
     }
 
     #[test]

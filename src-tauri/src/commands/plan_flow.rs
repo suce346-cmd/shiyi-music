@@ -208,7 +208,15 @@ pub async fn host_summarize_plan<R: Runtime>(
     );
     let messages = vec![json!({"role":"system","content":system}), json!({"role":"user","content":user})];
     let hook = super::orchestrator::backoff_hook(app.clone(), run_id.to_string());
-    let (summary, resp): (HostSummary, _) = llm::call_llm_structured(&call, messages, budget, Some(&hook)).await?;
+    // F-O：与 F-J 同口径——Parse 时同请求重发一次（不加修复提示，不自动包装）
+    let (summary, resp): (HostSummary, _) =
+        match llm::call_llm_structured::<HostSummary>(&call, messages.clone(), budget, Some(&hook)).await {
+            Err(e) if e.kind == crate::errors::ErrorKind::Parse => {
+                tracing::warn!("汇总结构化解析失败，同请求重发一次: {}", e.message);
+                llm::call_llm_structured::<HostSummary>(&call, messages, budget, Some(&hook)).await?
+            }
+            r => r?,
+        };
     super::orchestrator::emit_usage(app, PipelineRole::Host, &resp, run_id);
     emit_progress(
         app,

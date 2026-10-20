@@ -64,6 +64,7 @@
 | F-L | Judge 在终稿后运行却沿用流水线预算并预留 120s → D 长链必 "可用 0ns" | orchestrator `maybe_run_text_eval`、text_eval | 独立旁路预算 `TEXT_EVAL_BUDGET`=180s、reserve=0 |
 | F-M | Judge max_tokens 1024 被 reasoning 吃光 → content 空 | text_eval | `JUDGE_MAX_TOKENS`=4096 |
 | F-N | 实网 C 断言对整包文本跑 lyric_fill（含 Title/Style/段头）必误报；预算 8 分钟四路并发不够 | tests/headless_modes.rs | 改在 final_plan 歌词行上比对；A/B/C 12 分钟、D 15 分钟（=生产） |
+| F-O | 实网 B 汇总阶段模型输出裸 SongPlan，HostSummary schema 要求顶层 `{plan, next_tasks}` → Parse。根因：汇总复用的 `host_system_with` 以「最高优先级」只讲 SongPlan 字段契约，并嵌入裸 SongPlan 当前稿；包装外形只在 user 提示末尾一句、schema 文本埋在长 system 前部，模型照 SongPlan 顶层输出 | orchestrator `host_summarize_system`、rules `HOST_SUMMARY_SHAPE`、plan_flow `host_summarize_plan`；tests/headless_modes.rs | system 末尾追加汇总外形契约（单源常量，登记 PROSE_CARRIERS；单测 `host_summary_shape_declares_wrapper` 锁定其与 schema 顶层 required 一致）；Parse 同请求重发一次（同 F-J，不加修复提示、**不自动包装**）；B 实网预算 12→15 分钟（= 生产 PIPELINE_TIMEOUT，第 7 回合 12 分钟在 5xx 退避下超时） |
 | 记录 | `get_suno_meta` 已注册 IPC 但前端无调用 | lib.rs | 保留（参数上限元数据，待 D7 探针后接 UI），列为遗留 |
 | 记录 | HistoryPanel 筛选页签"全部"硬编码中文未走 i18n | HistoryPanel.tsx | 遗留（低） |
 
@@ -78,7 +79,8 @@
 | 3 | ✗ | ✗ | ✓ | ✗ | 审改非法 JSON/尾随文字（F-I/F-J）；D 预算 |
 | 4 | ✓ | ✗ | ✗ | ✗ | 超长不收敛（F-K）；Judge 预算（F-L） |
 | 5 | ✓ | ✓ | ✓ | ✗ | Judge 空正文（F-M） |
-| 6 | — | — | — | 见最终报告 | |
+| 6 | ✓ | ✗ | ✓ | ✗ | 四路并发：A✓ C✓ 续跑✓；B/D Timeout（并发争用）。串行重跑：D✓（含 text_eval）；B Parse 裸 SongPlan → F-O |
+| 7 | — | ✓ | — | — | F-O 后 B 串行：第 1 次无 Parse 但 12 分钟预算内 5xx 退避超时 → 预算对齐生产 15 分钟；第 2 次 ✓（3 轮上限软收敛，终稿 2640 字） |
 
 “讨论轮次上限强制收敛”是设计内软降级，测试单独打印不判失败；其余降级一律判失败。
 

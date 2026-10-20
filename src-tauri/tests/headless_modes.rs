@@ -1,6 +1,6 @@
 //! 无头实网测试：四模式全链路 + 续跑（需真实网关，key 只从环境变量读，不进仓库）。
 //! 运行：SHIYI_TEST_API_KEY=... SHIYI_TEST_BASE_URL=... SHIYI_TEST_MODEL=... cargo test --test headless_modes -- --ignored --nocapture
-//! 缺变量时自动跳过（CI 无 key 不挂）。单用例预算：A/B/C=12 分钟，D=15 分钟（= 生产预算；短于生产 15 分钟；2026-10-20 实网 8 分钟在四路并发下 B 超时）。
+//! 缺变量时自动跳过（CI 无 key 不挂）。单用例预算：A/C=12 分钟，B/D=15 分钟（= 生产预算；短于生产 15 分钟；2026-10-20 实网 8 分钟在四路并发下 B 超时）。
 //! 凭据安全：源码、示例、测试均不写可用凭据字面量；URL 仅允许 http/https（validate_request 已拦 ftp）。
 
 use std::time::Duration;
@@ -190,7 +190,8 @@ async fn headless_mode_b() {
         Mode::ModeB,
         "雨天街角错过的那把伞",
         None,
-        Duration::from_secs(12 * 60),
+        // 2026-10-20 第 7 回合：B 三角色×多轮 + 网关 5xx 退避在 12 分钟内必超时；与生产 PIPELINE_TIMEOUT 对齐
+        Duration::from_secs(15 * 60),
         |_| {},
     )
     .await

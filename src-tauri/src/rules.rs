@@ -877,6 +877,13 @@ pub struct ProseCarrier {
 /// `RULE_EXECUTOR_FILES` 同病——扫描面写死在测试里，新增载体静默漏网）。
 pub const PROSE_SOURCE_FILES: &[&str] = &["commands/prompts.rs", "commands/roles.rs"];
 
+/// F-O（`orchestrator::host_summarize_system` 唯一消费者；全量复审 2026-10-20 实网）：汇总阶段输出外形契约。共用的 `host_system_with` 只讲 SongPlan 字段，
+/// 模型（deepseek-v4.1-flash）据此直接输出裸 SongPlan → schema Parse（缺 `plan`）。此处在 system 末尾
+/// 显式声明 HostSummary 包装外形（与 `plan_flow::host_summary_schema` 同形，单测锁定）。
+pub const HOST_SUMMARY_SHAPE: &str = "【本阶段输出外形（最高优先级，覆盖上文\u{201c}按 SongPlan 填字段\u{201d}的顶层形状）】\
+顶层必须是且仅是 {\"plan\": <完整 SongPlan 对象>, \"next_tasks\": \"<下轮任务；无需继续则空字符串>\"} 两个键；\
+SongPlan 的 schema_version/title/global/sections/settings/notes/mode_meta/persona 等字段全部放进 plan 内，禁止出现在顶层。";
+
 /// `PROSE_CARRIERS` 之外的散文定义显式豁免（名 → 理由）。
 /// 只用于"形似散文、实际不进 LLM 上下文"的定义；进上下文的一律登记，不得豁免。
 pub const PROSE_CARRIER_EXEMPT: &[(&str, &str)] = &[(
@@ -885,6 +892,11 @@ pub const PROSE_CARRIER_EXEMPT: &[(&str, &str)] = &[(
 )];
 
 pub const PROSE_CARRIERS: &[ProseCarrier] = &[
+    ProseCarrier {
+        name: "HOST_SUMMARY_SHAPE",
+        text: HOST_SUMMARY_SHAPE,
+        csv_locked: &[],
+    },
     ProseCarrier {
         name: "CHECKLIST_A",
         text: CHECKLIST_A,
