@@ -13,7 +13,9 @@ pub const PLAN_IR_SCHEMA_NAME: &str = "plan_ir";
 /// - 去掉 strict 子集不支持的 `format`（如 uint8）；数值区间保留 minimum/maximum 供本地校验；
 /// - 去掉 `description`：Rust 文档注释含内部引用（§/P1-x/文件名），对模型是噪声且增加 token；
 ///   字段语义由 P1-3 提示词单独说明（schema 只管形状与取值域）。
-/// OpenAI strict 兼容后处理。
+///
+/// 实现要点：
+///
 /// - 只剥**schema 元键** `description`/`format`（与 `type`/`properties` 同级的那些）。
 /// - **绝不**把 `properties` 映射本身当 schema 递归剥键——否则名为 `description`/`format`
 ///   的字段定义会被删掉（模型再也填不了这两个字段名）。
