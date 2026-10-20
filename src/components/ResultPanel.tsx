@@ -3,6 +3,7 @@ import { IconCopy, IconCheck, IconRefresh, IconChevronDown, IconSparkles, IconAl
 import type { ChatTurn, LLMStatus, Mode, Locale } from "../types";
 import { t } from "../i18n";
 import { estimateRefineTargets, REFINE_TARGET_NAMES } from "../utils/refineTargets";
+import { parseSunoPackage, settingsShowsVarietyZero, type SunoPackageFields } from "../utils/sunoPackage";
 
 interface Props {
   conversation: ChatTurn[];
@@ -83,6 +84,8 @@ function EnergyBars({ sections }: { sections: EnergySection[] }) {
 
 export default function ResultPanel({ conversation, streamText, status, onRefine, mode, locale }: Props) {
   const [copied, setCopied] = useState(false);
+  /** P1-11：分栏复制高亮（style|exclude|settings|lyrics|all） */
+  const [copiedField, setCopiedField] = useState<string | null>(null);
   const [feedback, setFeedback] = useState("");
   const [showRefine, setShowRefine] = useState(false);
   /** 优化模式（fast=增量/full=全量），默认快速优化 */
@@ -92,17 +95,33 @@ export default function ResultPanel({ conversation, streamText, status, onRefine
     ? estimateRefineTargets(feedback, mode)
     : [];
 
+  const lastAssistantContent = [...conversation].reverse().find(t => t.role === "assistant")?.content ?? "";
+  const pkg: SunoPackageFields = parseSunoPackage(parseEnergy(lastAssistantContent).display);
+
+  const flashCopied = (field: string) => {
+    setCopiedField(field);
+    if (field === "all") setCopied(true);
+    setTimeout(() => {
+      setCopiedField(null);
+      if (field === "all") setCopied(false);
+    }, 2000);
+  };
+
+  const copyText = async (text: string, field: string) => {
+    if (!text.trim()) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      flashCopied(field);
+    } catch { /* */ }
+  };
+
   const handleCopy = async () => {
     // 复制 Suno 友好文本：能量标注已从说明行摘出（内部校验锚点，Suno 不识别）
     const allAssistant = conversation
       .filter(t => t.role === "assistant")
       .map(t => parseEnergy(t.content).display)
       .join("\n\n---\n\n");
-    try {
-      await navigator.clipboard.writeText(allAssistant);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch { /* */ }
+    await copyText(allAssistant, "all");
   };
 
   const turns: ChatTurn[] = [...conversation];
@@ -237,6 +256,23 @@ export default function ResultPanel({ conversation, streamText, status, onRefine
         );
       })}
 
+      {/* P1-11：交付包 Settings 栏显式展示 Variety（默认 0） */}
+      {showActions && pkg.isPackage && pkg.settings && (
+        <div className="glass-panel rounded-xl border border-border/30 px-3 py-2 text-[11px] text-text-2 space-y-1">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-medium text-text-1">{t(locale, "result.field.settings")}</span>
+            {settingsShowsVarietyZero(pkg.settings) ? (
+              <span className="px-1.5 py-0.5 rounded-md bg-brand-500/15 text-brand-400 border border-brand-500/30">
+                Variety = 0
+              </span>
+            ) : (
+              <span className="text-text-muted">{pkg.settings.match(/Variety\s*=\s*\d+/i)?.[0] ?? "Variety"}</span>
+            )}
+          </div>
+          <p className="text-text-muted whitespace-pre-wrap leading-relaxed">{pkg.settings}</p>
+        </div>
+      )}
+
       {/* #11 可发现性：操作条改为**滚动容器内的常驻条**（sticky bottom-0）——
           此前它是结果流最后一个子元素，输出越长越"藏得深"（用户"找了八遍"）。
           自带玻璃底 + brand 描边，滚动到任何位置都看得见，且一眼可辨"这里能操作"。 */}
@@ -250,6 +286,24 @@ export default function ResultPanel({ conversation, streamText, status, onRefine
               {copied ? <IconCheck size={13} className="text-success" /> : <IconCopy size={13} />}
               {copied ? t(locale, "result.copied") : t(locale, "result.copy")}
             </button>
+            {pkg.isPackage && (
+              <>
+                {([
+                  ["style", "result.copy.style", pkg.style],
+                  ["exclude", "result.copy.exclude", pkg.exclude],
+                  ["settings", "result.copy.settings", pkg.settings],
+                  ["lyrics", "result.copy.lyrics", pkg.lyrics],
+                ] as const).map(([key, i18nKey, val]) => (
+                  <button key={key} onClick={() => copyText(val, key)} disabled={!val.trim()}
+                    className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-[11px] text-text-2
+                      bg-surface-2/40 hover:bg-surface-3/70 border border-border/25 transition-all duration-150
+                      active:scale-95 disabled:opacity-35 disabled:cursor-not-allowed">
+                    {copiedField === key ? <IconCheck size={12} className="text-success" /> : <IconCopy size={12} />}
+                    {t(locale, i18nKey)}
+                  </button>
+                ))}
+              </>
+            )}
             <button onClick={() => setShowRefine(!showRefine)}
               className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] font-medium
                 border transition-all duration-150 active:scale-95
