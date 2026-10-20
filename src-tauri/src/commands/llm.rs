@@ -550,7 +550,10 @@ async fn stream_response<R: Runtime>(
     let mut finish_reason: Option<String> = None;
     // 流式 usage 累加（尾部独立块形态）
     let mut stream_usage = TokenUsage::default();
-    let mut line_buf = String::new();
+    // C-07（P0-4）：字节级行缓冲。旧实现每个网络 chunk 先 from_utf8_lossy 再拼接，
+    // 多字节字符（中文 3 字节）被 chunk 边界切开时两半各自变 U+FFFD。
+    // 现按 b'\n' 切完整行后再解码（'\n' 不会出现在多字节序列内部），残余字节留待下一 chunk。
+    let mut line_buf: Vec<u8> = Vec::new();
     let mut stream = response.bytes_stream();
     let started = std::time::Instant::now();
     let mut last_log = std::time::Instant::now();
@@ -580,12 +583,12 @@ async fn stream_response<R: Runtime>(
             tracing::warn!(elapsed_secs = started.elapsed().as_secs(), error = %e, "流式错误");
             AppError::new(ErrorKind::Network, format!("Stream error: {}", e))
         })?;
-        line_buf.push_str(&String::from_utf8_lossy(&chunk));
+        line_buf.extend_from_slice(&chunk);
 
-        // 只处理以 \n 结尾的完整行，不完整的尾部留到下一个 chunk
-        while let Some(pos) = line_buf.find('\n') {
-            let line = line_buf[..pos].to_string();
-            line_buf = line_buf[pos + 1..].to_string();
+        // 只处理以 \n 结尾的完整行，不完整的尾部（含被切开的多字节字符）留到下一个 chunk
+        while let Some(pos) = line_buf.iter().position(|&b| b == b'\n') {
+            let line_bytes: Vec<u8> = line_buf.drain(..=pos).collect();
+            let line = String::from_utf8_lossy(&line_bytes[..pos]);
 
             if let Some(delta) = parse_sse_line(&line, &mut full_content, &mut finish_reason, &mut stream_usage) {
                 let _ = app.emit(
@@ -600,8 +603,9 @@ async fn stream_response<R: Runtime>(
     }
 
     // 流结束后 flush 残留的不完整行（尾部行修复：尾部 data 行不再静默丢弃）
-    if !line_buf.trim().is_empty() {
-        if let Some(delta) = parse_sse_line(&line_buf, &mut full_content, &mut finish_reason, &mut stream_usage) {
+    let tail = String::from_utf8_lossy(&line_buf);
+    if !tail.trim().is_empty() {
+        if let Some(delta) = parse_sse_line(&tail, &mut full_content, &mut finish_reason, &mut stream_usage) {
             let _ = app.emit("llm-chunk", StreamChunk { run_id: run_id.to_string(), content: delta });
         }
     }
@@ -1158,5 +1162,62 @@ pub(crate) mod stream_it {
         // 结束后迟到的取消不留条目
         assert!(!crate::commands::cancel::request_cancel("it-a"));
         assert!(!crate::commands::cancel::is_cancelled("it-a"));
+    }
+
+    /// C-07（P0-4）：中文 3 字节字符在任意字节切点拆进两个网络 chunk → 正文与事件均无 U+FFFD
+    #[tokio::test]
+    async fn utf8_split_at_any_cut_point_no_replacement_char() {
+        let app = tauri::test::mock_app();
+        let handle = app.handle().clone();
+        let budget: SharedBudget = Arc::new(Budget::with_timeout(std::time::Duration::from_secs(60)));
+        let text = "雨落长街";
+        let mut body = sse(text);
+        body.extend_from_slice(b"data: [DONE]\n\n");
+        let rid = "p04-utf8";
+        let events: Arc<Mutex<Vec<String>>> = Arc::default();
+        let ev = events.clone();
+        handle.listen_any("llm-chunk", move |e| {
+            let v: serde_json::Value = serde_json::from_str(e.payload()).unwrap();
+            if v["run_id"] == "p04-utf8" {
+                ev.lock().unwrap().push(v["content"].as_str().unwrap().to_string());
+            }
+        });
+        // 覆盖每个切点（含每个汉字的 3 个字节内部的 2 个切点）
+        for cut in 1..body.len() {
+            events.lock().unwrap().clear();
+            let parts = vec![body[..cut].to_vec(), body[cut..].to_vec()];
+            let url = serve_sse(parts, None);
+            let out = stream_response(handle.clone(), open(&url).await, rid, &budget, std::time::Duration::ZERO)
+                .await
+                .unwrap();
+            assert_eq!(out.raw, text, "切点 {cut}");
+            assert!(!out.raw.contains('\u{FFFD}'), "切点 {cut} 出现 U+FFFD");
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            let joined: String = events.lock().unwrap().concat();
+            assert_eq!(joined, text, "切点 {cut} 事件正文");
+        }
+        // 每字节一个 chunk 的极端情形
+        let parts: Vec<Vec<u8>> = body.iter().map(|b| vec![*b]).collect();
+        let url = serve_sse(parts, None);
+        let out = stream_response(handle.clone(), open(&url).await, rid, &budget, std::time::Duration::ZERO)
+            .await
+            .unwrap();
+        assert_eq!(out.raw, text);
+    }
+
+    /// 无结尾换行的尾部行仍被 flush（尾部行修复不回退），且尾部多字节完整
+    #[tokio::test]
+    async fn tail_line_without_newline_flushed_utf8_intact() {
+        let app = tauri::test::mock_app();
+        let budget: SharedBudget = Arc::new(Budget::with_timeout(std::time::Duration::from_secs(60)));
+        let mut body = sse("前");
+        let tail = sse("尾行");
+        body.extend_from_slice(&tail[..tail.len() - 2]); // 去掉 \n\n
+        let cut = body.len() - 5;
+        let url = serve_sse(vec![body[..cut].to_vec(), body[cut..].to_vec()], None);
+        let out = stream_response(app.handle().clone(), open(&url).await, "p04-tail", &budget, std::time::Duration::ZERO)
+            .await
+            .unwrap();
+        assert_eq!(out.raw, "前尾行");
     }
 }

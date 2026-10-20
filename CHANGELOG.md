@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **[S2 修复] run_id 规则（C-05/C-06/D-06，RULE-RUN-ID）**：删除空 id 全局取消位（旧规则无复位点，无 run_id 时按“停止”后“测试连接”永远返回已取消）；`cancel_pipeline` 空 id 改为明确报错，`test_api` 用独立 id；`llm-chunk` 载荷增加 `run_id`，前端 `acceptStreamChunk` 只收当前 run 的流式片段（防取消/队列交错串流）；run 结束（含续跑）移除取消条目；run_id 解析单源 `resolve_run_id`；取消注册表只对活动 run 生效（`begin`/`finish`），结束后迟到的取消为 no-op、不留条目。
+- **[S2 修复] SSE 跨 chunk UTF-8 截断（C-07）**：流式行缓冲改为字节级，按 `\n` 切完整行后再解码；中文等多字节字符被网络 chunk 切开时不再变成 U+FFFD（夹具覆盖全部切点）。
 - **[S2 修复] 续跑丢产出语言（C-04）**：`resume` 手写请求字面量漏传 `output_lang`，后端缺省 `zh`，en/mix 设置在续跑被静默忽略。现三路径（generate/refine/resume）统一由 `buildPipelineRequest(kind, …)` 单源组装，`PipelineRequest.output_lang` 改为必填类型（漏传即 TS 编译失败）；新增 `buildPipelineRequest.test.ts` 7 项。
 - **[S0 修复] 测试不再删除用户真实 API Key（A-01）**：`keychain::tests::cli_round_trip` 旧实现以生产账户 `global` 做写→删往返，跑一次 `cargo test` 即删除用户 Key。现改用 `test:shiyi:{pid}:{nanos}` 隔离账户 + Drop 清理；新增 RULE-KEYCHAIN-RO 双层守护（测试构建下写/删 `global`/`role:*` 即 panic；静态扫描测试模块写/删实参）。生产行为不变。
 
