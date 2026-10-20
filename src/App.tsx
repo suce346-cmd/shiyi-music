@@ -138,7 +138,7 @@ export default function App() {
   const [testResult, setTestResult] = useState<"ok" | "fail" | null>(null);
   const [showRoleApi, setShowRoleApi] = useState(false); // 默认收起（一页化：长度是主要痛点；头部"展开▼"保持可发现性）
   const [expandedRole, setExpandedRole] = useState<PipelineRoleKey | null>(null);
-  const { settings, updateSettings, showSettings, setShowSettings, secretsReady, secretErrors } = useSettingsWithSecrets();
+  const { settings, updateSettings, clearGlobalApiKey, showSettings, setShowSettings, secretsReady, secretErrors } = useSettingsWithSecrets();
   const pipeline = usePipeline();
   /** 生成队列（提交分流 + 顺序执行；后端零改动，纯前端调度） */
   const queue = useQueue();
@@ -838,6 +838,19 @@ export default function App() {
                          focus:border-brand-500/40 focus:ring-1 focus:ring-brand-500/20
                          transition-all duration-150 disabled:opacity-50" placeholder={secretsReady ? "sk-...（清空后留空 = 沿用已保存的 Key）" : "密钥加载中…"} />
             <SecretSyncError message={secretErrors.global} locale={settings.language} />
+            {/* P1-12 / D-04：显式清除全局 Key（二次确认） */}
+            <button type="button"
+              disabled={!secretsReady || !settings.apiKey}
+              onClick={async () => {
+                if (!window.confirm(t(settings.language, "settings.apikey.clear.confirm"))) return;
+                try {
+                  await clearGlobalApiKey();
+                  setTestResult(null);
+                } catch { /* secretErrors 已就地显示 */ }
+              }}
+              className="mt-1.5 text-[11px] text-danger/80 hover:text-danger disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+              {t(settings.language, "settings.apikey.clear")}
+            </button>
           </div>
           {/* #27-a 厂商模板卡片：点击 = 写入该厂商 baseUrl + 默认模型（不动 API Key） */}
           <ProviderTemplates baseUrl={settings.baseUrl} locale={settings.language}

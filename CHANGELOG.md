@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **[P1-12] D-01/D-04/D-05**：CI 加 clippy/ESLint/vitest coverage；设置面板「清除已保存的 Key」+ 二次确认；校验员审查首调 usage 先入账（重试失败不丢 tokens）。
 - **[P1-11] 结果区四栏分块复制 + Settings 显示 Variety 0**：`parseSunoPackage` 按 Style/Exclude/Settings/Lyrics 锚点拆分；ResultPanel 分块复制按钮；Settings 条显式 Variety=0 徽章；vitest。
 - **[P1-10] 历史/检查点 v2（RULE-HISTORY-V2 / B-03/C-09/D-03）**：`history.json` 改为 `{schema_version:2,entries}`；读到 v1 裸数组/非 2 版本直接备份丢弃；上限 200；`history_flush` + 前端串行写队列与关闭前 flush；删除 App 本地迁移块；检查点 schema=2 + TTL 7 天 + 启动清扫；HistoryEntry 增 `song_plan`/`rendered`。
 - **[P1-9] 发音/Persona/系列文本层 + Audio Influence 可选（M-08/M-05/M-11/M-12）**：SongPlan 增 `pronunciation_hints`/`persona`/`series_context`（默认 null=关闭，不渲染）；`SunoSettings.reference_audio` 默认 false；为 true 时 A/B 允许 `audio_influence≠0`；校验清单/plan_field_contract/suno_rules/prompts 同步；schema 快照更新。

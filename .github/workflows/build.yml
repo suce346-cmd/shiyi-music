@@ -32,14 +32,23 @@ jobs:
       - name: TypeScript type check
         run: npx tsc --noEmit
 
+      - name: ESLint
+        run: npm run lint
+
       - name: Frontend tests
         run: npm test -- --run
+
+      - name: Frontend coverage
+        run: npm run test:coverage
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build frontend (Tauri 编译宏要求 dist/ 存在)
         run: npm run build
+
+      - name: Clippy (-D warnings)
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
       - name: Run Rust tests
         # Windows 上 headless_modes 集成测试二进制启动即 STATUS_ENTRYPOINT_NOT_FOUND

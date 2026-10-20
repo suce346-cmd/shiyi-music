@@ -36,3 +36,6 @@ graphify-out/
 docs/audit-*/*.html
 docs/audit-*/*.pdf
 docs/audit-*/build.py
+
+# Vitest coverage
+coverage/

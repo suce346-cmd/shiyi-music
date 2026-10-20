@@ -291,7 +291,7 @@ export function persistNonSecrets(s: AppSettings, hold?: PlaintextHold) {
 
 /** 全局 Key 留空 = 沿用（AINA 参考 SettingsPage.tsx:383：留空 → undefined → 后端沿用旧值）。
  * 旧规则空值直接 keychain_delete——输入框受控值在清空/重输间隙即毁掉真 key（数据丢失回路根因）。
- * 全局 Key 无"清除"入口，留空永远不动钥匙串；读回旧值恢复内存，输入框立即恢复显示。 */
+ * 全局 Key 留空永远不动钥匙串（防输入间隙误删）；显式清除走 clearGlobalApiKey（P1-12 / D-04）。 */
 async function withRestoredGlobalKey(partial: Partial<AppSettings>): Promise<Partial<AppSettings>> {
   if (partial.apiKey === undefined || partial.apiKey) return partial;
   try {
@@ -385,8 +385,35 @@ export function useSettingsWithSecrets() {
   }, [base, scheduleSync]);
   // F1/F5：迁移失败原因与同步失败同一显示通道（同 account 以最新同步结果为准）
   const mergedErrors = useMemo(() => ({ ...base.migrationErrors, ...secretErrors }), [base.migrationErrors, secretErrors]);
-  return { ...base, updateSettings, secretErrors: mergedErrors };
+
+  /** P1-12 / D-04：显式清除全局 Key（二次确认由 UI 负责）。删钥匙串 global + 清空内存。 */
+  const clearGlobalApiKey = useCallback(async () => {
+    // 取消进行中的防抖写，避免清完又被 pending 写回
+    if (syncTimers.current.global) {
+      clearTimeout(syncTimers.current.global);
+      delete syncTimers.current.global;
+    }
+    delete pendingSecrets.current.global;
+    try {
+      await invoke("keychain_delete", { account: "global" });
+      releaseHold("global");
+      setSecretErrors((prev) => {
+        if (!("global" in prev)) return prev;
+        const next = { ...prev };
+        delete next.global;
+        return next;
+      });
+    } catch (e) {
+      console.error("[keychain] global 清除失败:", e);
+      setSecretErrors((prev) => ({ ...prev, global: secretErrorMessage(e) }));
+      throw e;
+    }
+    base.updateSettings({ apiKey: "" });
+  }, [base, releaseHold]);
+
+  return { ...base, updateSettings, clearGlobalApiKey, secretErrors: mergedErrors };
 }
+
 
 /** 后端 AppError 序列化为 {kind, message}；其他形态兜底转字符串 */
 export function secretErrorMessage(e: unknown): string {

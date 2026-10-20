@@ -887,11 +887,15 @@ async fn execute_audit_review<R: Runtime>(
         tracing::warn!("校验员审查输出触及 max_tokens 上限");
     }
     let mut result = parse_review(&resp.raw);
+    // P1-12 / D-05：首调 usage 先入账（RAII 语义）——重试若 `?` 失败也不丢首调 tokens
+    emit_usage(app, PipelineRole::Auditor, &resp, run_id);
     // 解析失败 → 重试一次；仍失败走相关降级警示
     if result.degraded {
         tracing::warn!("校验员审查输出无法解析，重试一次");
-        let resp2 = llm::call_llm_silent(
-            &base_url, &api_key, &model,
+        match llm::call_llm_silent(
+            &base_url,
+            &api_key,
+            &model,
             messages.clone(),
             llm::MAX_TOKENS_CAP,
             req.thinking,
@@ -901,19 +905,26 @@ async fn execute_audit_review<R: Runtime>(
             llm::FINAL_STAGE_RESERVE,
             Some(&backoff),
         )
-        .await?;
-        let result2 = parse_review(&resp2.raw);
-        // B-1：重试调用同样计费，usage 必须如实入账（旧规则只发首调，重试 tokens 漏记）
-        emit_usage(app, PipelineRole::Auditor, &resp2, run_id);
-        if !result2.degraded {
-            result = result2;
+        .await
+        {
+            Ok(resp2) => {
+                let result2 = parse_review(&resp2.raw);
+                // B-1：重试调用同样计费
+                emit_usage(app, PipelineRole::Auditor, &resp2, run_id);
+                if !result2.degraded {
+                    result = result2;
+                }
+            }
+            Err(e) => {
+                // 首调已入账；重试失败仍返回首调降级结果（不丢 usage）
+                tracing::warn!(error = %e.message, "校验员审查重试失败，保留首调降级结果");
+            }
         }
     }
     emit(PipelineEvent::StepDone {
         role: PipelineRole::Auditor,
         summary: humanize_review(PipelineRole::Auditor, &result),
     });
-    emit_usage(app, PipelineRole::Auditor, &resp, run_id);
     Ok(result)
 }
 
