@@ -258,3 +258,35 @@ describe("钥匙串同步失败对用户可见", () => {
     expect(h.result.current.secretErrors["role:emotion"]).toBe("bad");
   });
 });
+
+/** W3：迁移/同步失败后用户成功再保存 → releaseHold，明文从 localStorage 消失 */
+describe("W3 releaseHold after successful re-entry", () => {
+  it("迁移失败保留明文 → 之后 keychain_set 成功 → 明文哨兵化且 secretErrors 清除", async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ apiKey: "ak-plain-legacy" }));
+    let allowSet = false;
+    const kc = new Map<string, string>();
+    invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "keychain_set") {
+        if (!allowSet) throw new Error("keychain locked");
+        kc.set(String(args?.account), String(args?.secret));
+        return null;
+      }
+      if (cmd === "keychain_get") return kc.get(String(args?.account)) ?? null;
+      return null;
+    });
+    const h = await renderReady();
+    expect(localStorage.getItem(STORAGE_KEY)).toContain("ak-plain-legacy");
+    expect(h.result.current.secretErrors.global).toBeTruthy();
+    allowSet = true;
+    await act(async () => {
+      await h.result.current.updateSettings({ apiKey: "ak-plain-legacy" });
+      await vi.advanceTimersByTimeAsync(900);
+    });
+    expect(h.result.current.secretErrors.global).toBeUndefined();
+    expect(kc.get("global")).toBe("ak-plain-legacy");
+    // releaseHold 后下一次写出应哨兵化（hold 已空）
+    await act(async () => { await h.result.current.updateSettings({ model: "m2" }); });
+    expect(localStorage.getItem(STORAGE_KEY)).not.toContain("ak-plain-legacy");
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}").apiKey).toBe("__keychain__");
+  });
+});

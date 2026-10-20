@@ -79,6 +79,18 @@ describe("buildPipelineRequest（C-04 单源）", () => {
     expect(req.refine_targets).toBeUndefined();
   });
 
+  it("W6：structured_caps 三路径透传（sanitize 后的探测缓存）", () => {
+    const caps = { "https://x/v1|m": "json_schema" as const };
+    for (const kind of KINDS) {
+      const req = buildPipelineRequest(kind, { ...base, settings: makeSettings({ structuredCaps: caps }) }, "r1");
+      expect(req.structured_caps, kind).toEqual(caps);
+    }
+    // 缺省 / 空 → undefined（不传脏对象）
+    for (const kind of KINDS) {
+      expect(buildPipelineRequest(kind, { ...base, settings: makeSettings() }, "r1").structured_caps).toBeUndefined();
+    }
+  });
+
   it("三路径共享字段完全一致（除 kind 显式差异外无漂移）", () => {
     const s = makeSettings({ thinking: true, outputLang: "en", roundGate: false });
     const [g, r, m] = KINDS.map((k) => buildPipelineRequest(k, { ...base, settings: s }, "same"));
