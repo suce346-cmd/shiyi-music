@@ -346,11 +346,11 @@ pub fn validate_lyric_fill(original: &str, new: &str) -> ValidationResult {
 /// mode_a/b 的调性节奏块（:94/:1009）无区间要求——不设代码区间，避免误杀原指令合法输出，
 /// BPM 合理性由制作人讨论轮审查兜底）
 pub fn check_bpm_range(mode: &str, bpm: u32) -> Option<String> {
-    if mode == "mode_d" && bpm < rules::DOUYIN_BPM_MIN {
+    if mode == "mode_d" && bpm < rules::DOUYIN_V2_BPM_MIN {
         Some(format!(
             "BPM {} 低于抖音模式要求 {}（原指令 BPM>=90）",
             bpm,
-            rules::DOUYIN_BPM_MIN
+            rules::DOUYIN_V2_BPM_MIN
         ))
     } else {
         None
@@ -565,8 +565,8 @@ mod tests {
     #[test]
     fn bpm_check_only_mode_d() {
         assert!(check_bpm_range("mode_a", 60).is_none());
-        assert!(check_bpm_range("mode_d", rules::DOUYIN_BPM_MIN).is_none());
-        assert!(check_bpm_range("mode_d", rules::DOUYIN_BPM_MIN - 1).is_some());
+        assert!(check_bpm_range("mode_d", rules::DOUYIN_V2_BPM_MIN).is_none());
+        assert!(check_bpm_range("mode_d", rules::DOUYIN_V2_BPM_MIN - 1).is_some());
     }
 
     #[test]

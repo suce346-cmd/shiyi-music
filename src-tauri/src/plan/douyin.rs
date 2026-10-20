@@ -31,6 +31,27 @@ pub const DOUYIN_V2_LINE_MAX_CHARS: usize = 12;
 pub const DOUYIN_V2_CLIP_SECONDS: u16 = 15;
 /// Exclude 必含项（小写比对）
 pub const DOUYIN_V2_EXCLUDE: &[&str] = &["long intro", "slow build", "fade out"];
+/// 抖音 BPM 下限 = 全场景 BPM 带最低值（emotion 80；由 `bpm_min_is_scene_floor` 锁定）
+pub const DOUYIN_V2_BPM_MIN: u32 = 80;
+/// 成曲建议时长（§6.2：约 45–75 秒短歌）——`${DOUYIN_V2_DURATION_RANGE}`
+pub const DOUYIN_V2_DURATION_SEC_MIN: u32 = 45;
+pub const DOUYIN_V2_DURATION_SEC_MAX: u32 = 75;
+/// Hook 循环遍数上限（下限 = `DOUYIN_V2_HOOK_REPEAT_MIN`）——`${DOUYIN_V2_HOOK_LOOP_RANGE}`
+pub const DOUYIN_V2_HOOK_LOOP_MAX: usize = 4;
+/// 情绪弧线禁用句式（人设与 mode_d prompt 同源）
+pub const DOUYIN_V2_ARC_FORBID_PHRASE: &str = "from A to B";
+/// 动态走向能量窗口：全程高位 / 高开骤停（软指引，非硬门）
+pub const DOUYIN_V2_ENERGY_HIGH_MIN: u32 = 7;
+pub const DOUYIN_V2_ENERGY_HIGH_MAX: u32 = 9;
+pub const DOUYIN_V2_ENERGY_ABRUPT_MIN: u32 = 8;
+pub const DOUYIN_V2_ENERGY_ABRUPT_MAX: u32 = 10;
+/// 参数区间（provisional，待 P2 探针；叙事型例外：≥2 叙事段且写明'叙事型'方可回落 A/B 区间）
+pub const DOUYIN_V2_WEIRD_MIN: u32 = 12;
+pub const DOUYIN_V2_WEIRD_MAX: u32 = 20;
+pub const DOUYIN_V2_STYLE_MIN: u32 = 85;
+pub const DOUYIN_V2_STYLE_MAX: u32 = 95;
+/// 逐段动态参考表（设计方向示例，非阈值；表内 `${DOUYIN_V2_INTRO_MAX}` 为嵌套占位符）
+pub const DOUYIN_V2_DYNAMIC_TABLE: &str = "· Intro/前${DOUYIN_V2_INTRO_MAX}秒：全程高位=8，3-4件，直接拉满；高开骤停=8，3-4件，直接拉满；先压后炸=3-4，1-2件，制造反差\n· Hook：全程高位=9，3-4件，持续高压；高开骤停=9，3-4件，持续高压；先压后炸=9-10，5件，突然爆发\n· Verse：全程高位=8，3件，不冷却；高开骤停=8，3件，不冷却；先压后炸=7，3件，保持热度\n· Hook重复：全程高位=9，4件，加层；高开骤停=9，4件，加层；先压后炸=10，5-6件，最炸\n· Bridge/反差：全程高位=7，2件，稍剥离；高开骤停=—；先压后炸=8，3件，再次推\n· 最后Hook：全程高位=10，4件，最炸；高开骤停=10，4件，骤停前一拍最炸；先压后炸=10，5-6件，炸完即停";
 /// 混音词表：手机扬声器友好（P1-7 与 §6.2）
 pub const DOUYIN_V2_MIX_PHONE_SPEAKER: &str = "M-06";
 /// 混音词表：人声贴唱（vocal-forward）
@@ -507,6 +528,12 @@ pub fn validate_douyin_v2(p: &SongPlan, out: &mut Vec<Issue>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bpm_min_is_scene_floor() {
+        let floor = super::DouyinScene::ALL.iter().map(|s| s.bpm_band().0 as u32).min().unwrap();
+        assert_eq!(super::DOUYIN_V2_BPM_MIN, floor);
+    }
+
     use super::*;
     use crate::plan::fixtures::minimal_plan;
 

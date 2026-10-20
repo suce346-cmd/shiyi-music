@@ -33,7 +33,7 @@ style_arc_d_buildup,douyin,80,90,,抖音叙事型回落·渐进爆发：Style �
 style_arc_d_u,douyin,70,82,,抖音叙事型回落·U 型：Style 引导度 70-82，Weirdness 25-35；叙事型例外专用（同 A/B style_arc_u）
 style_arc_d_singlepeak,douyin,75,85,,抖音叙事型回落·单峰：Style 引导度 75-85，Weirdness 20-30；叙事型例外专用（同 A/B style_arc_singlepeak）
 style_arc_d_loop,douyin,78,85,,抖音叙事型回落·回环：Style 引导度 78-85，Weirdness 20-28；叙事型例外专用（同 A/B style_arc_loop）
-hook_first,douyin,1,,,前 3 秒必须出现 Hook 或强钩子：抖音 3 秒完播率生死线
+hook_first,douyin,1,,,冷开或 Intro≤2 秒后紧接 Hook，Hook 须在前 8 秒落地：抖音完播率生死线
 stop_mark,douyin,1,,次,结尾骤停标记（骤停/all instruments cut）：抖音结尾留白制造循环播放冲动
 desc_line_max,all,0,200,字符,说明行整行（含方括号）不超过 200 字符：上限宽松但必须保乐器+行为动词，不得为缩短删乐器；超限会被 plan::validate 硬校验拦下
 no_full_band,all,0,,,禁 full band/all instruments 笼统写法：Suno 无法理解必须具体列乐器
@@ -46,6 +46,6 @@ imagery_unity,all,1,,,意象家族统一：一个贯穿全曲的意象系统不�
 anti_cliche,all,1,,,套话必须具体化：参考金句库替代写法禁懒惰组合
 hook_protect,douyin,1,,,Hook 段强度不稀释：副歌出现后其他段落不能抢强度
 turn_point,all,1,,,转折点位置与情绪级差明确：全曲弧线的杠杆点
-bpm_match,douyin,90,170,,抖音模式 BPM 90-170：对齐指令"BPM≥90"（90-109 可走叙事型结构），高速律动适配短视频节奏；低于 90 不够冲，高于 170 难以跟唱
+bpm_match,douyin,80,170,,抖音模式 BPM≥80 且落在所选场景带内（情绪 80-100 / 日常 100-120 / 舞蹈 120-140 / 剧情 90-110 / 国风 90-130）；高于 170 难以跟唱
 era_words,all,1,,,年代词增强风格识别（90s 2000s retro vintage）：Suno 对年代词敏感复古风格必加
 repeat_mark,all,1,,,括号重复标记 (x4)：Suno 支持括号数字重复钩子洗脑段用 (x2) 到 (x4)

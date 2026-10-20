@@ -3341,7 +3341,7 @@ mod tests {
         // mode_d 清单含抖音参数区间（渲染值来自常量，非手写）
         let d = host_initial_system(&Mode::ModeD, &kb, "");
         assert!(
-            d.contains(&format!("{}-{}", crate::rules::DOUYIN_WEIRD_MIN, crate::rules::DOUYIN_WEIRD_MAX)),
+            d.contains(&format!("{}-{}", crate::rules::DOUYIN_V2_WEIRD_MIN, crate::rules::DOUYIN_V2_WEIRD_MAX)),
             "stage-0 清单缺抖音参数区间"
         );
     }
@@ -3490,6 +3490,34 @@ mod tests {
         }
         // sanitizeStored 允许字面量 "mix" 作为归一输入（读旧设置 → zh），但不得出现在类型/下拉/i18n 键。
         assert!(hits.is_empty(), "§3.8 mix 残留：\n{}", hits.join("\n"));
+    }
+
+    /// §5.1#7：旧 D 模式常量/占位符（非 V2 前缀）全仓退役；抖音数字单源 = plan::douyin `DOUYIN_V2_*`。
+    #[test]
+    fn no_legacy_douyin_v1_names() {
+        let prefix = ["DOUYIN", "_"].concat();
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files = Vec::new();
+        fn walk(d: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() { walk(&p, out) } else if p.extension().is_some_and(|x| ["rs", "txt", "csv", "ts", "tsx"].contains(&x.to_str().unwrap_or(""))) { out.push(p) }
+            }
+        }
+        for d in ["src", "tests", "knowledge", "../src"] { walk(&root.join(d), &mut files); }
+        assert!(files.len() > 20);
+        let mut hits = Vec::new();
+        for f in &files {
+            let s = std::fs::read_to_string(f).unwrap();
+            for (i, _) in s.match_indices(prefix.as_str()) {
+                if !s[i + prefix.len()..].starts_with("V2_") {
+                    let end = (i + 40).min(s.len());
+                    let end = (end..s.len()).find(|&k| s.is_char_boundary(k)).unwrap_or(s.len());
+                    hits.push(format!("{}: {}", f.display(), &s[i..end]));
+                }
+            }
+        }
+        assert!(hits.is_empty(), "旧 D 模式常量残留：\n{}", hits.join("\n"));
     }
 
     /// C3 快照：四模式 prompt 渲染输出须与改前快照逐字节一致（占位符恰好还原当日数字）。

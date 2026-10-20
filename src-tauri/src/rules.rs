@@ -34,11 +34,9 @@ pub const MIN_INSTRUMENT_CHORUS: usize = 3;
 /// 可声明极简段的能量上限
 pub const MINIMAL_ENERGY_MAX: u32 = 2;
 /// D 模式 Hook 最少次数
-pub const HOOK_MIN_COUNT: usize = 2;
+pub const HOOK_MIN_COUNT: usize = crate::plan::douyin::DOUYIN_V2_HOOK_REPEAT_MIN;
 /// D 模式单段 Verse 上限行数
-pub const VERSE_MAX_LINES: usize = 4;
-/// D 模式每行歌词上限字数（去空白与半角标点后计数）
-pub const DOUYIN_LINE_MAX_CHARS: usize = 12;
+pub const VERSE_MAX_LINES: usize = crate::plan::douyin::DOUYIN_V2_VERSE_MAX_LINES;
 /// 中文歌词 Verse 每行字数区间（与 suno_rules.csv `line_chars_verse` 同源，由
 /// `lyric_chars_match_csv_structured_value` 锁定）。旧实现把 6-13 手写在 roles.rs/prompts.rs
 /// 共 4 处，与 CSV 脱钩——改 CSV 值提示词不联动（审计 #21）。
@@ -47,14 +45,8 @@ pub const LYRIC_LINE_VERSE_MAX: usize = 13;
 /// 中文歌词 Chorus 每行字数区间（与 suno_rules.csv `line_chars_chorus` 同源）。
 pub const LYRIC_LINE_CHORUS_MIN: usize = 4;
 pub const LYRIC_LINE_CHORUS_MAX: usize = 9;
-/// D 模式 BPM 下限
-pub const DOUYIN_BPM_MIN: u32 = 90;
 // P1-7：V2 常量定义点 = plan::douyin（此处 re-export 供 RULE_REGISTRY / 插值）
-pub use crate::plan::douyin::{
-    DOUYIN_V2_CLIP_SECONDS, DOUYIN_V2_HOOK_CHARS_MAX, DOUYIN_V2_HOOK_LAND_SEC,
-    DOUYIN_V2_HOOK_LINES_MAX, DOUYIN_V2_HOOK_LINES_MIN, DOUYIN_V2_HOOK_REPEAT_MIN,
-    DOUYIN_V2_INTRO_MAX_SEC, DOUYIN_V2_LINE_MAX_CHARS, DOUYIN_V2_VERSE_MAX_LINES,
-};
+pub use crate::plan::douyin::*;
 
 /// 全模式说明行上限字符数（含方括号、整行计）。
 /// 单源：上游告知（四模式 checklist + D primer + 说明行契约 + 各角色提示词经 ${DESC_LINE_MAX} 插值）
@@ -91,17 +83,6 @@ pub const STYLE_BLOCK_COUNT_AB: usize = 8;
 /// Style Prompt 信息块数（抖音模式 7 块：无艺人参考块）。与 `${STYLE_BLOCKS_DOUYIN}` 同源。
 pub const STYLE_BLOCK_COUNT_DOUYIN: usize = 7;
 
-/// 抖音情绪弧线的**禁用句式**（"from A to B"）——人设与模式 prompt 三处引用同一短语，
-/// 禁的是哪种写法只有这一个真源（改判据时三处同时改，不会漏）。
-pub const DOUYIN_ARC_FORBID_PHRASE: &str = "from A to B";
-
-/// 抖音模式成曲时长区间（秒）——`${DOUYIN_DURATION_RANGE}`。
-pub const DOUYIN_DURATION_SEC_MIN: u32 = 60;
-pub const DOUYIN_DURATION_SEC_MAX: u32 = 90;
-/// 抖音「前 N 秒建钩子」留人窗口（秒）——`${DOUYIN_HOOK_WINDOW}`。
-pub const DOUYIN_HOOK_WINDOW_SEC: u32 = 3;
-/// 抖音 Intro 段落跨度（"Intro/前 7 秒"，秒）——`${DOUYIN_INTRO_SPAN}`。
-pub const DOUYIN_INTRO_SPAN_SEC: u32 = 7;
 
 /// 审改员/校验员无异议时的 checked 清单最小条数——`${CHECKED_MIN}`。
 /// 与 `REVIEW_SCHEMA_*` 示例条数由 `checked_schema_example_matches_min_items` 双向锁定。
@@ -114,23 +95,15 @@ pub const VOCAL_DIM_KEEP_MAX: usize = 3;
 
 /// 抖音 Hook 重复次数：强化区间 [`HOOK_REPEAT_MIN`, `HOOK_REPEAT_MAX`]，
 /// 超过 `HOOK_REPEAT_DILUTE` 次即稀释冲击力。
-pub const HOOK_REPEAT_MIN: u32 = 2;
-pub const HOOK_REPEAT_MAX: u32 = 4;
+pub const HOOK_REPEAT_MIN: u32 = crate::plan::douyin::DOUYIN_V2_HOOK_REPEAT_MIN as u32;
+pub const HOOK_REPEAT_MAX: u32 = crate::plan::douyin::DOUYIN_V2_HOOK_LOOP_MAX as u32;
 pub const HOOK_REPEAT_DILUTE: u32 = 5;
-/// 抖音 Hook「重复 N-M 遍即成立」（一句话循环型 / 无歌词金句循环）。
-pub const DOUYIN_HOOK_LOOP_MIN: u32 = 3;
-pub const DOUYIN_HOOK_LOOP_MAX: u32 = 4;
 
 /// 能量标尺：全量程 [`ENERGY_SCALE_MIN`, `ENERGY_SCALE_MAX`]（10 级制）。
 pub const ENERGY_SCALE_MIN: u32 = 0;
 pub const ENERGY_SCALE_MAX: u32 = 10;
 /// 能量五档区间（极弱/弱/中/强/极强）——所有载体经 `${ENERGY_BAND_1}`…`${ENERGY_BAND_5}` 引用。
 pub const ENERGY_BAND_RANGES: [&str; 5] = ["0-2", "3-4", "5-6", "7-8", "9-10"];
-/// 抖音动态走向的能量窗口：全程高位 [`MIN`, `MAX`] 分；高开骤停 [`MIN`, `MAX`] 分一刀切。
-pub const DOUYIN_ENERGY_HIGH_MIN: u32 = 7;
-pub const DOUYIN_ENERGY_HIGH_MAX: u32 = 9;
-pub const DOUYIN_ENERGY_ABRUPT_MIN: u32 = 8;
-pub const DOUYIN_ENERGY_ABRUPT_MAX: u32 = 10;
 
 /// 弧线逐段密度表（五行弧线形态，六行表体）——**单源**。
 ///
@@ -146,12 +119,6 @@ const ARC_DENSITY_TABLE: &str = "· Intro：标准叙事型=稀疏；全程高�
 /// 新增五弧线形态的逐段密度表——**单源**（同 `ARC_DENSITY_TABLE` 的双载体与占位符规则）。
 const ARC_DENSITY_NEW_TABLE: &str = "· Intro：阶梯上升=稀疏；渐进爆发=稀疏；U型=中（主题宣示）；单峰=稀；回环=中（动机建立）\n· Verse：阶梯上升=低；渐进爆发=渐加；U型=中低；单峰=累积；回环=中低\n· Pre-Chorus：阶梯上升=推；渐进爆发=长 Build（蓄而不放）；U型=渐降；单峰=推；回环=推\n· Chorus：阶梯上升=中 3-4件（每轮递增）；渐进爆发=蓄而不放；U型=弱（全曲沉底）；单峰=峰（最大）；回环=中\n· Bridge：阶梯上升=微收；渐进爆发=继续加层；U型=最弱（挣扎）；单峰=—；回环=中低（转折）\n· Final Chorus：阶梯上升=最大 6-7件（加层加和声）；渐进爆发=全开一击爆发；U型=最强（超过开头）；单峰=收束；回环=回到 Intro 配置（呼应）";
 
-/// 抖音逐段动态参考表——**单源**（此前 prompts.rs mode_d 与 roles.rs 制作人各手抄一份）。
-///
-/// 表内能量值/件数是**设计方向示例**（抖音模式无逐段件数硬门、无能量硬门，见 `validate_douyin`），
-/// 不是阈值常量；表内 `前${DOUYIN_INTRO_SPAN}秒` 为嵌套占位符（标量对排在容器对之前，插值顺序由
-/// `placeholder_pairs` 保证）。
-const DOUYIN_DYNAMIC_TABLE: &str = "· Intro/前${DOUYIN_INTRO_SPAN}秒：全程高位=8，3-4件，直接拉满；高开骤停=8，3-4件，直接拉满；先压后炸=3-4，1-2件，制造反差\n· Hook：全程高位=9，3-4件，持续高压；高开骤停=9，3-4件，持续高压；先压后炸=9-10，5件，突然爆发\n· Verse：全程高位=8，3件，不冷却；高开骤停=8，3件，不冷却；先压后炸=7，3件，保持热度\n· Hook重复：全程高位=9，4件，加层；高开骤停=9，4件，加层；先压后炸=10，5-6件，最炸\n· Bridge/反差：全程高位=7，2件，稍剥离；高开骤停=—；先压后炸=8，3件，再次推\n· 最后Hook：全程高位=10，4件，最炸；高开骤停=10，4件，骤停前一拍最炸；先压后炸=10，5-6件，炸完即停";
 
 /// 请求准入·用户输入上限字符数（user_input 与原歌词共用）。
 ///
@@ -191,11 +158,6 @@ pub const ARC_PARAMS: &[(&str, u32, u32, u32, u32)] = &[
     ("单峰", 20, 30, 75, 85),
     ("回环", 20, 28, 78, 85),
 ];
-/// 抖音默认参数区间（叙事型例外与硬校验同口径：仅当结构含 ≥2 个叙事段 Verse/Pre-Chorus/Bridge 且方案写明'叙事型'归类，方可回落 A/B 弧线区间；二者缺一按本区间打回）
-pub const DOUYIN_WEIRD_MIN: u32 = 12;
-pub const DOUYIN_WEIRD_MAX: u32 = 20;
-pub const DOUYIN_STYLE_MIN: u32 = 85;
-pub const DOUYIN_STYLE_MAX: u32 = 95;
 /// B 模式参数区间
 pub const MODE_B_WEIRD_MIN: u32 = 20;
 pub const MODE_B_WEIRD_MAX: u32 = 35;
@@ -341,10 +303,10 @@ pub const RULE_REGISTRY: &[RuleSpec] = &[
         id: "mode_d_param_range",
         modes: &["mode_d"],
         symbols: &[
-            "DOUYIN_WEIRD_MIN",
-            "DOUYIN_WEIRD_MAX",
-            "DOUYIN_STYLE_MIN",
-            "DOUYIN_STYLE_MAX",
+            "DOUYIN_V2_WEIRD_MIN",
+            "DOUYIN_V2_WEIRD_MAX",
+            "DOUYIN_V2_STYLE_MIN",
+            "DOUYIN_V2_STYLE_MAX",
         ],
         executor: "check_params",
     },
@@ -363,7 +325,7 @@ pub const RULE_REGISTRY: &[RuleSpec] = &[
     RuleSpec {
         id: "douyin_line_max",
         modes: &["mode_d"],
-        symbols: &["DOUYIN_LINE_MAX_CHARS"],
+        symbols: &["DOUYIN_V2_LINE_MAX_CHARS"],
         executor: "check_lyric_lines",
     },
     // 说明行上限：A/B/C/D 全模式硬门，
@@ -374,12 +336,12 @@ pub const RULE_REGISTRY: &[RuleSpec] = &[
         symbols: &["DESC_LINE_MAX_CHARS", "is_desc_line"],
         executor: "check_style_and_headers",
     },
-    // 执行者更正（第三批）：原挂 check_style_prompt_blocks（不消费 DOUYIN_BPM_MIN、只查下限），
-    // 真执行者 = check_bpm_range（validator::check_bpm_range 消费 DOUYIN_BPM_MIN，经 orchestrator 接线）。
+    // 执行者更正（第三批）：原挂 check_style_prompt_blocks（不消费 DOUYIN_V2_BPM_MIN、只查下限），
+    // 真执行者 = check_bpm_range（validator::check_bpm_range 消费 DOUYIN_V2_BPM_MIN，经 orchestrator 接线）。
     RuleSpec {
         id: "douyin_bpm_min",
         modes: &["mode_d"],
-        symbols: &["DOUYIN_BPM_MIN"],
+        symbols: &["DOUYIN_V2_BPM_MIN"],
         executor: "check_bpm_range",
     },
     RuleSpec {
@@ -447,7 +409,7 @@ pub const CRAFT_REFS_LYRICIST: &[&str] = &[
 pub const CRAFT_REFS_REVISER: &[&str] = &["LC-02", "LC-04", "LC-15", "LC-16", "LC-26"];
 /// 🎤 制作人：主题不可改/民族元素表达理由/减法留白/概念先行/制约清单
 pub const CRAFT_REFS_PRODUCER: &[&str] = &["CC-01", "CC-12", "CC-17", "CC-22", "CC-24"];
-/// 🔥 流行风格分析师：前3秒画面/道具刻度/对话体
+/// 🔥 流行风格分析师：前8秒Hook/画面/道具刻度/对话体
 pub const CRAFT_REFS_STYLE_ANALYST: &[&str] = &["LC-01", "LC-10", "LC-23"];
 
 /// 思维资产表单源登记（注入门走 `knowledge::craft_inject_gate` 的表）——新增/改名只改本行。
@@ -770,7 +732,7 @@ pub const SUNO_RULES_FOR_PRODUCER: &[&str] = &[
     "bpm_match",
     "era_words",
 ];
-/// 🔥 流行风格分析师：抖音传播类（Hook 次数/前3秒/Verse 行数/行字数/骤停/重复标记/BPM 区间）
+/// 🔥 流行风格分析师：抖音传播类（Hook 次数/前8秒Hook/Verse 行数/行字数/骤停/重复标记/BPM 区间）
 pub const SUNO_RULES_FOR_STYLE_ANALYST: &[&str] = &[
     "hook_min_count",
     "verse_max_lines",
@@ -860,7 +822,7 @@ pub fn checklist(mode: &str) -> String {
 const CHECKLIST_A: &str = "【校验清单 A·单源】Style Prompt≤${STYLE_PROMPT_MAX}字符且≥${STYLE_PROMPT_MIN}字符；结构标签≥${MIN_SECTION_TAGS}段；能量差≥${MIN_ENERGY_GAP}级（${ENERGY_SCALE}）；配器差≥${MIN_INSTRUMENT_GAP}件、单段${INSTRUMENT_RANGE}件（最弱段即下限${MIN_INSTRUMENT_WEAK}件，声明'极简段'的段落豁免下限）、最强段≥${MIN_INSTRUMENT_STRONG}件；说明行≤${DESC_LINE_MAX}字符（含方括号整行计，须含${DESC_LINE_SPACE_SLOT}与人声状态槽位；上限内须保乐器+行为动词）；弧线参数：${ARC_INLINE}；Audio Influence 默认 0（reference_audio 开启时可非 0）；断句单空格、禁/与、标点全半角。";
 const CHECKLIST_B: &str = "【校验清单 B·单源】Style Prompt≤${STYLE_PROMPT_MAX}字符且≥${STYLE_PROMPT_MIN}字符；结构标签≥${MIN_SECTION_TAGS}段；能量差≥${MIN_ENERGY_GAP}级（${ENERGY_SCALE}）；配器差≥${MIN_INSTRUMENT_GAP}件、单段${INSTRUMENT_RANGE}件（最弱段即下限${MIN_INSTRUMENT_WEAK}件，声明'极简段'的段落豁免下限）、最强段≥${MIN_INSTRUMENT_STRONG}件；说明行≤${DESC_LINE_MAX}字符（含方括号整行计，须含${DESC_LINE_SPACE_SLOT}与人声状态槽位；上限内须保乐器+行为动词）；参数固定区间：Weirdness ${MODE_B_WEIRD_RANGE}、Style Influence ${MODE_B_STYLE_RANGE}（B 专属区间为准，弧线区间不适用 B）；Audio Influence 默认 0（reference_audio 开启时可非 0）；断句单空格、禁/与、标点全半角。";
 const CHECKLIST_C: &str = "【校验清单 C·单源】逐行等字数（差一字即失败，尾部≤${LYRIC_FILL_TAIL}行收尾）；行数与原歌词一致；段落结构与原歌词一致（禁新增Hook/Chorus段）；韵脚位置与模式保留；说明行带方括号且≤${DESC_LINE_MAX}字符（整行计，须含${DESC_LINE_SPACE_SLOT}与人声状态槽位）；Style Prompt≤${STYLE_PROMPT_MAX}字符；断句单空格、禁/与、标点全半角。";
-const CHECKLIST_D: &str = "【校验清单 D·单源】Hook≥${HOOK_MIN}次；单段Verse≤${VERSE_MAX_LINES}行；每行≤${DOUYIN_LINE_MAX}字；结尾骤停（一刀切，含abruptly/cut标识）；BPM≥${DOUYIN_BPM_MIN}；Style Prompt≤${STYLE_PROMPT_MAX}字符且≥${STYLE_PROMPT_MIN}字符；说明行≤${DESC_LINE_MAX}字符（含方括号整行计，须含${DESC_LINE_SPACE_SLOT}与人声状态槽位；上限内须保乐器+行为动词）；参数抖音${DOUYIN_WEIRD_RANGE}/${DOUYIN_STYLE_RANGE}（仅当含≥${NARRATIVE_SECTIONS_MIN}叙事段Verse/Pre-Chorus/Bridge且方案写明'叙事型'归类，方可回落A/B弧线区间，二者缺一打回）；Audio Influence 默认 0（reference_audio 开启时可非 0）；断句单空格、禁/与、标点全半角。";
+const CHECKLIST_D: &str = "【校验清单 D·单源】Hook≥${HOOK_MIN}次；单段Verse≤${VERSE_MAX_LINES}行；每行≤${DOUYIN_V2_LINE_MAX}字；结尾骤停（一刀切，含abruptly/cut标识）；BPM≥${DOUYIN_V2_BPM_MIN}；Style Prompt≤${STYLE_PROMPT_MAX}字符且≥${STYLE_PROMPT_MIN}字符；说明行≤${DESC_LINE_MAX}字符（含方括号整行计，须含${DESC_LINE_SPACE_SLOT}与人声状态槽位；上限内须保乐器+行为动词）；参数抖音${DOUYIN_V2_WEIRD_RANGE}/${DOUYIN_V2_STYLE_RANGE}（仅当含≥${NARRATIVE_SECTIONS_MIN}叙事段Verse/Pre-Chorus/Bridge且方案写明'叙事型'归类，方可回落A/B弧线区间，二者缺一打回）；Audio Influence 默认 0（reference_audio 开启时可非 0）；断句单空格、禁/与、标点全半角。";
 
 /// 阶段 0 地基 primer（模式专属，每模式≤800字；M9 顺序：受众→物件→约束→旋律）。
 /// 定位 = **工序顺序锚点**（primer 独有内容：意象家族/声学映射/Verse2 新增信息/借体覆盖/弧线能量标尺），
@@ -884,8 +846,8 @@ pub fn host_primer(mode: &str) -> Option<&'static str> {
 const PRIMER_AB: &str = "【阶段0地基·A/B】受众：先一句话定对象阅历与时机（写给谁听、何时听），不到不写。物件：先建时空物件清单（≥5件具体物，禁抽象词开局），再定意象家族（一首歌一个系统）与声学映射（每个意象写出乐器/音色对应）。约束：声调服从旋律走向（硬门），韵脚密度为软优化；Verse2须新增信息；借体覆盖：每个抽象词配具体物象，禁裸奔。旋律骨架：先定弧线10选1与能量标尺（${ENERGY_BAND_1}静止/${ENERGY_BAND_2}铺垫/${ENERGY_BAND_3}推进/${ENERGY_BAND_4}爆发/${ENERGY_BAND_5}用尽全力），弱强差≥${MIN_ENERGY_GAP}级，配器差≥${MIN_INSTRUMENT_GAP}件，全曲≤${INSTRUMENT_MAX}件。";
 // C：对齐铁律 + 节奏保留 + 借体。
 const PRIMER_C: &str = "【阶段0地基·C】对齐铁律：逐行等字数（差一字即失败）、行数与原歌词一致、段落结构与原歌词一致（禁新增段）。节奏保留：词组切分与原歌词一致（3+4、2+2+3等），呼吸点位置一致，韵脚位置与模式保留。借体：新意象转译原意象叙事功能（非替换），意象家族统一，抽象词每个有借体，套话具体化。";
-// D：前3秒画面 + 道具刻度 + 骤停提醒 + 字数提醒。
-const PRIMER_D: &str = "【阶段0地基·D】前${DOUYIN_HOOK_WINDOW}秒：开场${DOUYIN_HOOK_WINDOW}秒内建钩子或强画面，直接进内容不慢铺垫。道具刻度：核心情感绑有世俗重量的具体物（物作刻度），金句短、魔性、可独立传播，Hook≥${HOOK_MIN}次。约束：Verse≤${VERSE_MAX_LINES}行，每行≤${DOUYIN_LINE_MAX}字，说明行≤${DESC_LINE_MAX}字符（含方括号整行计），BPM≥${DOUYIN_BPM_MIN}。收尾：结尾骤停一刀切（不渐弱），动态标签用对，骤停后无乐器残留。";
+// D：前8秒Hook/画面 + 道具刻度 + 骤停提醒 + 字数提醒。
+const PRIMER_D: &str = "【阶段0地基·D】前${DOUYIN_V2_HOOK_LAND}秒：开场${DOUYIN_V2_HOOK_LAND}秒内建钩子或强画面，直接进内容不慢铺垫。道具刻度：核心情感绑有世俗重量的具体物（物作刻度），金句短、魔性、可独立传播，Hook≥${HOOK_MIN}次。约束：Verse≤${VERSE_MAX_LINES}行，每行≤${DOUYIN_V2_LINE_MAX}字，说明行≤${DESC_LINE_MAX}字符（含方括号整行计），BPM≥${DOUYIN_V2_BPM_MIN}。收尾：结尾骤停一刀切（不渐弱），动态标签用对，骤停后无乐器残留。";
 
 /// 进 LLM 上下文的告知载体（`&'static str`，上游 prompt 与下游打回指令都算）注册表——
 /// **守护网扫描面单源**。
@@ -974,8 +936,8 @@ pub const PROSE_CARRIERS: &[ProseCarrier] = &[
         csv_locked: &[],
     },
     ProseCarrier {
-        name: "DOUYIN_DYNAMIC_TABLE",
-        text: DOUYIN_DYNAMIC_TABLE,
+        name: "DOUYIN_V2_DYNAMIC_TABLE",
+        text: DOUYIN_V2_DYNAMIC_TABLE,
         csv_locked: &[],
     },
     // 说明行契约正文（第二十三批）：旧实现是 `desc_line_contract()` 的 format! 局部手写，
@@ -1021,9 +983,9 @@ pub const PROSE_CARRIERS: &[ProseCarrier] = &[
 /// 无占位符文本原样返回（幂等——用户 override 文件可不写占位符）。
 ///
 /// 第二十三批：改为**迭代至不动点**（有界 5 轮）。此前是单遍顺序替换，容器占位符的值
-/// 若含标量占位符（如 `${DOUYIN_DYNAMIC_TABLE}` 表体内的 `${DOUYIN_INTRO_SPAN}`），
+/// 若含标量占位符（如 `${DOUYIN_V2_DYNAMIC_TABLE}` 表体内的 `${DOUYIN_V2_INTRO_MAX}`），
 /// 展开是否彻底取决于对的定义顺序——25-批实测 mode_d 快照因此在表体行残留
-/// `${DOUYIN_INTRO_SPAN}`。不动点实现与定义顺序无关，容器可自由嵌套标量
+/// `${DOUYIN_V2_INTRO_MAX}`。不动点实现与定义顺序无关，容器可自由嵌套标量
 /// （`interpolate_expands_nested_placeholders` + `..._no_leftover_placeholders` 双向锁定）。
 pub fn interpolate(text: &str) -> String {
     let pairs = placeholder_pairs();
@@ -1059,12 +1021,12 @@ fn placeholder_pairs() -> Vec<(&'static str, String)> {
         ("${STYLE_PROMPT_MAX}", STYLE_PROMPT_MAX_CHARS.to_string()),
         ("${STYLE_PROMPT_MIN}", STYLE_PROMPT_MIN_CHARS.to_string()),
         (
-            "${DOUYIN_WEIRD_RANGE}",
-            format!("{}-{}", DOUYIN_WEIRD_MIN, DOUYIN_WEIRD_MAX),
+            "${DOUYIN_V2_WEIRD_RANGE}",
+            format!("{}-{}", DOUYIN_V2_WEIRD_MIN, DOUYIN_V2_WEIRD_MAX),
         ),
         (
-            "${DOUYIN_STYLE_RANGE}",
-            format!("{}-{}", DOUYIN_STYLE_MIN, DOUYIN_STYLE_MAX),
+            "${DOUYIN_V2_STYLE_RANGE}",
+            format!("{}-{}", DOUYIN_V2_STYLE_MIN, DOUYIN_V2_STYLE_MAX),
         ),
         (
             "${MODE_B_WEIRD_RANGE}",
@@ -1085,7 +1047,6 @@ fn placeholder_pairs() -> Vec<(&'static str, String)> {
             "${PATCH_TARGET_RULE_LYRIC}",
             PATCH_TARGET_RULE_LYRIC.to_string(),
         ),
-        ("${DOUYIN_LINE_MAX}", DOUYIN_LINE_MAX_CHARS.to_string()),
         (
             "${LYRIC_CHARS_VERSE}",
             format!("{}-{}", LYRIC_LINE_VERSE_MIN, LYRIC_LINE_VERSE_MAX),
@@ -1095,7 +1056,7 @@ fn placeholder_pairs() -> Vec<(&'static str, String)> {
             format!("{}-{}", LYRIC_LINE_CHORUS_MIN, LYRIC_LINE_CHORUS_MAX),
         ),
         ("${LYRIC_LINE_VERSE_MAX}", LYRIC_LINE_VERSE_MAX.to_string()),
-        ("${DOUYIN_BPM_MIN}", DOUYIN_BPM_MIN.to_string()),
+        ("${DOUYIN_V2_BPM_MIN}", DOUYIN_V2_BPM_MIN.to_string()),
         ("${HOOK_MIN}", HOOK_MIN_COUNT.to_string()),
         ("${VERSE_MAX_LINES}", VERSE_MAX_LINES.to_string()),
         ("${LYRIC_FILL_TAIL}", LYRIC_FILL_TAIL_ALLOW.to_string()),
@@ -1133,15 +1094,13 @@ fn placeholder_pairs() -> Vec<(&'static str, String)> {
             STYLE_BLOCK_COUNT_DOUYIN.to_string(),
         ),
         (
-            "${DOUYIN_ARC_FORBID_PHRASE}",
-            DOUYIN_ARC_FORBID_PHRASE.to_string(),
+            "${DOUYIN_V2_ARC_FORBID_PHRASE}",
+            DOUYIN_V2_ARC_FORBID_PHRASE.to_string(),
         ),
         (
-            "${DOUYIN_DURATION_RANGE}",
-            format!("{}-{}", DOUYIN_DURATION_SEC_MIN, DOUYIN_DURATION_SEC_MAX),
+            "${DOUYIN_V2_DURATION_RANGE}",
+            format!("{}-{}", DOUYIN_V2_DURATION_SEC_MIN, DOUYIN_V2_DURATION_SEC_MAX),
         ),
-        ("${DOUYIN_HOOK_WINDOW}", DOUYIN_HOOK_WINDOW_SEC.to_string()),
-        ("${DOUYIN_INTRO_SPAN}", DOUYIN_INTRO_SPAN_SEC.to_string()),
         (
             "${DOUYIN_V2_INTRO_MAX}",
             crate::plan::douyin::DOUYIN_V2_INTRO_MAX_SEC.to_string(),
@@ -1187,8 +1146,8 @@ fn placeholder_pairs() -> Vec<(&'static str, String)> {
         ),
         ("${HOOK_REPEAT_DILUTE}", HOOK_REPEAT_DILUTE.to_string()),
         (
-            "${DOUYIN_HOOK_LOOP_RANGE}",
-            format!("{}-{}", DOUYIN_HOOK_LOOP_MIN, DOUYIN_HOOK_LOOP_MAX),
+            "${DOUYIN_V2_HOOK_LOOP_RANGE}",
+            format!("{}-{}", DOUYIN_V2_HOOK_REPEAT_MIN, DOUYIN_V2_HOOK_LOOP_MAX),
         ),
         (
             "${ENERGY_SCALE}",
@@ -1200,12 +1159,12 @@ fn placeholder_pairs() -> Vec<(&'static str, String)> {
         ("${ENERGY_BAND_4}", ENERGY_BAND_RANGES[3].to_string()),
         ("${ENERGY_BAND_5}", ENERGY_BAND_RANGES[4].to_string()),
         (
-            "${DOUYIN_ENERGY_HIGH_RANGE}",
-            format!("{}-{}", DOUYIN_ENERGY_HIGH_MIN, DOUYIN_ENERGY_HIGH_MAX),
+            "${DOUYIN_V2_ENERGY_HIGH_RANGE}",
+            format!("{}-{}", DOUYIN_V2_ENERGY_HIGH_MIN, DOUYIN_V2_ENERGY_HIGH_MAX),
         ),
         (
-            "${DOUYIN_ENERGY_ABRUPT_RANGE}",
-            format!("{}-{}", DOUYIN_ENERGY_ABRUPT_MIN, DOUYIN_ENERGY_ABRUPT_MAX),
+            "${DOUYIN_V2_ENERGY_ABRUPT_RANGE}",
+            format!("{}-{}", DOUYIN_V2_ENERGY_ABRUPT_MIN, DOUYIN_V2_ENERGY_ABRUPT_MAX),
         ),
         ("${MIN_SECTION_TAGS}", MIN_SECTION_TAGS.to_string()),
         ("${MINIMAL_SECTION_EXEMPT}", minimal_section_exemption()),
@@ -1227,10 +1186,10 @@ fn placeholder_pairs() -> Vec<(&'static str, String)> {
             "${ARC_DENSITY_NEW_TABLE_INDENTED}",
             ARC_DENSITY_NEW_TABLE.replace('\n', "\n    "),
         ),
-        ("${DOUYIN_DYNAMIC_TABLE}", DOUYIN_DYNAMIC_TABLE.to_string()),
+        ("${DOUYIN_V2_DYNAMIC_TABLE}", DOUYIN_V2_DYNAMIC_TABLE.to_string()),
         (
-            "${DOUYIN_DYNAMIC_TABLE_INDENTED}",
-            DOUYIN_DYNAMIC_TABLE.replace('\n', "\n    "),
+            "${DOUYIN_V2_DYNAMIC_TABLE_INDENTED}",
+            DOUYIN_V2_DYNAMIC_TABLE.replace('\n', "\n    "),
         ),
     ];
     // C4/D4：领地声明短语（单源 = TERRITORY_DECLARATIONS）——人设占位符展开为逐字相同文本，
@@ -1415,15 +1374,15 @@ mod tests {
 
     #[test]
     fn interpolate_resolves_param_ranges() {
-        let t = "抖音 ${DOUYIN_WEIRD_RANGE}/${DOUYIN_STYLE_RANGE}；B ${MODE_B_WEIRD_RANGE}/${MODE_B_STYLE_RANGE}；上限 ${STYLE_PROMPT_MAX}；说明行 ${DESC_LINE_MAX}";
+        let t = "抖音 ${DOUYIN_V2_WEIRD_RANGE}/${DOUYIN_V2_STYLE_RANGE}；B ${MODE_B_WEIRD_RANGE}/${MODE_B_STYLE_RANGE}；上限 ${STYLE_PROMPT_MAX}；说明行 ${DESC_LINE_MAX}";
         let r = interpolate(t);
         assert!(
-            r.contains(&format!("{}-{}", DOUYIN_WEIRD_MIN, DOUYIN_WEIRD_MAX)),
+            r.contains(&format!("{}-{}", DOUYIN_V2_WEIRD_MIN, DOUYIN_V2_WEIRD_MAX)),
             "抖音区间: {}",
             r
         );
         assert!(
-            r.contains(&format!("{}-{}", DOUYIN_STYLE_MIN, DOUYIN_STYLE_MAX)),
+            r.contains(&format!("{}-{}", DOUYIN_V2_STYLE_MIN, DOUYIN_V2_STYLE_MAX)),
             "抖音 Style: {}",
             r
         );
@@ -1477,12 +1436,12 @@ mod tests {
     }
 
     /// 第二十三批·嵌套占位符锁：容器（表格）值内含标量占位符时，插值必须展开到不动点。
-    /// 旧实现是单遍顺序替换——mode_d 快照实测在动态表体行残留 `${DOUYIN_INTRO_SPAN}`。
+    /// 旧实现是单遍顺序替换——mode_d 快照实测在动态表体行残留 `${DOUYIN_V2_INTRO_MAX}`。
     #[test]
     fn interpolate_expands_nested_placeholders() {
-        let table = interpolate("${DOUYIN_DYNAMIC_TABLE}");
+        let table = interpolate("${DOUYIN_V2_DYNAMIC_TABLE}");
         assert!(
-            table.contains("前7秒"),
+            table.contains("前2秒"),
             "容器内的标量占位符必须展开：{}",
             table
         );
@@ -1619,12 +1578,12 @@ mod tests {
                 &["auditor_review", "auditor", "style_analyst"],
             ),
             (
-                "${DOUYIN_ARC_FORBID_PHRASE}",
+                "${DOUYIN_V2_ARC_FORBID_PHRASE}",
                 &["auditor", "style_analyst", "mode_d"],
             ),
-            ("${DOUYIN_DURATION_RANGE}", &["style_analyst", "mode_d"]),
-            ("${DOUYIN_HOOK_WINDOW}", &["emotion", "style_analyst"]),
-            ("${DOUYIN_INTRO_SPAN}", &["mode_d"]),
+            ("${DOUYIN_V2_DURATION_RANGE}", &["style_analyst", "mode_d"]),
+            ("${DOUYIN_V2_HOOK_LAND}", &["emotion", "style_analyst"]),
+            ("${DOUYIN_V2_INTRO_MAX}", &["mode_d"]),
             (
                 "${CHECKED_MIN}",
                 &[
@@ -1641,7 +1600,7 @@ mod tests {
             ("${VOCAL_DIM_KEEP_RANGE}", &["mode_a", "mode_b", "mode_d"]),
             ("${HOOK_REPEAT_RANGE}", &["style_analyst"]),
             ("${HOOK_REPEAT_DILUTE}", &["style_analyst"]),
-            ("${DOUYIN_HOOK_LOOP_RANGE}", &["lyricist", "mode_d"]),
+            ("${DOUYIN_V2_HOOK_LOOP_RANGE}", &["lyricist", "mode_d"]),
             (
                 "${ENERGY_SCALE}",
                 &["auditor", "emotion", "mode_a", "mode_b", "mode_d"],
@@ -1651,14 +1610,14 @@ mod tests {
             ("${ENERGY_BAND_3}", &["emotion", "producer", "mode_a"]),
             ("${ENERGY_BAND_4}", &["emotion", "producer", "mode_a"]),
             ("${ENERGY_BAND_5}", &["emotion", "producer", "mode_a"]),
-            ("${DOUYIN_ENERGY_HIGH_RANGE}", &["mode_d"]),
-            ("${DOUYIN_ENERGY_ABRUPT_RANGE}", &["mode_d"]),
+            ("${DOUYIN_V2_ENERGY_HIGH_RANGE}", &["mode_d"]),
+            ("${DOUYIN_V2_ENERGY_ABRUPT_RANGE}", &["mode_d"]),
             ("${ARC_DENSITY_TABLE}", &["producer"]),
             ("${ARC_DENSITY_TABLE_INDENTED}", &["mode_a"]),
             ("${ARC_DENSITY_NEW_TABLE}", &["producer"]),
             ("${ARC_DENSITY_NEW_TABLE_INDENTED}", &["mode_a"]),
-            ("${DOUYIN_DYNAMIC_TABLE}", &["producer"]),
-            ("${DOUYIN_DYNAMIC_TABLE_INDENTED}", &["mode_d"]),
+            ("${DOUYIN_V2_DYNAMIC_TABLE}", &["producer"]),
+            ("${DOUYIN_V2_DYNAMIC_TABLE_INDENTED}", &["mode_d"]),
         ];
         for (ph, expected) in cases {
             let rendered = interpolate(ph);
@@ -1790,8 +1749,8 @@ mod tests {
             "<=10",
             "<= 10",
             "<= 4",
-            "BPM>=90",
-            "BPM≥90",
+            "BPM>=80",
+            "BPM≥80",
         ];
         for lit in LITERALS {
             if line.contains(lit) {
@@ -1808,7 +1767,7 @@ mod tests {
             (MIN_ENERGY_GAP as usize, "级", true),
             (HOOK_MIN_COUNT, "次", true),
             (VERSE_MAX_LINES, "行", true),
-            (DOUYIN_LINE_MAX_CHARS, "字", true),
+            (DOUYIN_V2_LINE_MAX_CHARS, "字", true),
             (LYRIC_LINE_VERSE_MAX, "字", true),
             (STYLE_PROMPT_MIN_CHARS, "字符", true),
             (STYLE_PROMPT_MAX_CHARS, "字符", true),
@@ -1821,15 +1780,15 @@ mod tests {
             (STYLE_BLOCK_COUNT_AB, "块", false),
             (STYLE_BLOCK_COUNT_DOUYIN, "块", false),
             (STYLE_BLOCK_COUNT_DOUYIN, "信息块", false),
-            (DOUYIN_DURATION_SEC_MIN as usize, "秒", false),
-            (DOUYIN_DURATION_SEC_MAX as usize, "秒", false),
-            (DOUYIN_HOOK_WINDOW_SEC as usize, "秒", false),
-            (DOUYIN_INTRO_SPAN_SEC as usize, "秒", false),
+            (DOUYIN_V2_DURATION_SEC_MIN as usize, "秒", false),
+            (DOUYIN_V2_DURATION_SEC_MAX as usize, "秒", false),
+            (DOUYIN_V2_HOOK_LAND_SEC as usize, "秒", false),
+            (DOUYIN_V2_INTRO_MAX_SEC as usize, "秒", false),
             (CHECKED_MIN_ITEMS, "项", false),
             (VOCAL_DIM_COUNT, "维", false),
             (HOOK_REPEAT_DILUTE as usize, "次", true),
-            (DOUYIN_HOOK_LOOP_MIN as usize, "遍", false),
-            (DOUYIN_HOOK_LOOP_MAX as usize, "遍", false),
+            (DOUYIN_V2_HOOK_REPEAT_MIN, "遍", false),
+            (DOUYIN_V2_HOOK_LOOP_MAX, "遍", false),
         ];
         for (num, unit, need_ctx) in derived {
             // 量词间隔写法（`2 个叙事段`/`2个叙事段`）一并纳入——旧实现只认紧邻与单空格
@@ -2046,7 +2005,7 @@ mod tests {
     fn handwritten_guard_catches_batch23_leaks() {
         for leak in [
             "含 ≥2 个叙事段（Verse/Pre-Chorus/Bridge 标签）",
-            "各模式专项满足（A/B 模式 8 块、抖音 7 块且 BPM≥${DOUYIN_BPM_MIN}）",
+            "各模式专项满足（A/B 模式 8 块、抖音 7 块且 BPM≥${DOUYIN_V2_BPM_MIN}）",
             "你需要产出 60-90 秒的抖音爆款歌曲",
             "列出已核查的关键检查项，至少 3 项",
             "人声坐标 6 维（音域/音色/发声/颤音/咬字/节奏感）描述完整",
@@ -2149,9 +2108,9 @@ mod tests {
     fn prose_carrier_guard_catches_handwritten_restore() {
         // 模拟"回退到旧写法"：抖音区间 + Hook/Verse 阈值全部手写（上限已改 12，手写 12 同样须被网住）
         let legacy =
-            "Hook≥2次；单段Verse≤4行；每行≤12字；BPM≥90；参数抖音12-20/85-95；说明行≤200字符。";
+            "Hook≥3次；单段Verse≤4行；每行≤12字；BPM≥80；参数抖音12-20/85-95；说明行≤200字符。";
         let hits = handwritten_rule_number_hits(legacy);
-        for want in ["≤200", "12-20", "85-95", "2次", "4行", "12字", "BPM≥90"] {
+        for want in ["≤200", "12-20", "85-95", "3次", "4行", "12字", "BPM≥80"] {
             assert!(
                 hits.iter().any(|h| h == want),
                 "红灯先行：旧写法 {} 未被网住（命中 {:?}）",
@@ -2179,7 +2138,7 @@ mod tests {
     ///
     /// 第三批升级（红灯先行）：旧实现用 `src.contains(name)` 文件全文文本匹配——
     /// 函数"存在但无人调用"、或"名字被注释/字符串提及"都能过关。实测 `check_style_prompt_blocks`
-    /// 只查下限却登记为 `douyin_bpm_min`（不消费 DOUYIN_BPM_MIN）的执行者，靠人工核对才发现。
+    /// 只查下限却登记为 `douyin_bpm_min`（不消费 DOUYIN_V2_BPM_MIN）的执行者，靠人工核对才发现。
     /// 调用点判定：出现 `name(` 且其前紧邻非 `fn`（即非定义），且不在注释/字符串里
     /// （第二十批起经 `strip_code_noise` 剔除——行内注释与字符串里的 `name(` 同样不算调用）。
     fn has_call_site(src: &str, name: &str) -> bool {
@@ -3190,10 +3149,10 @@ mod tests {
         assert!(d.contains(&format!("≥{}次", HOOK_MIN_COUNT)), "缺Hook2");
         assert!(d.contains(&format!("≤{}行", VERSE_MAX_LINES)), "缺Verse4");
         assert!(
-            d.contains(&format!("≤{}字", DOUYIN_LINE_MAX_CHARS)),
+            d.contains(&format!("≤{}字", DOUYIN_V2_LINE_MAX_CHARS)),
             "缺行字上限"
         );
-        assert!(d.contains(&format!("≥{}", DOUYIN_BPM_MIN)), "缺BPM90");
+        assert!(d.contains(&format!("≥{}", DOUYIN_V2_BPM_MIN)), "缺BPM90");
         let c = checklist("mode_c");
         assert!(
             c.contains(&format!("≤{}行", LYRIC_FILL_TAIL_ALLOW)),
@@ -3513,7 +3472,7 @@ mod tests {
                 row[desc_idx]
             );
         }
-        // 抖音行字数上限单源锁：CSV value_max ↔ DOUYIN_LINE_MAX_CHARS（12），
+        // 抖音行字数上限单源锁：CSV value_max ↔ DOUYIN_V2_LINE_MAX_CHARS（12），
         // 有人手改 CSV 忘了改常量、或反之，都红。desc 格式不同（"不超过 N 字"），单独断言。
         let douyin_row = table
             .rows
@@ -3522,17 +3481,17 @@ mod tests {
             .unwrap_or_else(|| panic!("suno_rules 缺 line_max_chars 行"));
         assert_eq!(
             douyin_row[max_idx].parse::<usize>().unwrap(),
-            DOUYIN_LINE_MAX_CHARS,
-            "line_max_chars value_max 须与 DOUYIN_LINE_MAX_CHARS 同源"
+            DOUYIN_V2_LINE_MAX_CHARS,
+            "line_max_chars value_max 须与 DOUYIN_V2_LINE_MAX_CHARS 同源"
         );
         assert!(
-            douyin_row[desc_idx].contains(&format!("不超过 {} 字", DOUYIN_LINE_MAX_CHARS)),
+            douyin_row[desc_idx].contains(&format!("不超过 {} 字", DOUYIN_V2_LINE_MAX_CHARS)),
             "line_max_chars 描述须写明上限: {}",
             douyin_row[desc_idx]
         );
         // 占位符渲染值 = CSV 区间（有人手改 CSV 忘了改常量，或反之，都红）
         let rendered = interpolate(
-            "${LYRIC_CHARS_VERSE}|${LYRIC_CHARS_CHORUS}|${LYRIC_LINE_VERSE_MAX}|${DOUYIN_LINE_MAX}",
+            "${LYRIC_CHARS_VERSE}|${LYRIC_CHARS_CHORUS}|${LYRIC_LINE_VERSE_MAX}|${DOUYIN_V2_LINE_MAX}",
         );
         assert_eq!(
             rendered,
@@ -3543,7 +3502,7 @@ mod tests {
                 LYRIC_LINE_CHORUS_MIN,
                 LYRIC_LINE_CHORUS_MAX,
                 LYRIC_LINE_VERSE_MAX,
-                DOUYIN_LINE_MAX_CHARS
+                DOUYIN_V2_LINE_MAX_CHARS
             )
         );
     }

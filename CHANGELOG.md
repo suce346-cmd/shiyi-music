@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **[§2.3/§3.8] validate_lang**：后端按请求 `output_lang` 盖写 `mode_meta.lyrics_lang`；`plan::validate` 新增歌词语言硬门（en 行含中文 / zh 全曲无中文 → `lyrics_lang_mismatch`）；不读 Style（§3.7 独立）。变异 3/3 红。
+- **[§5.1#7] 旧 D 模式常量全量迁 V2**：`DOUYIN_*`（非 V2）定义与 `${DOUYIN_*}` 占位符全部删除，单源 `plan::douyin::DOUYIN_V2_*`；按 §6.2 改值：成曲 60–90→45–75 秒、Intro 7→2 秒、前 3 秒钩子→Hook 8 秒落地、BPM 下限 90→80（=场景带最低）、Hook ≥2→≥3（`HOOK_MIN_COUNT`/`HOOK_REPEAT_*`/`VERSE_MAX_LINES` 改为 V2 别名）；`suno_rules.csv` hook_first/bpm_match 同步；mode_d 快照重生成；守护 `no_legacy_douyin_v1_names`、`bpm_min_is_scene_floor`。
+
 - **[§3.7] Style 恒英文硬门**：`plan/style_lang.rs` + 空表 `knowledge/style_cjk_allow.csv`（P2-S12 前零放行）；`validate` 挂 `validate_style_english`；守护 `style_english_rule_independent_of_output_lang` / `style_cjk_allow_rows_have_probe_id`。
 
 - **[§5.1#14 / §3.8] 退役 output_lang mix**：`PipelineRequest.output_lang` 复用 `plan::LyricLang`（仅 zh|en）；IPC 收到 `"mix"` 反序列化失败；删除 `wants_style_en`/`wants_all_en` 与阶段 2 mix 注入；前端下拉/i18n/类型两态；`sanitizeStored` 将旧 mix 归一为 zh；守护 `no_mix_output_lang` + wants_* 扫源。Style 恒英文见 §3.7（硬门另批）。

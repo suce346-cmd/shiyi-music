@@ -609,8 +609,8 @@ fn check_params(p: &SongPlan, mode: &str, out: &mut Vec<Issue>) {
             }
         }
         "mode_d" => {
-            let in_douyin = (rules::DOUYIN_WEIRD_MIN..=rules::DOUYIN_WEIRD_MAX).contains(&w)
-                && (rules::DOUYIN_STYLE_MIN..=rules::DOUYIN_STYLE_MAX).contains(&s);
+            let in_douyin = (rules::DOUYIN_V2_WEIRD_MIN..=rules::DOUYIN_V2_WEIRD_MAX).contains(&w)
+                && (rules::DOUYIN_V2_STYLE_MIN..=rules::DOUYIN_V2_STYLE_MAX).contains(&s);
             let narrative = narrative_sections(p) >= rules::NARRATIVE_SECTIONS_MIN
                 && p.notes.as_deref().is_some_and(|n| n.contains("叙事型"));
             if !in_douyin && !narrative {
@@ -619,7 +619,7 @@ fn check_params(p: &SongPlan, mode: &str, out: &mut Vec<Issue>) {
                     "/settings",
                     format!(
                         "Weirdness={w}/Style Influence={s}（抖音区间 {}-{}/{}-{}；仅当含≥{}个叙事段且 notes 写明'叙事型'方可回落 A/B 区间）",
-                        rules::DOUYIN_WEIRD_MIN, rules::DOUYIN_WEIRD_MAX, rules::DOUYIN_STYLE_MIN, rules::DOUYIN_STYLE_MAX, rules::NARRATIVE_SECTIONS_MIN
+                        rules::DOUYIN_V2_WEIRD_MIN, rules::DOUYIN_V2_WEIRD_MAX, rules::DOUYIN_V2_STYLE_MIN, rules::DOUYIN_V2_STYLE_MAX, rules::NARRATIVE_SECTIONS_MIN
                     ),
                 ));
             }
@@ -645,12 +645,12 @@ fn check_params(p: &SongPlan, mode: &str, out: &mut Vec<Issue>) {
         out.push(Issue::hard(
             "bpm",
             "/global/bpm",
-            format!("抖音模式须给 BPM（≥{}）", rules::DOUYIN_BPM_MIN),
+            format!("抖音模式须给 BPM（≥{}）", rules::DOUYIN_V2_BPM_MIN),
         ));
     }
 }
 
-/// 歌词行：A/B 禁 `/` `、` 断句；D 每行 ≤DOUYIN_LINE_MAX 字（和音虚词不计）
+/// 歌词行：A/B 禁 `/` `、` 断句；D 每行 ≤DOUYIN_V2_LINE_MAX 字（和音虚词不计）
 fn check_lyric_lines(p: &SongPlan, mode: &str, out: &mut Vec<Issue>) {
     for (i, s) in p.sections.iter().enumerate() {
         for (j, l) in s.lines.iter().enumerate() {
@@ -666,11 +666,11 @@ fn check_lyric_lines(p: &SongPlan, mode: &str, out: &mut Vec<Issue>) {
                 let n = crate::commands::validator::count_line_chars_excluding_vocables(l, |c| {
                     c.is_ascii_punctuation()
                 });
-                if n > rules::DOUYIN_LINE_MAX_CHARS {
+                if n > rules::DOUYIN_V2_LINE_MAX_CHARS {
                     out.push(Issue::hard(
                         "line_too_long",
                         path,
-                        format!("{n} 字 > 上限 {}：{l}", rules::DOUYIN_LINE_MAX_CHARS),
+                        format!("{n} 字 > 上限 {}：{l}", rules::DOUYIN_V2_LINE_MAX_CHARS),
                     ));
                 }
             }
