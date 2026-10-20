@@ -1,12 +1,12 @@
-//! 圆桌编排器（v3 架构）：主持人统领 + 角色审改 + 校验员讨论轮审查 + 校验员格式端口。
+//! 圆桌编排器（v3 架构）：主持人统领 + 角色审改 + 校验员讨论轮审查 + 校验员结构化定稿。
 //!
 //! 三阶段：
 //! - 阶段 0：主持人用该模式的完整指令（prompts.rs，不查 CSV）产出方案初稿
 //! - 阶段 1：动态角色（专业审改员）审查方案 → 查 CSV 调素材 → 输出修订片段；
 //!   校验员审查（当前方案 + 本轮修订 + 任务分发，提出观点返回主持人）；
-//!   主持人汇总成新版完整方案 + 下轮任务分发（【任务分发】段切分）→ 再分发；
+//!   主持人汇总成新版完整方案 + 下轮任务分发（结构化 HostSummary.next_tasks）→ 再分发；
 //!   全角色与校验员无异议或满 3 轮收敛
-//! - 阶段 2：校验员按标准格式输出最终提示词包；代码硬校验兜底（失败打回重格式化）
+//! - 阶段 2：校验员结构化定稿 SongPlan；plan::validate 硬校验（≤2 次带问题重试）→ render_suno 渲染交付包
 
 use crate::commands::{cancel, gate, interject, llm, plan_flow, prompts, roles};
 use crate::energy::plan_energy_range;
@@ -483,7 +483,7 @@ fn fold_log(log: &[(String, String)]) -> Vec<(String, String)> {
 ///   （`rules::KEYWORD_TABLES` 的多列析取面 + 单源分词 `rules::keyword_tokens`，条数上限随规格）；
 ///   整表零命中时告警一次（#22）
 /// - instruments：按方案能量区间数值过滤（覆盖弧线两端），上限 15 件
-/// - suno_rules：校验员全量（格式端口必须全见）；其他角色按行子集过滤（rule 列 contains 匹配）
+/// - suno_rules：校验员全量（定稿人必须全见）；其他角色按行子集过滤（rule 列 contains 匹配）
 ///   行子集单源 = `rules::SUNO_RULES_FOR_*`（#19：规则对职责角色可达）
 /// - cols 投影：空切片 = 全列；非空 = 按角色只注入这些列（多角色侧重点）
 /// - subset 行子集：空切片 = 全行；非空 = 按 rule 列值过滤（如制作人只要参数/配器类规则）
@@ -1156,7 +1156,7 @@ async fn run_host_summarize<R: Runtime>(
 
 
 // ---------------------------------------------------------------------------
-// 校验员（阶段 2：最终格式输出端口）
+// 校验员（阶段 2：结构化定稿）
 // ---------------------------------------------------------------------------
 
 
@@ -1204,9 +1204,17 @@ async fn produce_final_text<R: Runtime>(
     let plan = plan_flow::plan_from_checkpoint(current_plan)?;
     let (base_url, api_key, model) = resolve_api(request, PipelineRole::Auditor);
     // Auditor 定稿：按 SongPlan schema 输出完整方案（不再转写文本包；交付由 render_suno）
-    let mut system = String::from(
-        "你是流水线的【校验员·定稿】。根据收敛方案与硬校验问题清单，输出修正后的完整 SongPlan JSON（字段见 schema）。\n只修正问题清单列出的项；其余字段保持收敛方案语义。不要输出排版文本或 markdown。"
-    );
+    // 定稿人设单源 = roles::auditor().system_prompt（经 rules 插值）；suno_rules 按角色绑定全量注入
+    let r = roles::auditor();
+    let mut system = crate::rules::interpolate(r.system_prompt);
+    system.push_str(&inject_knowledge(
+        &load_knowledge()?,
+        r.knowledge_tables,
+        r.craft_refs,
+        current_plan,
+        mode.to_str_name(),
+        Some(PipelineRole::Auditor.storage_key()),
+    ));
     system.push_str("\n\n");
     system.push_str(&crate::rules::plan_field_contract());
     system.push_str("\n\n");
@@ -1429,7 +1437,7 @@ pub async fn run_pipeline_with_timeout<R: Runtime>(
 /// 主流程内层：三阶段（主持人统领 → 角色审改+校验员审查讨论 → 校验员格式化）
 /// budget 为共享预算（Arc），调用链逐层透传
 /// 增量模式（request.refine_targets.is_some()）时阶段 0 跳过——以上一版方案为起步，
-/// 讨论轮只跑 targets 角色（Auditor 恒在：最终格式端口 + 讨论轮审查）。
+/// 讨论轮只跑 targets 角色（Auditor 恒在：结构化定稿 + 讨论轮审查）。
 /// run_id 透传——inner 内全部事件包 envelope 发射；取消/插话按 run_id 隔离。
 async fn run_pipeline_inner<R: Runtime>(
     app: AppHandle<R>,
@@ -3288,7 +3296,7 @@ mod tests {
 
     /// 审计 #20 剩余（第二批·问题②）：**下游独有的格式契约必须上移到主持人可见的单源**。
     /// 根因：格式契约（乐器主次排列/人声映射到 Style Prompt/禁 full band/断句用单空格/能量标注格式）
-    /// 原先只写在终稿端口（校验员人设）与 prompts 里，主持人汇总/回炉时手里没有——整合出的方案
+    /// 原先只写在定稿人（校验员人设）与 prompts 里，主持人汇总/回炉时手里没有——整合出的方案
     /// 天然不合终稿格式，终稿硬门再打回 = 又一轮降级。现契约真源在 `rules::desc_line_contract()`
     /// （经 `host_system_with` 无条件注入，不随信封开关消失），本测试锁定"人设说的 = 主持人看到的"。
     #[test]
@@ -3332,6 +3340,8 @@ mod tests {
             ["envelope_", "spec"], ["envelope_", "defect"], ["parse_plan", "_sections"],
             ["Plan", "Sections"], ["TRANSCRIPTION", "_CONTRACT"], ["TRANSCRIPTION", "_ISSUE"],
             ["transcription", "_fidelity"], ["<<<", "LYRICS>>>"], ["方案", "信封"], ["转写", "契约"],
+            // 第二批：旧定稿措辞 + 前端降级标签（用户裁定旧历史不兼容回放）
+            ["格式", "端口"], ["输出", "端口"], ["终稿", "端口"], ["最终格式", "输出"], ["格式", "降级"], ["格式", "输出中"], ["格式输出", "完成"], ["按标准格式", "输出"],
         ]
         .iter()
         .map(|p| p.concat())
@@ -3341,11 +3351,13 @@ mod tests {
         fn walk(d: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             for e in std::fs::read_dir(d).unwrap().flatten() {
                 let p = e.path();
-                if p.is_dir() { walk(&p, out) } else if p.extension().is_some_and(|x| x == "rs" || x == "txt") { out.push(p) }
+                if p.is_dir() { walk(&p, out) } else if p.extension().is_some_and(|x| ["rs", "txt", "ts", "tsx"].contains(&x.to_str().unwrap_or(""))) { out.push(p) }
             }
         }
         walk(&root.join("src"), &mut files);
         walk(&root.join("tests/fixtures/prompts"), &mut files);
+        walk(&root.join("../src"), &mut files); // 前端（TS/TSX）
+        assert!(files.iter().any(|f| f.ends_with("usePipeline.ts")), "前端扫描面缺失");
         assert!(files.len() > 20, "扫描面异常: {}", files.len());
         let mut hits = Vec::new();
         for f in &files {

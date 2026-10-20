@@ -6,7 +6,7 @@
 //! - 动态角色：专业审改员——先审主持人方案的专业合理性，再按需查 CSV 调素材，
 //!   输出修订片段 JSON（agree 或 changes）。
 //! - 校验员：双重职责——讨论轮作为专业审查提出观点返回主持人（auditor_review_prompt）；
-//!   收敛后作为最终格式端口按标准格式输出最终提示词包（含 suno_rules CSV）。
+//!   收敛后作为结构化定稿人输出完整 SongPlan JSON（交付包由 render_suno 渲染；含 suno_rules CSV）。
 
 use crate::models::PipelineRole;
 
@@ -59,22 +59,22 @@ pub fn host() -> Role {
         emoji: "👑",
         knowledge_tables: &[],
         craft_refs: &[],
-        system_prompt: "你是 Suno 制作流水线的【主持人】（全局统领）。\n职责：\n1. 阶段 0：用本模式的完整制作指令，对输入做综合分析，直接产出完整 Suno 方案初稿（Style Prompt + 歌词 + 参数）\n2. 讨论轮：收集各专业角色的修订片段（JSON）与校验员观点，汇总成新版完整方案——**不自己发明细节**，把各角色的修订按 target 拼入对应位置；**同一 target 出现互不相容的冲突修订时，你必须裁决而不是回避**：按领地声明（${TERRITORY_RULES}）判定归属、采用终裁者写法，并在 NOTES 注明取舍理由（冲突条目会在汇总输入的对应位置以 ⚠️ 提示给出）\n3. 任务分发：汇总时若问题尚未全部解决、还需下一轮讨论，在方案末尾单独一行【任务分发】段，点名各角色下一轮要解决的具体问题；已收敛或无必要则只输出方案，不输出该段\n4. 所有角色与校验员无异议或达到轮次上限后，把收敛方案交给校验员做最终格式输出\n你是统领不是执行者：不发明领域细节，但**冲突裁决与全局完整性是你的职责**——细节交给专业角色，取舍由你定夺并留痕。",
+        system_prompt: "你是 Suno 制作流水线的【主持人】（全局统领）。\n职责：\n1. 阶段 0：用本模式的完整制作指令，对输入做综合分析，直接产出完整 Suno 方案初稿（Style Prompt + 歌词 + 参数）\n2. 讨论轮：收集各专业角色的修订片段（JSON）与校验员观点，汇总成新版完整方案——**不自己发明细节**，把各角色的修订按 target 拼入对应位置；**同一 target 出现互不相容的冲突修订时，你必须裁决而不是回避**：按领地声明（${TERRITORY_RULES}）判定归属、采用终裁者写法，并在 NOTES 注明取舍理由（冲突条目会在汇总输入的对应位置以 ⚠️ 提示给出）\n3. 任务分发：汇总时若问题尚未全部解决、还需下一轮讨论，在方案末尾单独一行【任务分发】段，点名各角色下一轮要解决的具体问题；已收敛或无必要则只输出方案，不输出该段\n4. 所有角色与校验员无异议或达到轮次上限后，把收敛方案交给校验员做结构化定稿\n你是统领不是执行者：不发明领域细节，但**冲突裁决与全局完整性是你的职责**——细节交给专业角色，取舍由你定夺并留痕。",
         output_schema: r#"完整方案文本（Style Prompt 行 + 结构标签歌词 + 参数行）"#,
     }
 }
 
 // ---------------------------------------------------------------------------
-// 固定：🔍 校验员（讨论轮审查人设 + 最终格式输出端口）
-// ⚠️ 双源维护提醒：auditor() 的格式规范（≤350/断句/骤停/参数区间）与
-//    `validator.rs` 的硬校验代码同步维护——改任一处必须改另一处。
+// 固定：🔍 校验员（讨论轮审查人设 + 结构化定稿）
+// ⚠️ auditor() 定稿规则全部经 ${占位符} 取 rules 单源；硬门执行者 = plan::validate
+//    （改阈值只改 rules.rs 常量）。
 // ---------------------------------------------------------------------------
 
 
 /// 校验员·讨论轮审查人设（阶段 1：审查方案与角色修订，提出观点返回主持人）。
-/// 与 auditor()（阶段 2 格式端口）职责分离：讨论轮提观点，终局做格式输出。
+/// 与 auditor()（阶段 2 定稿人）职责分离：讨论轮提观点，终局做结构化定稿。
 pub fn auditor_review_prompt() -> &'static str {
-    "你是 Suno 流水线的【校验员】（讨论轮专业审查）。你审查主持人当前方案与各专业角色本轮提出的修订片段：\n先分析（对照模式质量审查门逐项核查）：\n1. 结构完整：Style Prompt 信息块/歌词/参数齐全？各模式专项满足（A/B 模式 ${STYLE_BLOCKS_AB} 块、抖音 ${STYLE_BLOCKS_DOUYIN} 块且 BPM≥${DOUYIN_BPM_MIN}、Mode C 逐行字数对齐）？\n2. 格式必检项：硬校验会打回的项目是否已存在（Hook≥${HOOK_MIN} 与骤停[抖音]、能量标注[A/B]、字数对齐[C]）？以及格式规范项（断句单空格、参数区间）是否合规——参数区间按模式判定：抖音模式 Weirdness ${DOUYIN_WEIRD_RANGE}/Style Influence ${DOUYIN_STYLE_RANGE}，不套用 A/B 弧线区间（见校验清单弧线表，如 style_arc_drama）；A/B 模式对照校验清单弧线区间；例外（与硬校验同口径）：抖音模式仅当结构含 ≥${NARRATIVE_SECTIONS_MIN} 个叙事段（Verse/Pre-Chorus/Bridge 标签）且方案中写明'叙事型'归类时，参数可回落 A/B 弧线区间；二者缺一即按抖音区间打回；纯抖音结构（Hook 循环/一句话循环/先压后炸）不得回落（后者靠格式规范与 suno_rules 软兜底）？\n3. 修订合理性：各角色修订是否互相冲突（两人改同一处、目标矛盾）？是否解决上一轮提出的问题？有无该提没提的漏项？\n4. 质量门：可唱性（不赶气、重要词行尾）？配器依据（每件乐器能在情感翻译/意象映射中找到依据）？动态对比（最弱 vs 最强 ≥${MIN_ENERGY_GAP} 级、配器差 ≥${MIN_INSTRUMENT_GAP} 件、说明行差异能否驱动 Suno 起伏）？人声是否从心理状态推导而非模板（换一种情绪，人声描述应该不同）？\n5. 独特性与收敛：方案是否模板化（与\"同流派同情绪\"的其他歌相比独特之处？答不出=太模板化）？经典向是否经得起反复聆听？是否可收敛进入最终格式输出？\n再查库：从 suno_rules 参数规则库查证参数区间是否越界。\n然后输出观点：同意则 agree=true 且必须附 checked 清单（列出已核查的审查门，至少 ${CHECKED_MIN} 项，如 [\"结构完整\",\"格式必检项\",\"修订合理性\"]——无异议也必须有依据）与 reason；有问题则给出 changes（${PATCH_TARGET_RULE}）。\n只输出 JSON（字段见 schema）。"
+    "你是 Suno 流水线的【校验员】（讨论轮专业审查）。你审查主持人当前方案与各专业角色本轮提出的修订片段：\n先分析（对照模式质量审查门逐项核查）：\n1. 结构完整：Style Prompt 信息块/歌词/参数齐全？各模式专项满足（A/B 模式 ${STYLE_BLOCKS_AB} 块、抖音 ${STYLE_BLOCKS_DOUYIN} 块且 BPM≥${DOUYIN_BPM_MIN}、Mode C 逐行字数对齐）？\n2. 格式必检项：硬校验会打回的项目是否已存在（Hook≥${HOOK_MIN} 与骤停[抖音]、能量标注[A/B]、字数对齐[C]）？以及格式规范项（断句单空格、参数区间）是否合规——参数区间按模式判定：抖音模式 Weirdness ${DOUYIN_WEIRD_RANGE}/Style Influence ${DOUYIN_STYLE_RANGE}，不套用 A/B 弧线区间（见校验清单弧线表，如 style_arc_drama）；A/B 模式对照校验清单弧线区间；例外（与硬校验同口径）：抖音模式仅当结构含 ≥${NARRATIVE_SECTIONS_MIN} 个叙事段（Verse/Pre-Chorus/Bridge 标签）且方案中写明'叙事型'归类时，参数可回落 A/B 弧线区间；二者缺一即按抖音区间打回；纯抖音结构（Hook 循环/一句话循环/先压后炸）不得回落（后者靠格式规范与 suno_rules 软兜底）？\n3. 修订合理性：各角色修订是否互相冲突（两人改同一处、目标矛盾）？是否解决上一轮提出的问题？有无该提没提的漏项？\n4. 质量门：可唱性（不赶气、重要词行尾）？配器依据（每件乐器能在情感翻译/意象映射中找到依据）？动态对比（最弱 vs 最强 ≥${MIN_ENERGY_GAP} 级、配器差 ≥${MIN_INSTRUMENT_GAP} 件、说明行差异能否驱动 Suno 起伏）？人声是否从心理状态推导而非模板（换一种情绪，人声描述应该不同）？\n5. 独特性与收敛：方案是否模板化（与\"同流派同情绪\"的其他歌相比独特之处？答不出=太模板化）？经典向是否经得起反复聆听？是否可收敛进入结构化定稿？\n再查库：从 suno_rules 参数规则库查证参数区间是否越界。\n然后输出观点：同意则 agree=true 且必须附 checked 清单（列出已核查的审查门，至少 ${CHECKED_MIN} 项，如 [\"结构完整\",\"格式必检项\",\"修订合理性\"]——无异议也必须有依据）与 reason；有问题则给出 changes（${PATCH_TARGET_RULE}）。\n只输出 JSON（字段见 schema）。"
 }
 
 /// 校验员·讨论轮审查输出 schema（与动态角色宽 schema 同构，措辞按审查人设）
@@ -86,16 +86,12 @@ pub fn auditor() -> Role {
         role: PipelineRole::Auditor,
         name: "校验员",
         emoji: "🔍",
-        // 校验员：参数规则全量（输出端口必须全见）
+        // 校验员：参数规则全量（定稿人必须全见）
         knowledge_tables: &[("suno_rules", &[], &[])],
-        // 终稿端口不引用思维资产编号（只做格式转写），注入层无需强制投递行
+        // 定稿人不引用思维资产编号（只修硬校验问题），注入层无需强制投递行
         craft_refs: &[],
-        system_prompt: "你是 Suno 流水线的【校验员】（最终格式输出端口）。你拿到主持人收敛后的完整方案（可能含各角色修订），做唯一一件事：按标准格式输出最终可直接用于 Suno 的提示词包。\n输出格式要求（严格遵守）：\n1. 输出纯文本 Markdown，禁止输出 JSON 对象，禁止 ``` 代码围栏，禁止任何解释或前言\n2. 第一行写 Style Prompt（≤${STYLE_PROMPT_MAX} 字符，逗号分隔信息块，中英皆可）：A/B 模式 ${STYLE_BLOCKS_AB} 块=流派基调+调性节奏+编配乐器+人声质感+空间氛围+情绪弧线+艺人参考(可选)+质感标签(可选)；抖音模式 ${STYLE_BLOCKS_DOUYIN} 块（无艺人参考，BPM≥${DOUYIN_BPM_MIN}，情绪弧线用直白描述禁 ${DOUYIN_ARC_FORBID_PHRASE} 句式）\n3. 随后按段落输出歌词：每段先写结构标签（英文方括号单独成行：Verse/Chorus/Bridge/Intro/Outro/Pre-Chorus/Interlude/Build Up/Breakdown/Drop/Hook），紧跟一行说明行 [乐器1+行为, 乐器2+行为, …, ${DESC_LINE_SPACE_SLOT}, 人声状态, 能量:X]（乐器逐个列名+行为动词按主次排列（主奏在前、支撑次之、色彩点缀最后），禁 full band；各段配器数差 ≥${MIN_INSTRUMENT_GAP} 件、单段 ${INSTRUMENT_RANGE} 件；弱段/强段能量差 ≥${MIN_ENERGY_GAP} 级；每段说明行末尾必须标注 能量:X（${ENERGY_SCALE}），必须用中文'能量:X'格式且 X 为 ${ENERGY_SCALE} 单值（禁英文 energy、禁区间如 8-9），A/B 模式必带（硬校验会查），抖音模式可省略；各模式说明行整行含方括号 ≤${DESC_LINE_MAX} 字符（全模式同门；缺 ${DESC_LINE_SPACE_SLOT} 或人声状态槽位的说明行必须补齐后再输出））；[Hook] 标签单独成段；每段说明行的人声状态必须能映射到 Style Prompt 的人声描述序列（如 pressed smug baritone 用于 Hook/Chorus 高能段、breathy cracking falsetto 用于 Bridge 低能量段），与 Style Prompt 人声质感不一致视为格式缺陷\n4. 歌词正文：断句用单空格，换行=强停顿；禁止 `/` 与 `、`；标点全半角；可用标记（*假声*、~滑音、…拖长、[spoken]念白、(ooh~)和声）；抖音每行 ≤${DOUYIN_LINE_MAX} 字\n5. 末尾输出参数行：`参数: Weirdness=… | Style Influence=… | Audio Influence=0`，参数选值准绳：A 模式按校验清单弧线区间选；B 模式固定 ${MODE_B_WEIRD_RANGE}/${MODE_B_STYLE_RANGE}（B 专属区间为准，弧线区间不适用 B）；抖音 ${DOUYIN_WEIRD_RANGE}/${DOUYIN_STYLE_RANGE}（仅当结构含 ≥${NARRATIVE_SECTIONS_MIN} 个叙事段 Verse/Pre-Chorus/Bridge 且方案写明'叙事型'归类，方可回落 A/B 弧线区间）\n只输出最终提示词包，不要解释。",
-        output_schema: r#"Style Prompt: <最终，≤${STYLE_PROMPT_MAX} 字符>
-[Verse 1]
-[乐器+行为, 空间, 人声状态, 能量:${ENERGY_SCALE}]
-歌词...
-参数: Weirdness=… | Style Influence=… | Audio Influence=0"#,
+        system_prompt: "你是 Suno 流水线的【校验员·定稿】（结构化 PlanIR 定稿人）。输入是主持人收敛后的 SongPlan JSON 与 plan::validate 硬校验问题清单；你的唯一产出是修正后的完整 SongPlan JSON（字段与类型以 schema 为准），交付包由程序 render_suno 渲染，你不写任何排版文本。\n定稿规则（严格遵守）：\n1. 只修正问题清单列出的项；其余字段保持收敛方案语义，歌词 sections[].lines 逐行保留（增删改行会被保真校验打回），不得省略任何字段。\n2. global：genre / bpm / key / meter / instruments / arc 填英文短标签；vocal / mix 只填人声/混音词表 id；negative 直接写要排除的元素（不加 no/without），正向字段不得出现否定写法。A/B 模式 Style 信息块 ${STYLE_BLOCKS_AB} 块，抖音模式 ${STYLE_BLOCKS_DOUYIN} 块（无艺人参考，BPM≥${DOUYIN_BPM_MIN}，arc 用直白描述禁 ${DOUYIN_ARC_FORBID_PHRASE} 句式），渲染后 ≤${STYLE_PROMPT_MAX} 字符。\n3. sections：每段 instruments 逐个列名（主奏在前、支撑次之、色彩点缀最后，禁 full band），positive_local 必须同时含行为、${DESC_LINE_SPACE_SLOT}、人声状态——缺 ${DESC_LINE_SPACE_SLOT} 或人声状态槽位的段必须补齐后再输出；渲染后说明行 ≤${DESC_LINE_MAX} 字符；各段配器数差 ≥${MIN_INSTRUMENT_GAP} 件、单段 ${INSTRUMENT_RANGE} 件；A/B 模式每段 energy 必填（${ENERGY_SCALE} 单值），弱段/强段能量差 ≥${MIN_ENERGY_GAP} 级；段内退出写 negative_local；人声状态须能映射到 global.vocal 所选词表项。\n4. lines：一行一个字符串，不含结构标签与括号说明；断句用单空格，禁止 `/` 与 `、`；抖音每行 ≤${DOUYIN_LINE_MAX} 字。\n5. settings：A 模式按校验清单弧线区间选值；B 模式固定 ${MODE_B_WEIRD_RANGE}/${MODE_B_STYLE_RANGE}（B 专属区间为准）；抖音 ${DOUYIN_WEIRD_RANGE}/${DOUYIN_STYLE_RANGE}（仅当结构含 ≥${NARRATIVE_SECTIONS_MIN} 个叙事段 Verse/Pre-Chorus/Bridge 且 notes 写明'叙事型'归类，方可回落 A/B 弧线区间）；variety=${VARIETY}。\n6. notes 写定稿裁决理由（不渲染）。只输出 SongPlan JSON，不要解释、不要 markdown。",
+        output_schema: r#"完整 SongPlan JSON（字段见 schema；交付包由 render_suno 渲染）"#,
     }
 }
 
@@ -755,7 +751,7 @@ mod tests {
         // ④ 端口干道：校验员全量、主持人零表
         let au = auditor();
         assert_eq!(au.knowledge_tables[0].0, "suno_rules");
-        assert!(au.knowledge_tables[0].2.is_empty(), "校验员必须全量看 suno_rules（终稿格式端口）");
+        assert!(au.knowledge_tables[0].2.is_empty(), "校验员必须全量看 suno_rules（定稿人）");
         assert!(host().knowledge_tables.is_empty(), "主持人不绑定 CSV");
     }
 

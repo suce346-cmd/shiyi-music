@@ -526,7 +526,7 @@ pub fn keyword_table(table: &str) -> Option<&'static KeywordTableReachability> {
 // 单源口径：规则 → 职责角色（owner）。角色的 suno_rules 行子集 = 本处对应常量；
 // 守护测试 roles::tests::suno_rules_bindings_match_role_ownership 双向锁定，并保证
 // **CSV 每条规则至少归属一个职责角色**（新增规则未分配职责即红）。
-// 校验员保持全量（终稿格式端口必须全见），不列入 owner 表。
+// 校验员保持全量（定稿人必须全见），不列入 owner 表。
 // ---------------------------------------------------------------------------
 /// 🎭 情感分析师：参数准绳 + 弧线区间 + 能量落差 + 转折点（弧线与参数终裁在其人设）
 pub const SUNO_RULES_FOR_EMOTION: &[&str] = &[
@@ -2555,7 +2555,7 @@ mod tests {
             producer.contains("逐段核对说明行槽位齐全"),
             "制作人 prompt 缺槽位核查项（只说'保乐器'不够——缺空间/力度/人声项也要抓）"
         );
-        // ③ 两版校验员（终稿格式端口）：缺槽位必须补齐
+        // ③ 两版校验员（定稿人）：缺槽位必须补齐
         let auditor = crate::commands::roles::auditor().system_prompt;
         assert!(auditor.contains("${DESC_LINE_SPACE_SLOT}"), "校验员 prompt 未引用槽位");
         assert!(auditor.contains("必须补齐后再输出"), "校验员 prompt 缺补齐语义（只说上限不管缺项）");
@@ -2663,7 +2663,7 @@ mod tests {
 /// 说明行契约全文（单源，含数字）：上游告知与下游强制同读一段。
 ///
 /// 三条格式形态条款（2026-09-18 补，审计 #20 剩余）：乐器主次排列、人声映射序列、能量标注
-/// 书写格式——旧版只写在 `roles::auditor()`（下游格式端口）里，上游主持人完全看不见，
+/// 书写格式——旧版只写在 `roles::auditor()`（旧下游端口）里，上游主持人完全看不见，
 /// 于是主持人产出不合下游规范的排版 → 下游打回。格式契约只在下游 = 必然降级环，现上移单源。
 ///
 /// 注入策略：由 `host_system_with` 无条件注入（P1-3 信封退役后唯一注入点）。
@@ -2707,7 +2707,7 @@ const PLAN_FIELD_CONTRACT: &str = "【SongPlan 字段契约（最高优先级：
 /// 说明行契约正文（单源：本文件唯一一份；数值一律 `${占位符}`）。
 const DESC_LINE_CONTRACT: &str = "【说明行契约（全模式统一）】每段说明行形如 [乐器1+行为, 乐器2+行为, …, ${DESC_LINE_SPACE_SLOT}, 人声状态]（A/B 模式另在行尾标 能量:X），整行含方括号 ≤${DESC_LINE_MAX} 字符。上限宽松：不得为缩短而删乐器或行为动词（最强段 ≥${MIN_INSTRUMENT_STRONG} 件、单段 ${INSTRUMENT_RANGE} 件照常执行），也不得靠堆修饰词占满；超过上限的说明行会被 plan::validate 硬校验拦下。\n\
 1. 乐器主次：乐器逐个列名 + 行为动词，按主次排列（主奏在前、支撑次之、色彩点缀最后）；禁 full band 等笼统写法。\n\
-2. 槽位齐全：每段说明行必须同时含乐器集、${DESC_LINE_SPACE_SLOT}（声场或力度动态，如 close room / wide hall / 突转）、人声状态——缺任一槽位即格式缺陷（制作人逐段核对，校验员在终稿端口补齐）。\n\
+2. 槽位齐全：每段说明行必须同时含乐器集、${DESC_LINE_SPACE_SLOT}（声场或力度动态，如 close room / wide hall / 突转）、人声状态——缺任一槽位即格式缺陷（制作人逐段核对，校验员在定稿人补齐）。\n\
 3. 人声映射：每段说明行的人声状态必须能映射到 Style Prompt 的人声描述序列（高能段用开放真声形态、低能段用气声/假声形态），不得自造与 Style Prompt 无关的人声描述。\n\
 4. 能量标注：A/B 模式每段说明行末尾必须标 能量:X（${ENERGY_SCALE}）——必须用中文'能量:X'格式、X 为 ${ENERGY_SCALE} 单值，禁英文 energy、禁区间写法（如 8-9）。";
 

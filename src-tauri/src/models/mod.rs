@@ -588,7 +588,7 @@ mod tests {
 pub enum PipelineRole {
     /// 👑 主持人：全局统领 + 汇总分发任务
     Host,
-    /// 🔍 校验员：讨论轮审查提观点 + 最终格式输出端口
+    /// 🔍 校验员：讨论轮审查提观点 + 结构化定稿
     Auditor,
     /// 🎭 情感分析师
     Emotion,

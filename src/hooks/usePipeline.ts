@@ -162,7 +162,7 @@ interface PipelineState {
 const ZERO_USAGE = { prompt_tokens: 0, completion_tokens: 0 };
 
 /** Degraded flag → 中文类型标签（呈现层分型，用户拍板 2026-09-19）：
- *  门决策记录/解析降级/格式降级/预算降级；未知 flag 原样显示（旧记录/新增类型兜底）。
+ *  门决策记录/解析降级/预算降级；未知 flag 原样显示（旧记录/新增类型兜底）。
  *  export 供单测（纯函数，无 Tauri 依赖）。 */
 export const degradedFlagLabel = (flag: string): string => {
   switch (flag) {
@@ -171,8 +171,6 @@ export const degradedFlagLabel = (flag: string): string => {
       return "门决策记录";
     case "call_degraded":
       return "解析降级";
-    case "envelope_fallback": // 仅历史记录回放兼容（P1-3 后端已不再发射）
-      return "格式降级";
     case "budget_degraded":
       return "预算降级";
     default:
@@ -410,17 +408,17 @@ export function usePipeline() {
             ...prev,
             phase: "validating",
             currentStage: "auditor",
-            // 重置 auditor 的完成态：讨论轮审查已完成 ≠ 最终格式输出已完成（阶段条 chip 与卡片状态一致）
+            // 重置 auditor 的完成态：讨论轮审查已完成 ≠ 结构化定稿已完成（阶段条 chip 与卡片状态一致）
             doneStages: prev.doneStages.filter((s) => s !== "auditor"),
             validation: null,
           }));
           validationRef.current = null;
-          updateExpert("auditor", { status: "working", note: "格式输出中…" });
+          updateExpert("auditor", { status: "working", note: "结构化定稿中…" });
           break;
         case "audit_result":
           updateExpert("auditor", {
             status: "done",
-            note: e.pass ? "格式输出完成" : `格式问题 ${e.findings.length} 条`,
+            note: e.pass ? "定稿完成" : `格式问题 ${e.findings.length} 条`,
           });
           setState((prev) => ({
             ...prev,
@@ -434,8 +432,8 @@ export function usePipeline() {
           speechCbRef.current?.(makeSpeech(
             "auditor",
             e.pass
-              ? "标准格式输出完成 ✅"
-              : `格式输出发现 ${e.findings.length} 个问题：${e.findings.slice(0, 3).join("；")}${e.findings.length > 3 ? "…" : ""}`,
+              ? "定稿完成 ✅"
+              : `定稿发现 ${e.findings.length} 个问题：${e.findings.slice(0, 3).join("；")}${e.findings.length > 3 ? "…" : ""}`,
           ));
           break;
         case "retry":
@@ -475,7 +473,7 @@ export function usePipeline() {
         case "degraded": {
           // C5/ADR-3：降级标记累积（历史保存同源读 degradedRef；对话流同步可见）。
           // 分型呈现（用户拍板 2026-09-19）：flag → 中文类型标签，
-          // 区分"门决策记录/解析降级/格式降级/预算降级"，未知 flag 原样兜底。
+          // 区分"门决策记录/解析降级/预算降级"，未知 flag 原样兜底。
           degradedRef.current = [...degradedRef.current, `${degradedFlagLabel(e.flag)}：${e.detail}`];
           speechCbRef.current?.(makeSpeech(
             "auditor",
