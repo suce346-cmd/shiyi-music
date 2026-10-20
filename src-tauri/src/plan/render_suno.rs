@@ -50,13 +50,19 @@ pub fn style_tags(p: &SongPlan) -> Vec<String> {
     if let Some(m) = &g.meter {
         push_nonempty(&mut t, m);
     }
-    g.vocal.iter().for_each(|x| push_nonempty(&mut t, x));
+    g.vocal.iter().for_each(|x| push_nonempty(&mut t, &vocal_mix_expand(x)));
     g.instruments.iter().for_each(|x| push_nonempty(&mut t, x));
     if let Some(a) = &g.arc {
         push_nonempty(&mut t, a);
     }
-    g.mix.iter().for_each(|x| push_nonempty(&mut t, x));
+    g.mix.iter().for_each(|x| push_nonempty(&mut t, &vocal_mix_expand(x)));
     t
+}
+
+/// P1-5：vocal/mix 字段存 vocal_mix 词表 id，渲染时展开为 label_en（一个 id 计 1 个标签块）；
+/// 未知 id / 表缺失（回滚）原样透传——未知 id 由 `validate` 的覆盖门报硬问题。
+fn vocal_mix_expand(id: &str) -> String {
+    crate::knowledge::vocal_mix_label_en(crate::knowledge::shared_knowledge(), id).unwrap_or_else(|| id.to_string())
 }
 
 /// 段内负向 cue 的正向改写：`no drums` / `without drums` → `drums drop out`；已是正向则原样。
@@ -178,7 +184,7 @@ mod tests {
     #[test]
     fn style_order_and_settings_line() {
         let r = render(&minimal_plan());
-        assert!(r.style.starts_with("chinese folk ballad, 72 BPM, 4/4, vocal_breathy_close"), "{}", r.style);
+        assert!(r.style.starts_with("chinese folk ballad, 72 BPM, 4/4, breathy vocal, smooth runs"), "{}", r.style);
         assert_eq!(r.settings, "Weirdness=30 | Style Influence=70 | Variety=0 | Vocal Gender=Female");
     }
 

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **[P1-5] vocal_mix 受控词表（M-07）**：新增 `knowledge/vocal_mix.csv`（人声 4 + 混音 5，label_en 去否定写法）；`SongPlan.global.vocal/mix` 只填词表 id，`render_suno` 展开为英文标签；`plan::validate` 新增覆盖门（各类 ≥1、未知 id / 类别错位为硬问题；删表即跳过）；主持人阶段 0/汇总、制作人/校验员审改、校验员定稿注入词表，超 `VOCAL_MIX_INJECT_MAX_CHARS` 只注入 id+label_en；覆盖目录张数判据改为 `EMBEDDED_TABLE_COUNT`=9。
 - **[P1-3/4 复审修复] 信封/转写保真全仓退役**：模式 prompt 输出节改为 SongPlan 字段映射（原文仍要求 `<<<NOTES>>>` 等四节文本，与结构化 schema 冲突）；删除 `envelope_spec`/`parse_plan_sections`/`envelope_defect_mode`/`plan_envelope_enabled`、`check_transcription_fidelity`、`TRANSCRIPTION_CONTRACT`、`auditor_format_prompt_mode_c`、`collect_hard_issues` 及 cfg(test) 旧辅助函数与对应测试；结构化调用补发 usage 与退避事件；refine 上一版非 SongPlan JSON 时回落阶段 0；守护测试扩至 `src/**` + prompt 快照。
 - **[S2 修复] 结构化能力探测误判**：400 类响应仅当 body/code 明示与 `response_format`/`json_schema`/`json_object` 相关时才降档或记 `none`；缺模型/欠费等不再污染能力缓存。探测 `max_tokens` 提至 64。
 - **[S2 修复] schema strictify 误删字段名**：只剥 schema 元键 `description`/`format`，不再误删 `properties` 里同名的字段定义。

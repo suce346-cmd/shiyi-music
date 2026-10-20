@@ -70,6 +70,7 @@ pub fn validate(p: &SongPlan, ctx: &ValidateCtx<'_>) -> Vec<Issue> {
     check_settings(p, &mut out);
     check_polarity(p, &mut out);
     check_structure(p, &mut out);
+    check_vocal_mix_coverage(p, &mut out);
     if matches!(ctx.mode, "mode_a" | "mode_b") {
         check_arc(p, &mut out);
     }
@@ -93,6 +94,45 @@ pub fn validate(p: &SongPlan, ctx: &ValidateCtx<'_>) -> Vec<Issue> {
         }
     }
     out
+}
+
+/// §2.3 `validate_vocal_mix_coverage`（P1-5）：global.vocal / global.mix 只引用 vocal_mix 词表 id，
+/// 且各至少 1 个对应类别。词表缺失（回滚=删表）→ 跳过（不制造无法满足的门）。
+pub fn check_vocal_mix_coverage(p: &SongPlan, out: &mut Vec<Issue>) {
+    check_vocal_mix_coverage_with(crate::knowledge::shared_knowledge(), p, out)
+}
+
+fn check_vocal_mix_coverage_with(kb: &crate::knowledge::KnowledgeBase, p: &SongPlan, out: &mut Vec<Issue>) {
+    let Some(rows) = crate::knowledge::vocal_mix_entries(kb) else { return };
+    for (path, field, cat) in [("/global/vocal", &p.global.vocal, "vocal"), ("/global/mix", &p.global.mix, "mix")] {
+        let mut hit = 0usize;
+        for id in field {
+            match rows.iter().find(|e| e.id == id.trim()) {
+                Some(e) if e.category == cat => hit += 1,
+                Some(e) => out.push(Issue::hard(
+                    "vocal_mix_category",
+                    path,
+                    format!("「{id}」属 {} 类，不能填在 {cat} 字段", e.category),
+                )),
+                None => out.push(Issue::hard(
+                    "vocal_mix_unknown_id",
+                    path,
+                    format!("「{id}」不是 vocal_mix 词表 id（可用：{}）", ids_of(&rows, cat)),
+                )),
+            }
+        }
+        if hit == 0 {
+            out.push(Issue::hard(
+                "vocal_mix_coverage",
+                path,
+                format!("至少引用 1 个 {cat} 词表 id（可用：{}）", ids_of(&rows, cat)),
+            ));
+        }
+    }
+}
+
+fn ids_of(rows: &[crate::knowledge::VocalMixEntry], cat: &str) -> String {
+    rows.iter().filter(|e| e.category == cat).map(|e| e.id.as_str()).collect::<Vec<_>>().join("/")
 }
 
 fn check_budget(p: &SongPlan, out: &mut Vec<Issue>) {
@@ -617,4 +657,37 @@ mod tests {
         let c = codes(&validate(&p, &ctx("x")));
         assert!(c.contains(&"lyrics_too_long") && c.contains(&"exclude_too_long"), "{c:?}");
     }
+
+    #[test]
+    fn vocal_mix_coverage_gate() {
+        let kb = crate::knowledge::KnowledgeBase::load_embedded().unwrap();
+        let run = |p: &SongPlan| {
+            let mut v = Vec::new();
+            check_vocal_mix_coverage_with(&kb, p, &mut v);
+            v.into_iter().map(|i| i.code).collect::<Vec<_>>()
+        };
+        let ok = minimal_plan();
+        assert!(run(&ok).is_empty(), "fixture 引用合法 id");
+        let mut p = minimal_plan();
+        p.global.vocal.clear();
+        assert_eq!(run(&p), vec!["vocal_mix_coverage"]);
+        let mut p = minimal_plan();
+        p.global.mix = vec!["warm mix".into()];
+        let c = run(&p);
+        assert!(c.contains(&"vocal_mix_unknown_id") && c.contains(&"vocal_mix_coverage"), "{c:?}");
+        let mut p = minimal_plan();
+        p.global.vocal = vec!["M-01".into()];
+        let c = run(&p);
+        assert!(c.contains(&"vocal_mix_category") && c.contains(&"vocal_mix_coverage"), "{c:?}");
+        // 回滚=删表：门跳过
+        let mut v = Vec::new();
+        check_vocal_mix_coverage_with(&crate::knowledge::KnowledgeBase::default(), &p, &mut v);
+        assert!(v.is_empty());
+        // 接线：validate 主入口必须调用覆盖门
+        let mut p = minimal_plan();
+        p.global.mix.clear();
+        let all = validate(&p, &ValidateCtx { mode: "mode_b", converged: None, original_lyrics: None });
+        assert!(all.iter().any(|i| i.code == "vocal_mix_coverage"), "validate 未接线覆盖门");
+    }
+
 }

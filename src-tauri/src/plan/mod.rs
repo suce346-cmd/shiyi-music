@@ -46,13 +46,13 @@ pub struct GlobalStyle {
     pub bpm: Option<u16>,
     pub key: Option<String>,
     pub meter: Option<String>,
-    /// 2 vocal（引用 vocal_mix.csv id，P1-5）
+    /// 2 vocal：vocal_mix 词表 category=vocal 的 id（如 V-02），渲染展开为英文标签（P1-5）
     pub vocal: Vec<String>,
     /// 3 instrumentation & performance
     pub instruments: Vec<String>,
     /// 4 arrangement / energy arc
     pub arc: Option<String>,
-    /// 5 production & mix（引用 vocal_mix.csv id，P1-5）
+    /// 5 production & mix：vocal_mix 词表 category=mix 的 id（如 M-01），渲染展开为英文标签（P1-5）
     pub mix: Vec<String>,
     /// → Suno Exclude 栏
     pub negative: Vec<String>,
@@ -158,10 +158,10 @@ pub mod fixtures {
                 bpm: Some(72),
                 key: None,
                 meter: Some("4/4".into()),
-                vocal: vec!["vocal_breathy_close".into()],
+                vocal: vec!["V-02".into()],
                 instruments: vec!["guzheng".into(), "cello".into()],
                 arc: Some("sparse intro to full final chorus".into()),
-                mix: vec!["mix_warm_intimate".into()],
+                mix: vec!["M-01".into()],
                 negative: vec!["edm drops".into()],
             },
             sections: vec![

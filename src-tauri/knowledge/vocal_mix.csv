@@ -1,0 +1,10 @@
+id,category,label_cn,label_en,keywords,description,applies_to,source
+V-01,vocal,清晰咬字,"clear diction, upfront lead vocal, articulate",字正腔圆|吐字清晰|无吞音,主唱人声清晰靠前，咬字饱满，每一句歌词清晰可辨,全程,截图V1
+V-02,vocal,气声转音,"breathy vocal, smooth runs, subtle vibrato, intimate",气声修饰|转音顺滑|细腻处理,主唱带气声质感，转音自然顺滑，尾音带轻微颤音,主歌/低能段,截图V2
+V-03,vocal,情绪哭腔,"emotional delivery, slight cry in chorus, building intensity, restrained",情感递进|哭腔质感|感染力强,副歌人声带轻微哭腔，情绪逐层递进，感染力强而不煽情,副歌,截图V3
+V-04,vocal,和声伴唱,"layered harmonies, double-tracked backing vocals, lead-forward",多层和声|背景伴唱|层次分明,副歌加入双层和声伴唱，和声不盖过主唱,副歌,截图V4
+M-01,mix,人声贴唱,"vocal-forward, centered, close-mic, moderate reverb",居中贴耳|融合度高|混响适中,人声位于声场正中央，贴耳不遥远，混响适中,全程,截图M1
+M-02,mix,低频增强,"full low-end, deep sub-bass, punchy kick, tight lows",低频饱满|下潜扎实|弹性鼓点,低频贝斯饱满有力，鼓点弹性强，低频不浑浊,全程,截图M2
+M-03,mix,空间混响,"wide stereo field, lush hall reverb, spacious",声场宽阔|定位清晰|空间感,整体加入适度空间混响，声场宽阔不拥挤,全程,截图M3
+M-04,mix,分轨层次感,"clear separation, balanced EQ, transparent mix",分层清晰|三频均衡|通透干净,人声、鼓点、贝斯、旋律乐器分层清晰，高中低频均衡,全程,截图M4
+M-05,mix,母带质感,"mastered, wide dynamics, polished, hi-fi",母带质感|动态充足|高清晰度,经过母带处理，动态范围足，接近专业发行级,全程,截图M5

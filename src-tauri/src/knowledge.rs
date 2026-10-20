@@ -423,7 +423,7 @@ pub fn warm_knowledge(app_data_dir: &std::path::Path) {
         return;
     }
     match KnowledgeBase::load(&dir) {
-        Ok(kb) if kb.table_names().len() == 8 => {
+        Ok(kb) if kb.table_names().len() == EMBEDDED_TABLE_COUNT => {
             // #22 运行期通道：覆盖目录里的结构性不可达行必须呐喊（编译期守护测试覆盖不到用户目录）
             kb.warn_reachability_violations();
             let _ = SHARED_KB.get_or_init(|| kb.clone());
@@ -434,7 +434,7 @@ pub fn warm_knowledge(app_data_dir: &std::path::Path) {
         Ok(kb) => {
             tracing::warn!(
                 tables = kb.table_names().len(),
-                "覆盖目录表不全（需 8 张），回退嵌入版"
+                "覆盖目录表不全（需与嵌入版同张数），回退嵌入版"
             );
             let _ = KB_SOURCE.set("embedded".to_string());
             let _ = SHARED_KB.get_or_init(|| {
@@ -451,11 +451,74 @@ pub fn warm_knowledge(app_data_dir: &std::path::Path) {
     }
 }
 
+/// 嵌入表张数（覆盖目录按组切换的判据，单源）
+pub const EMBEDDED_TABLE_COUNT: usize = 9;
+
+// ---------------------------------------------------------------------------
+// P1-5（M-07）：vocal_mix 受控词表
+// ---------------------------------------------------------------------------
+
+/// 表名单源
+pub const VOCAL_MIX_TABLE: &str = "vocal_mix";
+/// 注入预算（字符）：完整块超出即退化为只注入 `id=label_en`（BLUEPRINT P1-5）
+pub const VOCAL_MIX_INJECT_MAX_CHARS: usize = 1200;
+
+/// 词表一行（只取校验/渲染/注入需要的列）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VocalMixEntry {
+    pub id: String,
+    pub category: String,
+    pub label_cn: String,
+    pub label_en: String,
+    pub applies_to: String,
+}
+
+/// 读出词表；表缺失（回滚=删表）返回 None，调用方据此跳过覆盖门与 id 映射。
+pub fn vocal_mix_entries(kb: &KnowledgeBase) -> Option<Vec<VocalMixEntry>> {
+    let t = kb.table(VOCAL_MIX_TABLE).ok()?;
+    let idx = |h: &str| t.headers.iter().position(|x| x == h);
+    let (i, c, cn, en, ap) = (idx("id")?, idx("category")?, idx("label_cn")?, idx("label_en")?, idx("applies_to")?);
+    let cell = |r: &Vec<String>, k: usize| r.get(k).map(|s| s.trim().to_string()).unwrap_or_default();
+    Some(
+        t.rows
+            .iter()
+            .map(|r| VocalMixEntry {
+                id: cell(r, i),
+                category: cell(r, c),
+                label_cn: cell(r, cn),
+                label_en: cell(r, en),
+                applies_to: cell(r, ap),
+            })
+            .collect(),
+    )
+}
+
+/// id → label_en（渲染用；未知 id 返回 None，渲染原样透传，由 validate 报 unknown）
+pub fn vocal_mix_label_en(kb: &KnowledgeBase, id: &str) -> Option<String> {
+    vocal_mix_entries(kb)?.into_iter().find(|e| e.id == id.trim()).map(|e| e.label_en)
+}
+
+/// 注入块：完整 `id | category | label_en | label_cn | applies_to`；超 `max_chars` 退化为 `id=label_en`。
+/// 表缺失 → 空串。
+pub fn vocal_mix_prompt_block(kb: &KnowledgeBase, max_chars: usize) -> String {
+    let Some(rows) = vocal_mix_entries(kb) else { return String::new() };
+    let head = "【人声/混音词表（vocal_mix）】global.vocal 填 category=vocal 的 id、global.mix 填 category=mix 的 id（各至少 1 个，只写 id，渲染时展开为英文标签）：\n";
+    let full: String = rows
+        .iter()
+        .map(|e| format!("{} | {} | {} | {} | {}\n", e.id, e.category, e.label_en, e.label_cn, e.applies_to))
+        .collect();
+    if head.chars().count() + full.chars().count() <= max_chars {
+        return format!("{head}{full}");
+    }
+    let compact: String = rows.iter().map(|e| format!("{}={}\n", e.id, e.label_en)).collect();
+    format!("{head}{compact}")
+}
+
 /// 嵌入加载内部实现（load_embedded 与 shared_knowledge 共用）
 fn load_embedded_internal() -> Result<KnowledgeBase, String> {
     let mut kb = KnowledgeBase::default();
     // 名称必须与 knowledge/ 目录下文件名一致（不含扩展名）
-    let files: [(&str, &str); 8] = [
+    let files: [(&str, &str); EMBEDDED_TABLE_COUNT] = [
         ("instruments", include_str!("../knowledge/instruments.csv")),
         ("emotions", include_str!("../knowledge/emotions.csv")),
         ("style_genre", include_str!("../knowledge/style_genre.csv")),
@@ -465,6 +528,8 @@ fn load_embedded_internal() -> Result<KnowledgeBase, String> {
         // P0 思维资产表（8 Skill 去指纹全量融合，不压缩）
         ("lyric_craft", include_str!("../knowledge/lyric_craft.csv")),
         ("compose_craft", include_str!("../knowledge/compose_craft.csv")),
+        // P1-5（M-07）：人声/混音受控词表——SongPlan.global.vocal/mix 引用其 id
+        (VOCAL_MIX_TABLE, include_str!("../knowledge/vocal_mix.csv")),
     ];
     let mut loaded = 0usize;
     for (name, content) in files {
@@ -1251,17 +1316,17 @@ mod tests {
         CraftInjectCtx { consumer: c.name, stage_tags: c.stage_tags, mode, role }
     }
 
-    /// load() 整组有效则可用作覆盖源（8 张 mini 表）；调用方按组切换
+    /// load() 整组有效则可用作覆盖源（EMBEDDED_TABLE_COUNT 张 mini 表）；调用方按组切换
     #[test]
     fn load_override_dir_semantics() {
         let dir = std::env::temp_dir().join(format!("kb_override_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        for name in ["instruments", "emotions", "style_genre", "suno_rules", "cliches", "hooks", "lyric_craft", "compose_craft"] {
+        for name in ["instruments", "emotions", "style_genre", "suno_rules", "cliches", "hooks", "lyric_craft", "compose_craft", VOCAL_MIX_TABLE] {
             std::fs::write(dir.join(format!("{}.csv", name)), "a,b\n1,2\n").unwrap();
         }
         let kb = KnowledgeBase::load(&dir).unwrap();
-        assert_eq!(kb.table_names().len(), 8);
+        assert_eq!(kb.table_names().len(), EMBEDDED_TABLE_COUNT);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2207,4 +2272,46 @@ mod tests {
         let err = kb.render_filtered_any("t", &[("a", &["x"])], Some(&["a", "nope"]), "", None, &[]).unwrap_err();
         assert!(err.contains("缺少列: nope"), "got: {}", err);
     }
+
+    // ---- P1-5 vocal_mix ----
+
+    #[test]
+    fn vocal_mix_table_shape_and_ids() {
+        let kb = KnowledgeBase::load_embedded().unwrap();
+        let rows = vocal_mix_entries(&kb).expect("嵌入版必须含 vocal_mix");
+        assert_eq!(rows.len(), 9, "起步 9 行（人声 4 + 混音 5）");
+        let mut ids = std::collections::HashSet::new();
+        for e in &rows {
+            assert!(ids.insert(e.id.clone()), "id 重复: {}", e.id);
+            assert!(matches!(e.category.as_str(), "vocal" | "mix"), "未登记类别: {}", e.category);
+            assert!(!e.label_en.is_empty() && !e.label_cn.is_empty(), "{} 标签为空", e.id);
+            assert!(e.label_en.is_ascii(), "{} label_en 必须英文（Style 恒英文）", e.id);
+            let l = e.label_en.to_lowercase();
+            assert!(!l.split(',').any(|t| { let t = t.trim(); t.starts_with("no ") || t.starts_with("without ") }), "{} label_en 含否定（正向层禁否定）", e.id);
+        }
+        assert_eq!(rows.iter().filter(|e| e.category == "vocal").count(), 4);
+        assert_eq!(rows.iter().filter(|e| e.category == "mix").count(), 5);
+    }
+
+    #[test]
+    fn vocal_mix_label_lookup() {
+        let kb = KnowledgeBase::load_embedded().unwrap();
+        assert!(vocal_mix_label_en(&kb, "M-01").unwrap().starts_with("vocal-forward"));
+        assert!(vocal_mix_label_en(&kb, " V-02 ").is_some(), "trim 后匹配");
+        assert!(vocal_mix_label_en(&kb, "nope").is_none());
+    }
+
+    #[test]
+    fn vocal_mix_prompt_block_budget_fallback() {
+        let kb = KnowledgeBase::load_embedded().unwrap();
+        let full = vocal_mix_prompt_block(&kb, VOCAL_MIX_INJECT_MAX_CHARS);
+        assert!(full.contains("V-01 | vocal |") && full.contains("清晰咬字"), "预算内注入完整行");
+        assert!(full.chars().count() <= VOCAL_MIX_INJECT_MAX_CHARS, "默认预算须容纳 9 行完整块");
+        let compact = vocal_mix_prompt_block(&kb, 200);
+        assert!(compact.contains("V-01=clear diction") && !compact.contains("清晰咬字"), "超预算只注入 id+label_en");
+        let empty = KnowledgeBase::default();
+        assert!(vocal_mix_prompt_block(&empty, 9999).is_empty(), "删表回滚：不注入");
+        assert!(vocal_mix_entries(&empty).is_none());
+    }
+
 }

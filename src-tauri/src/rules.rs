@@ -2696,7 +2696,7 @@ pub fn plan_field_contract() -> String {
 }
 
 const PLAN_FIELD_CONTRACT: &str = "【SongPlan 字段契约（最高优先级：本阶段按 JSON schema 填字段，不输出排版文本；交付包由程序渲染）】\n\
-1. Style Prompt → global：genre / bpm / key / meter / vocal / instruments / arc / mix 各填英文短标签（渲染为逗号串，≤${STYLE_PROMPT_MAX} 字符）。\n\
+1. Style Prompt → global：genre / bpm / key / meter / instruments / arc 填英文短标签；vocal / mix 只填《人声/混音词表》id（各 ≥1，渲染展开为英文标签；渲染为逗号串，≤${STYLE_PROMPT_MAX} 字符）。\n\
 2. Exclude → global.negative：直接写要排除的元素，不加 no/without；正向字段不得出现否定写法。\n\
 3. 说明行 → 每段 instruments + positive_local + energy + negative_local：instruments 只放在场乐器；positive_local 写行为、${DESC_LINE_SPACE_SLOT}、人声状态；energy 为 ${ENERGY_SCALE}（A/B 必填）；段内退出写 negative_local（渲染为 X drop out）。\n\
 4. 极简段 → minimal=true：仅 intro/outro/bridge/interlude 且 energy≤${MINIMAL_ENERGY_MAX}，notes 写理由。\n\

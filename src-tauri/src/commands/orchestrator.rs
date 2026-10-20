@@ -690,6 +690,10 @@ async fn execute_review<R: Runtime>(
     // P4：单源校验清单（数字唯一 prose 载体；审改口径与硬校验同源）
     system.push_str(&crate::rules::checklist(req.mode.to_str_name()));
     system.push('\n');
+    // P1-5：制作人/校验员可改 /global/vocal|mix，须见词表 id
+    if matches!(role, PipelineRole::Producer | PipelineRole::Auditor) {
+        system.push_str(&crate::knowledge::vocal_mix_prompt_block(&kb, crate::knowledge::VOCAL_MIX_INJECT_MAX_CHARS));
+    }
     system.push_str("\n输出 JSON（严格符合格式，不输出其他内容）：\n");
     system.push_str(&crate::rules::interpolate(r.output_schema));
     // 产出语言开关：en 时追加英文产出指令（zh = 空串，零漂移）
@@ -938,6 +942,9 @@ fn host_system_with(base: &str, mode: &Mode, kb: &KnowledgeBase, plan: &str) -> 
     // P1-3：SongPlan 字段契约（替代信封/说明行文本契约；交付包由 render_suno 渲染）
     system.push_str("\n\n");
     system.push_str(&crate::rules::plan_field_contract());
+    // P1-5：vocal_mix 受控词表（SongPlan.global.vocal/mix 引用其 id；超预算只注入 id+label_en）
+    system.push_str("\n\n");
+    system.push_str(&crate::knowledge::vocal_mix_prompt_block(kb, crate::knowledge::VOCAL_MIX_INJECT_MAX_CHARS));
     system
 }
 
@@ -1204,6 +1211,11 @@ async fn produce_final_text<R: Runtime>(
     system.push_str(&crate::rules::plan_field_contract());
     system.push_str("\n\n");
     system.push_str(&crate::rules::checklist(mode.to_str_name()));
+    system.push_str("\n\n");
+    system.push_str(&crate::knowledge::vocal_mix_prompt_block(
+        crate::knowledge::shared_knowledge(),
+        crate::knowledge::VOCAL_MIX_INJECT_MAX_CHARS,
+    ));
     system.push_str(final_pack_lang_directive(request));
     let (package, findings, _final_plan) = plan_flow::auditor_finalize(
         app,
@@ -3384,6 +3396,20 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("host_system_d.txt"), sys).unwrap();
         println!("dumped to target/large-test/host_system_d.txt");
+    }
+
+
+    /// P1-5 接线锁：vocal_mix 词表进主持人上下文（阶段 0 与汇总共用 host_system_with）
+    #[test]
+    fn vocal_mix_injected_into_host_system() {
+        let kb = crate::knowledge::KnowledgeBase::load_embedded().unwrap();
+        for m in [Mode::ModeA, Mode::ModeB, Mode::ModeC, Mode::ModeD] {
+            let s = host_system_with("base", &m, &kb, "");
+            assert!(s.contains("【人声/混音词表（vocal_mix）】") && s.contains("M-01"), "{:?} 未注入 vocal_mix", m);
+        }
+        let src = include_str!("orchestrator.rs");
+        let prod = src.split("#[cfg(test)]\nmod tests").next().unwrap();
+        assert!(prod.matches("vocal_mix_prompt_block(").count() >= 3, "host/审改/定稿三处注入");
     }
 
 }
