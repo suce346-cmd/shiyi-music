@@ -14,6 +14,10 @@
 - **[S3 修复] 变更记录与 QA 数据重复（C-13/C-14）**：补齐 0.5.5 版本段与本 Unreleased 段；删除 `docs/qa/results_12round_final.jsonl`（与 `results_v4_final.jsonl` 字节相同，MD5 `0ddd1ecc…`）；新增守护单测：当前版本必须有 CHANGELOG 段、`docs/qa/*.jsonl` 不得内容重复。
 - **[S3 清理] 仓库垃圾清理（P1-J，§8 / D10 / D14）**：删除 8 份旧计划文档、`public/tauri.svg`、移动端图标（android/ios）与 Windows Store 图标（均零引用）；`speechOrder.test.ts` 移入 `src/test/`；`.gitignore` 增 `graphify-out/`、`.workbuddy/` 与审计派生物；9 处无主 `#[allow(dead_code)]` 逐个判定（测试专用改 `#[cfg(test)]`，无调用者 `logging::log_dir` 删除，其余为有调用者的 pub 项直接去掉）；Linux 构建的未使用导入告警修复。新增两项守护测试防回流。
 - **[新架构] SongPlan IR 类型与 Schema（P1-1，§2.1 / RULE-SUNO-PROFILE）**：新增 `src-tauri/src/plan/`（`mod.rs` 类型唯一定义点、`schema.rs` schemars 生成 + strict 后处理 + jsonschema 本地校验 + 快照、`suno_profile.rs` 平台限制带事实来源 + `get_suno_meta` 命令）。依赖 `schemars`、`jsonschema`。
+- **[S1 修复] 明文 Key 清除前读回校验（F1，P0 审计）**：旧规则凭迁移标记或 `keychain_set` 未报错即把 localStorage 明文哨兵化——标记残留且钥匙串为空/不同值时唯一一份 Key 丢失。现逐账户“读回 = 明文”才清；否则写入并读回校验，仍不一致则保留明文（内存继续可用），原因显示在对应 Key 输入框下；迁移验证完成前任何设置写出都不会哨兵化明文。
+- **[S2 修复] 活动 run RAII 守卫 + begin 前取消（F2/F3）**：`cancel::begin` 返回守卫，`run_pipeline`/`pipeline_resume` 统一经 `with_active_run`，future 被丢弃/超时 abort 也会 finish；前端已生成 run_id、后端尚未登记时的“停止”记为 pending，run 一开始即取消；`cancel_pipeline` 返回是否生效，界面显示“停止未产生效果”或失败原因。
+- **[S3 修复] 审计补丁 F5–F9**：Key 格式门只作用于 macOS `security -i` 路径（Windows/Linux 不误拒）；特殊字符 token 测试 + Mac 实写验收；`StreamChunk`/`PipelineEnvelope` 的 `run_id` 跨语言双向锁与 App chunk 过滤接线锁；钥匙串静态守卫防变量别名；`double/triple stops` 不再被当作乐器退出；注释归位。
+- **[工程] clippy 零告警门**：存量告警清零，`scripts/gates.sh` 以 `cargo clippy --all-targets -- -D warnings` 收尾；新增 `scripts/mac-verify.sh`（同步后钥匙串/特殊字符实写/离线门/GUI 验收）与 `docs/qa/p1-3-4-acceptance.md`（真模型 12 例 smoke + 40 例回放标准）。
 - **[新架构] 结构化调用 + 能力探测（P1-2，§2.2）**：新增 `llm_caps.rs`（`json_schema`/`json_object`/`none` 三档；解析顺序 角色显式 → `(base_url, model)` 探测缓存 → 缺省 `json_object`）与 `call_llm_structured`（任何档位都做本地 schema 二次校验；失败为 Parse 并带 JSON 路径，不静默降级、不自由文本兜底；仅网络/截断允许 1 次同请求重发；`none` 档不发请求，直接提示换模型）。新命令 `probe_structured_caps`（测试连接成功后自动探测，鉴权/限流/5xx 不记档）；设置页显示探测结果（`none` 为醒目告警），角色配置可显式选择档位；新增 `PhaseProgress` 事件（结构化阶段以进度+预览代替 token 流）。离线 mock 网关覆盖三档、探测、截断重发与校验失败。
 
 ## 0.5.5（2026-09-14 ~ 2026-10-04）钥匙串数据安全 · 产出语言 · 审计批修复

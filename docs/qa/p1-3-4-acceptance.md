@@ -16,13 +16,12 @@ read -rs SHIYI_TEST_API_KEY && export SHIYI_TEST_API_KEY   # 不进 shell 历史
 
 ```bash
 cd src-tauri
-LSM_CASES="a:P1,a:P5,a:P9,b:P2,b:P6,b:P10,c:C1,c:C4,c:C7,d:P3,d:P7,d:P8" \
+LSM_CASES="d:P1,d:P2,d:P3,a:P1,a:P5,a:P6,b:P1,b:P2,b:P8,c:C1,c:C6,c:C8" \
   cargo test --test large_scale_matrix -- --ignored --nocapture
 cp ../target/large-test/results.jsonl ../docs/qa/results_p134_smoke.jsonl
 ```
 
-> 用例 id 以 `docs/qa/results_v4_final.jsonl` 实际 `mode:prompt_id` 为准（执行前用下行核对并替换）：
-> `python3 -c "import json;print(','.join(json.loads(l)['mode']+':'+json.loads(l)['prompt_id'] for l in open('../docs/qa/results_v4_final.jsonl')))"`
+> 用例集 = `docs/qa/results_v4_final.jsonl` 的 12 个 `mode:prompt_id`（已核对）。
 
 **通过标准（全部满足）**
 | # | 指标 | 门槛 | 基线（v4，12 例） |
