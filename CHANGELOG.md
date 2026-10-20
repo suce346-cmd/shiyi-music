@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **[工程] npm audit**：传递依赖 `source-map-js` 1.2.1→1.2.2（GHSA-68fv-2mgg-jv7q），`npm audit` 清零；README/RELEASE 写明 Node 本机 22/24/26 可用、API Key「谁用谁填」不入库。
+
 - **[工程] 仓库清理与发版文档**：删除本地构建产物指引落地（target/dist/coverage 等不入库）；清理过时 QA jsonl 与已闭环的根因/验收/对照文档；`BLUEPRINT_v2` / `full-review-2026-10-20` 上移至 `docs/`；新增 `docs/RELEASE.md`（门禁→版本同步→push→tag→Actions 打包）；`.gitignore` 补 `.env`/`.secrets/`/`*.pem`/`*.key`；低风险依赖升级（Tauri 2.12 系、React 19.3、Vite 7.3.7、Tailwind 4.3.3 等）；README Mode D 改为 60–90 秒、Auditor 打回 ≤3；`repo_hygiene` 防回流名单扩至本次删除项。
 
 

@@ -11,7 +11,7 @@
 | 包管理 | 仓库根目录执行 `npm ci`（勿改 lock 后用 `npm install` 提交意外漂移） |
 
 ```bash
-node -v   # 应对齐 .nvmrc
+node -v   # 本机 22/24/26 均可；发版机与 CI 建议对齐 .nvmrc
 rustc -V  # stable
 npm ci
 ```
@@ -72,12 +72,14 @@ CI 会在门禁通过后产出 macOS / Windows 安装包，并挂到对应 Relea
 3. **Windows**：CI 产出 NSIS/ MSI 类安装包；正式分发建议 Authenticode 签名。
 4. 本地 `npm run tauri build` 仅供自测，产物不要提交进 Git。
 
-## 7. Key 安全
+## 7. Key 安全（谁用谁填）
+
+密钥**不固定、不入库**。每位使用者在 App「设置」里自行粘贴自己的 Key，保存到本机钥匙串；换电脑或条目空了就再填。仓库、CI、文档里永远不出现真实 Key。
 
 | 允许 | 禁止 |
 |---|---|
-| macOS Keychain 账户 `global` / `role:*` | 把真实 Key 写进源码、测试、文档、CI secret 日志 |
-| 本机仓库外 `/path/.secrets/*.env`（已 gitignore） | 提交 `.env`、`.pem`、`.key`、钥匙串导出 |
+| 本机钥匙串 `global` / `role:*`（设置面板写入） | 把真实 Key 写进源码、测试、文档、CI 日志 |
+| 本机仓库外 `.secrets/*.env`（已 gitignore，仅本地自动化） | 提交 `.env`、`.pem`、`.key`、钥匙串导出 |
 | 测试哑值（如 `ak-plain-legacy`、`sk-test-…`） | 用生产 Key 跑会写入 Keychain `global` 的脚本 |
 
 测试约定（RULE-KEYCHAIN-RO）：`cargo test` 只读真实 Key，写/删一律走 `test:shiyi:` 隔离账户。

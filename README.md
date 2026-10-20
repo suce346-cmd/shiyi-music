@@ -34,11 +34,13 @@ npm run tauri build
 
 | 层 | 版本 |
 |---|---|
-| Node.js | 见 `.nvmrc`（22.23.x） |
+| Node.js | 本机可用 22 / 24 / 26（见 `package.json` `engines`）；CI 与 `.nvmrc` 锁定 22.23.x |
 | Rust | stable（开发机当前 1.99.x） |
 | Tauri | 2.x（`@tauri-apps/api` / CLI / 插件） |
 | React | 19.x |
 | Vite | 7.x |
+
+**API Key**：不入库、不写死。谁用谁在 App「设置」里自己填，保存进本机钥匙串（`global` / 角色级 `role:*`）；换机器或条目空了就再填一次。
 
 发版与 CI 打包步骤见 [docs/RELEASE.md](./docs/RELEASE.md)。规则真源见 [docs/BLUEPRINT_v2.md](./docs/BLUEPRINT_v2.md)。
 
