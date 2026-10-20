@@ -173,7 +173,7 @@ mod tests {
     /// 暂停期间点"停止" → 取消优先，立即返回 cancelled
     #[tokio::test]
     async fn wait_aborts_on_cancel() {
-        crate::commands::cancel::begin("g4");
+        let g = crate::commands::cancel::begin("g4");
         let waiter = tokio::spawn(async { wait("g4", Duration::from_secs(30)).await });
         for _ in 0..50 {
             if is_pending("g4") {
@@ -185,7 +185,7 @@ mod tests {
         let err = waiter.await.unwrap().unwrap_err();
         assert_eq!(err.kind, crate::errors::ErrorKind::Cancelled);
         assert!(!is_pending("g4"), "取消后门槽应清空");
-        crate::commands::cancel::finish("g4");
+        drop(g);
     }
 
     /// 重复开同一 run 的门：旧等待者按超时放行（不悬挂），新门可正常决断

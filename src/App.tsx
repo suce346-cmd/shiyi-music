@@ -1142,6 +1142,10 @@ export default function App() {
                 usage={pipeline.usage}
                 locale={settings.language}
               />
+              {/* F3：停止无效果/失败时可见（旧规则吞掉 cancel_pipeline 结果） */}
+              {pipeline.cancelNotice && (
+                <p role="status" className="mt-2 text-[11px] text-text-muted">{pipeline.cancelNotice}</p>
+              )}
             </div>
 
             {detailExpert && (

@@ -2045,7 +2045,6 @@ pub async fn run_pipeline<R: Runtime>(app: AppHandle<R>, request: PipelineReques
     let mut request = request;
     let rid = resolve_run_id(request.run_id.as_deref());
     request.run_id = Some(rid.clone());
-    cancel::begin(&rid);
     interject::reset(&rid);
     gate::reset(&rid);
     // #12：开启确认门时整体超时（= 预算）加补偿额度——暂停等待不吞生成预算。
@@ -2055,10 +2054,9 @@ pub async fn run_pipeline<R: Runtime>(app: AppHandle<R>, request: PipelineReques
     } else {
         PIPELINE_TIMEOUT
     };
-    let out = run_pipeline_with_timeout(app, request, timeout).await;
-    // D-06：run 结束（任何结局）移除取消条目
-    cancel::finish(&rid);
-    out
+    // F2/D-06：with_active_run 守卫——任何结局（含 future 被丢弃）都 finish；
+    // F3：begin 前到达的取消在此被消费，run 一开始即处于取消态
+    cancel::with_active_run(&rid, run_pipeline_with_timeout(app, request, timeout)).await
 }
 
 /// run_id 解析单源：请求带非空 id 则尊重，否则后端生成 `run-{nanos}`。
@@ -2512,7 +2510,8 @@ pub async fn pipeline_refine(
 /// R3：取消同时清检查点，避免"从上次继续"复活已取消任务
 /// RULE-RUN-ID（C-05）：空 run_id 直接拒（旧规则置全局位且无复位点，污染 test_api 直到重启）。
 #[tauri::command]
-pub async fn cancel_pipeline(app: tauri::AppHandle, run_id: Option<String>) -> Result<(), AppError> {
+/// F3：返回是否生效（true = 已取消或 begin 前已登记待生效；false = 任务已结束，取消无效果）。
+pub async fn cancel_pipeline(app: tauri::AppHandle, run_id: Option<String>) -> Result<bool, AppError> {
     let rid = run_id.unwrap_or_default();
     if rid.trim().is_empty() {
         return Err(crate::errors::AppError::new(
@@ -2520,9 +2519,9 @@ pub async fn cancel_pipeline(app: tauri::AppHandle, run_id: Option<String>) -> R
             "缺少 run_id，取消无法定向到任务",
         ));
     }
-    cancel::request_cancel(&rid);
+    let outcome = cancel::request_cancel(&rid);
     crate::commands::checkpoint::clear(&app, &rid);
-    Ok(())
+    Ok(outcome.effective())
 }
 
 /// 从检查点续跑（前端"从上次继续"按钮调）——断点方案直接进终稿，不重跑讨论轮。
@@ -2550,10 +2549,11 @@ pub async fn pipeline_resume<R: Runtime>(
     // 断点方案直接进阶段 2（转写契约 + 保真/硬校验打回 ≤2 次），与主流程共用 produce_final_text 单源实现
     let mode = &request.mode;
     // 续跑登记活动 run 并清旧取消位（与 run_pipeline 入口同语义）；结束无论成败移除（D-06）
-    cancel::begin(&run_id);
-    let out = produce_final_text(&app, &cp.current_plan, mode, &request, &budget, &run_id).await;
-    cancel::finish(&run_id);
-    let (final_text, _issues) = out?;
+    let (final_text, _issues) = cancel::with_active_run(
+        &run_id,
+        produce_final_text(&app, &cp.current_plan, mode, &request, &budget, &run_id),
+    )
+    .await?;
     crate::commands::checkpoint::clear(&app, &run_id);
     Ok(final_text)
 }
@@ -2620,6 +2620,22 @@ pub async fn round_gate_decide(run_id: Option<String>, decision: String) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// F2（P0 审计）：两个 run 入口必须经 RAII 包裹器登记活动 run，生产代码不得裸调 begin/finish
+    /// （裸调即"每条返回路径记得 finish"旧形态——future 被丢弃时漏清理）。
+    #[test]
+    fn run_entries_use_with_active_run() {
+        let prod = crate::rules::production_segment(include_str!("orchestrator.rs"));
+        let wrap = ["cancel::", "with_active_run("].concat();
+        let bare_begin = ["cancel::", "begin("].concat();
+        let bare_finish = ["cancel::", "finish("].concat();
+        assert_eq!(prod.matches(wrap.as_str()).count(), 2, "run_pipeline 与 pipeline_resume 各一处");
+        assert_eq!(prod.matches(bare_begin.as_str()).count(), 0);
+        assert_eq!(prod.matches(bare_finish.as_str()).count(), 0);
+        let resume = &prod[prod.find("pub async fn pipeline_resume").unwrap()..];
+        let resume = &resume[..resume.find("\n}\n").unwrap()];
+        assert!(resume.contains(wrap.as_str()), "pipeline_resume 必须经 with_active_run");
+    }
 
     /// RULE-RUN-ID：run_id 解析单源——非空尊重，空/缺省生成（入口与 with_timeout 同源）
     #[test]

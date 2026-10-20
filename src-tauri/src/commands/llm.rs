@@ -1298,7 +1298,7 @@ pub(crate) mod stream_it {
 
         let (tx, rx) = mpsc::channel();
         let url_a = serve_sse(vec![sse("旧A1"), sse("旧A2"), sse("旧A3")], Some(rx));
-        crate::commands::cancel::begin("it-a");
+        let ga = crate::commands::cancel::begin("it-a");
         let resp_a = open(&url_a).await;
         let (h2, b2) = (handle.clone(), budget.clone());
         let task_a = tokio::spawn(async move { stream_response(h2, resp_a, "it-a", &b2, reserve).await });
@@ -1309,18 +1309,18 @@ pub(crate) mod stream_it {
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
         // 用户点停止 → 立刻开新 run
-        assert!(crate::commands::cancel::request_cancel("it-a"));
-        crate::commands::cancel::begin("it-b");
+        assert!(crate::commands::cancel::request_cancel("it-a").effective());
+        let gb = crate::commands::cancel::begin("it-b");
         let _ = tx.send(()); // A 的在途数据继续到达
         let _ = tx.send(());
         let out_a = task_a.await.unwrap();
         assert_eq!(out_a.unwrap_err().kind, ErrorKind::Cancelled);
-        crate::commands::cancel::finish("it-a");
+        drop(ga);
 
         let url_b = serve_sse(vec![sse("新B1"), sse("新B2")], None);
         let resp_b = open(&url_b).await;
         let out_b = stream_response(handle.clone(), resp_b, "it-b", &budget, reserve).await.unwrap();
-        crate::commands::cancel::finish("it-b");
+        drop(gb);
         assert_eq!(out_b.raw, "新B1新B2");
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
@@ -1330,7 +1330,7 @@ pub(crate) mod stream_it {
         let shown: String = evs.iter().filter(|c| c.run_id == "it-b").map(|c| c.content.as_str()).collect();
         assert_eq!(shown, "新B1新B2");
         // 结束后迟到的取消不留条目
-        assert!(!crate::commands::cancel::request_cancel("it-a"));
+        assert!(!crate::commands::cancel::request_cancel("it-a").effective());
         assert!(!crate::commands::cancel::is_cancelled("it-a"));
     }
 

@@ -103,3 +103,31 @@ describe("usePipeline × #12 轮间确认门", () => {
     act(() => { resolveRun?.("done"); });
   });
 });
+/** F3（P0 审计）：cancel_pipeline 返回是否生效，前端必须反映，不再吞掉 */
+describe("usePipeline × 停止结果反映（F3）", () => {
+  it("后端回报无效果（任务已结束）→ cancelNotice 可见；生效 → 无提示", async () => {
+    const h = renderHook(() => usePipeline());
+    let effective = false;
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "pipeline_generate") return new Promise<string>((res) => { resolveRun = res; });
+      return Promise.resolve(cmd === "cancel_pipeline" ? effective : null);
+    });
+    await startInFlight(h);
+    await act(async () => { await h.result.current.cancel(); });
+    expect(h.result.current.cancelNotice).toContain("停止未产生效果");
+
+    effective = true;
+    await startInFlight(h);
+    await act(async () => { await h.result.current.cancel(); });
+    expect(h.result.current.cancelNotice).toBeNull();
+  });
+
+  it("停止请求失败 → 显示原因", async () => {
+    const h = renderHook(() => usePipeline());
+    await startInFlight(h);
+    invokeMock.mockImplementation((cmd: string) =>
+      cmd === "cancel_pipeline" ? Promise.reject({ kind: "internal", message: "boom" }) : Promise.resolve(null));
+    await act(async () => { await h.result.current.cancel(); });
+    expect(h.result.current.cancelNotice).toContain("boom");
+  });
+});

@@ -154,6 +154,8 @@ interface PipelineState {
   gate: { round: number; nextRound: number; timeoutSecs: number } | null;
   /** #27-c 退避等待：非 null = 后端正在等配额/服务端恢复后重试（前端显示原因 + 倒计时） */
   backoff: BackoffInfo | null;
+  /** F3：停止请求结果提示（null = 无提示）——后端回报"任务已结束、停止无效果"或请求失败时可见 */
+  cancelNotice: string | null;
 }
 
 /** 用量零值（startRun/reset 时复位） */
@@ -265,6 +267,7 @@ export function usePipeline() {
     usage: { ...ZERO_USAGE },
     gate: null,
     backoff: null,
+    cancelNotice: null,
   });
 
   const unlistenRef = useRef<UnlistenFn | null>(null);
@@ -570,6 +573,7 @@ export function usePipeline() {
         usage: { ...ZERO_USAGE },
         gate: null,
         backoff: null,
+        cancelNotice: null,
       });
       usageRef.current = { ...ZERO_USAGE };
       degradedRef.current = [];
@@ -628,13 +632,18 @@ export function usePipeline() {
     runTokenRef.current++; // 作废在途 run 的事件
     const runId = runIdRef.current;
     runIdRef.current = "";
+    // F3：后端回报是否生效（true = 已取消或 begin 前登记待生效；false = 任务已结束）
+    let cancelNotice: string | null = null;
     try {
       // RULE-RUN-ID：后端拒绝空 id 取消（不再有全局取消位），无在途 run 时不发请求
-      if (runId) await invoke("cancel_pipeline", { runId });
-    } catch {
-      // 取消命令本身失败不展示（已无在途任务可取消时属正常）
+      if (runId) {
+        const effective = await invoke<boolean>("cancel_pipeline", { runId });
+        if (effective === false) cancelNotice = "任务已结束，停止未产生效果";
+      }
+    } catch (e) {
+      cancelNotice = `停止请求失败：${errText(e)}`;
     }
-    setState((prev) => ({ ...prev, active: false, phase: "done", error: null, currentStage: null }));
+    setState((prev) => ({ ...prev, active: false, phase: "done", error: null, currentStage: null, cancelNotice }));
   }, []);
 
   /** 重置 */
@@ -660,6 +669,7 @@ export function usePipeline() {
         // #12：切模式/重置一律撤下确认条（旧 run 的门已随 cancel 作废）
         gate: null,
         backoff: null,
+        cancelNotice: null,
       });
       usageRef.current = { ...ZERO_USAGE };
       degradedRef.current = [];
