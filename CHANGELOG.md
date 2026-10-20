@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **[§3.7] Style 恒英文硬门**：`plan/style_lang.rs` + 空表 `knowledge/style_cjk_allow.csv`（P2-S12 前零放行）；`validate` 挂 `validate_style_english`；守护 `style_english_rule_independent_of_output_lang` / `style_cjk_allow_rows_have_probe_id`。
+
 - **[§5.1#14 / §3.8] 退役 output_lang mix**：`PipelineRequest.output_lang` 复用 `plan::LyricLang`（仅 zh|en）；IPC 收到 `"mix"` 反序列化失败；删除 `wants_style_en`/`wants_all_en` 与阶段 2 mix 注入；前端下拉/i18n/类型两态；`sanitizeStored` 将旧 mix 归一为 zh；守护 `no_mix_output_lang` + wants_* 扫源。Style 恒英文见 §3.7（硬门另批）。
 
 - **[P1-13] 文本评估 Judge（M-09/M-10）**：七维评分卡 + 圆桌同模型 Judge；设置 **文本评估 Judge**（`textEvalJudge`）默认关闭，仅开启时终稿后打分并发 `text_eval` 事件；失败 `text_eval_degraded` 不阻断。20 条冻结提示词、校准模板与歧义裁定见 `docs/qa/text-eval-*.md` / `p1-13-ambiguities.md`；`tests/text_eval.rs` 离线绿、在线需 `SHIYI_TEXT_EVAL=1`。

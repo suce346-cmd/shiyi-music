@@ -31,9 +31,6 @@ pub const DOUYIN_V2_LINE_MAX_CHARS: usize = 12;
 pub const DOUYIN_V2_CLIP_SECONDS: u16 = 15;
 /// Exclude 必含项（小写比对）
 pub const DOUYIN_V2_EXCLUDE: &[&str] = &["long intro", "slow build", "fade out"];
-/// 成曲建议时长
-pub const DOUYIN_V2_DURATION_SEC_MIN: u16 = 45;
-pub const DOUYIN_V2_DURATION_SEC_MAX: u16 = 75;
 /// 混音词表：手机扬声器友好（P1-7 与 §6.2）
 pub const DOUYIN_V2_MIX_PHONE_SPEAKER: &str = "M-06";
 /// 混音词表：人声贴唱（vocal-forward）

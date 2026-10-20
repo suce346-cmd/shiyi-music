@@ -1,6 +1,6 @@
 //! SongPlan → Suno 四栏（BLUEPRINT_v2 §2 / P1-4）。纯函数，唯一渲染点。
 //!
-//! - Style：全局六层按序逗号拼接（genre → bpm/key/meter → vocal → instruments → arc → mix），恒英文（§3.7 另批）。
+//! - Style：全局六层按序逗号拼接（genre → bpm/key/meter → vocal → instruments → arc → mix），恒英文（§3.7 `validate_style_english`）。
 //! - Lyrics：每段 `[Label | cue, cue]` 头 + 歌词行；cue = 段内正向 cue + 在场乐器 + `energy N`
 //!   + 段内负向 cue 的正向改写。段头语法由 P2 探针定，[`SECTION_HEADER`] 单点切换。
 //! - Exclude：`global.negative`（Suno 无段落级 Exclude；段内负向只做正向改写，不并入全局，

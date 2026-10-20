@@ -11,6 +11,7 @@
 //!   `additionalProperties:false`——与 OpenAI `json_schema strict` 兼容（schema.rs 统一后处理）。
 
 pub mod douyin;
+pub mod style_lang;
 pub mod render_suno;
 pub mod schema;
 pub mod suno_profile;

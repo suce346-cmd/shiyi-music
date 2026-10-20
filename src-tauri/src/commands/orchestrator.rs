@@ -3061,8 +3061,7 @@ mod tests {
         }
     }
 
-    /// 产出语言三态指令：zh = 双层全空（零漂移）；mix = 仅阶段 2 注入 STYLE 节英文、
-    /// 讨论层空；en = 讨论层与阶段 2 均注入。
+    /// §3.8：歌词语言两态指令——zh 双层空串；en 讨论层+阶段2 注入英文歌词指令。
     #[test]
     fn output_lang_directives_follow_two_states() {
         let mut req = make_request(None);

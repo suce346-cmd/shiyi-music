@@ -113,6 +113,7 @@ pub fn validate(p: &SongPlan, ctx: &ValidateCtx<'_>) -> Vec<Issue> {
         }
     }
     check_style_and_headers(p, ctx.mode, &mut out);
+    out.extend(super::style_lang::validate_style_english(p));
     check_params(p, ctx.mode, &mut out);
     check_lyric_lines(p, ctx.mode, &mut out);
     if ctx.mode == "mode_d" {

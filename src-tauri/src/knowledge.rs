@@ -1684,8 +1684,7 @@ mod tests {
         assert!(has_douyin, "hooks 无 douyin 标注");
     }
 
-    /// 产出语言三态配套（全链路核查 发现 1 根治）：suno_rules 场景过滤——
-    /// mode_d 只吃 douyin 行（line_max_chars ≤12），mode_b 只吃 normal 行（line_chars 6-13），
+    /// suno_rules 场景过滤：mode_d 只吃 douyin 行，mode_b 只吃 normal 行，
     /// 矛盾规则不再同时进同一 prompt。
     #[test]
     fn rules_injection_respects_scenario_mode() {
