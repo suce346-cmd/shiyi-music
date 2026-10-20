@@ -36,7 +36,7 @@ impl Issue {
     pub(crate) fn hard(code: &'static str, path: impl Into<String>, message: impl Into<String>) -> Self {
         Self { code, path: path.into(), message: message.into(), severity: Severity::Hard }
     }
-    fn warn(code: &'static str, path: impl Into<String>, message: impl Into<String>) -> Self {
+    pub(crate) fn warn(code: &'static str, path: impl Into<String>, message: impl Into<String>) -> Self {
         Self { code, path: path.into(), message: message.into(), severity: Severity::Warn }
     }
     /// 面向模型/用户的一行（`[code] path: message`）
@@ -91,9 +91,154 @@ pub fn validate(p: &SongPlan, ctx: &ValidateCtx<'_>) -> Vec<Issue> {
             for m in crate::commands::validator::validate_lyric_fill(orig, &rendered.lyrics).issues {
                 out.push(Issue::hard("lyric_fill", "/sections", m));
             }
+            // P1-8 / C-03：韵脚咨询（仅 Warn，多音字取首读，不打回）
+            out.extend(advise_rhyme(orig, &rendered.lyrics));
         }
     }
     out
+}
+
+// ---------------------------------------------------------------------------
+/// P1-8（C-03）：Mode C 韵脚咨询——对照原词押韵位置，用拼音韵母（十三辙近似）检查新词。
+/// 仅 `Severity::Warn`：多音字取 `lazy_pinyin` 首读，误判只报告不打回（BLUEPRINT 风险项）。
+pub fn advise_rhyme(original: &str, new_lyrics: &str) -> Vec<Issue> {
+    let orig = extract_c_lyric_lines(original);
+    let neu = extract_c_lyric_lines(new_lyrics);
+    if orig.len() < 2 || neu.is_empty() {
+        return Vec::new();
+    }
+    let n = orig.len().min(neu.len());
+    let of: Vec<Option<String>> = orig[..n].iter().map(|l| line_rhyme_key(l)).collect();
+    let nf: Vec<Option<String>> = neu[..n].iter().map(|l| line_rhyme_key(l)).collect();
+
+    // 原词中押韵的行对（同辙）；新词对应行对若不在同辙 → 告警
+    let mut out = Vec::new();
+    let mut reported = 0usize;
+    const CAP: usize = 6;
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let (Some(a), Some(b)) = (&of[i], &of[j]) else { continue };
+            if a != b {
+                continue; // 原词此处不押，不要求新词押
+            }
+            match (&nf[i], &nf[j]) {
+                (Some(x), Some(y)) if x == y => {}
+                (Some(x), Some(y)) => {
+                    reported += 1;
+                    if reported <= CAP {
+                        out.push(Issue::warn(
+                            "rhyme_advise",
+                            format!("/sections/lines/{i}+{j}"),
+                            format!(
+                                "韵脚提示：原词第 {}/{} 行同辙「{}」，新词为「{}」/「{}」（多音字取首读，仅提示）",
+                                i + 1,
+                                j + 1,
+                                a,
+                                x,
+                                y
+                            ),
+                        ));
+                    }
+                }
+                _ => {
+                    reported += 1;
+                    if reported <= CAP {
+                        out.push(Issue::warn(
+                            "rhyme_advise",
+                            format!("/sections/lines/{i}+{j}"),
+                            format!(
+                                "韵脚提示：原词第 {}/{} 行同辙「{}」，新词对应行缺汉字韵脚（仅提示）",
+                                i + 1,
+                                j + 1,
+                                a
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    if reported > CAP {
+        out.push(Issue::warn(
+            "rhyme_advise",
+            "/sections",
+            format!("韵脚提示：另有 {} 处押韵位置可能漂移（已省略明细）", reported - CAP),
+        ));
+    }
+    out
+}
+
+/// 与 `validate_lyric_fill` 同口径抽取歌词行（去标签/说明/包装行）。
+fn extract_c_lyric_lines(text: &str) -> Vec<String> {
+    text.lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| {
+            !l.is_empty()
+                && !l.starts_with('[')
+                && !l.starts_with('#')
+                && !l.starts_with('|')
+                && !l.starts_with("**")
+                && !l.starts_with("Style")
+                && !l.starts_with("风格")
+                && !l.starts_with("参数")
+                && !l.starts_with("Weirdness")
+                && !crate::commands::validator::is_bare_package_line(l)
+        })
+        .collect()
+}
+
+fn last_cjk(s: &str) -> Option<char> {
+    s.chars().rev().find(|c| {
+        let u = *c as u32;
+        (0x4E00..=0x9FFF).contains(&u) || (0x3400..=0x4DBF).contains(&u)
+    })
+}
+
+/// 行尾汉字 → 十三辙键；非汉字/无拼音 → None。
+fn line_rhyme_key(line: &str) -> Option<String> {
+    use pinyin::ToPinyin;
+    let ch = last_cjk(line)?;
+    let plain = ch.to_pinyin()?.plain().to_lowercase();
+    if plain.is_empty() {
+        return None;
+    }
+    Some(rhyme_family(strip_initial(&plain)).to_string())
+}
+
+fn strip_initial(plain: &str) -> &str {
+    const INITIALS: &[&str] = &[
+        "zh", "ch", "sh", "b", "p", "m", "f", "d", "t", "n", "l", "g", "k", "h", "j", "q", "x", "r", "z", "c", "s", "y", "w",
+    ];
+    for i in INITIALS {
+        if let Some(rest) = plain.strip_prefix(i) {
+            if !rest.is_empty() {
+                return rest;
+            }
+        }
+    }
+    plain
+}
+
+/// 十三辙近似归并（咨询用；开口/闭口大类保留可区分性）。
+fn rhyme_family(finals: &str) -> &str {
+    let f = finals.trim();
+    // 多音节取末韵母片段已由 Style::Finals 给出
+    match f {
+        "a" | "ia" | "ua" => "发花",
+        "o" | "e" | "uo" => "梭波",
+        "ie" | "ue" | "ve" | "üe" => "乜斜",
+        "u" => "姑苏",
+        "i" | "v" | "ü" => "衣期",
+        "ai" | "uai" => "怀来",
+        "ei" | "ui" => "灰堆",
+        "ao" | "iao" => "遥条",
+        "ou" | "iu" => "油求",
+        "an" | "ian" | "uan" | "van" | "üan" => "言前",
+        "en" | "in" | "un" | "vn" | "ün" => "人辰",
+        "ang" | "iang" | "uang" => "江阳",
+        "eng" | "ing" | "ong" | "iong" => "中东",
+        _ => f, // 未知韵母原样比较
+    }
 }
 
 /// §2.3 `validate_vocal_mix_coverage`（P1-5）：global.vocal / global.mix 只引用 vocal_mix 词表 id，
@@ -658,6 +803,47 @@ mod tests {
         p.sections[1].positive_local = vec!["x".repeat(rules::DESC_LINE_MAX_CHARS)];
         let c = codes(&validate(&p, &ctx("mode_b")));
         assert!(c.contains(&"break_mark") && c.contains(&"header_too_long"), "{c:?}");
+    }
+
+    /// P1-8：已知押韵样本同辙不告警；破坏押韵位置则 Warn 且不致 passed=false
+    #[test]
+    fn advise_rhyme_known_samples() {
+        let orig = "[Verse]\n天上的星星不说话\n地上的孩子想妈妈\n";
+        // 话/妈 → 发花 同辙
+        let good = "[Verse]\n海边的灯火不说话\n夜里的孩子想妈妈\n";
+        let w = advise_rhyme(orig, good);
+        assert!(w.is_empty(), "同辙保留不应告警: {w:?}");
+        let bad = "[Verse]\n海边的灯火不说话\n夜里的孩子在跑步\n"; // 话=发花，步=姑苏
+        let w = advise_rhyme(orig, bad);
+        assert!(w.iter().any(|i| i.code == "rhyme_advise" && i.severity == Severity::Warn), "{w:?}");
+        let mut p = minimal_plan();
+        p.sections[0].lines = vec!["海边的灯火不说话".into()];
+        p.sections[1].lines = vec!["夜里的孩子在跑步".into()];
+        // 保证至少两段有词：minimal_plan 结构
+        let rendered = crate::plan::render_suno::to_package_text(&crate::plan::render_suno::render(&p));
+        let v = validate(
+            &p,
+            &ValidateCtx {
+                mode: "mode_c",
+                converged: None,
+                original_lyrics: Some(orig),
+            },
+        );
+        let _ = rendered;
+        assert!(passed(&v) || v.iter().any(|i| i.code == "lyric_fill"), "字数可能硬红，但韵脚不得单独打回");
+        assert!(
+            v.iter().all(|i| i.code != "rhyme_advise" || i.severity == Severity::Warn),
+            "韵脚必须是 Warn"
+        );
+    }
+
+    #[test]
+    fn advise_rhyme_polyphone_reports_only() {
+        // 「行」多音；首读可能为 xing/hang——只要走 Warn 路径且不 panic
+        let orig = "大路朝天各自走\n小河有水慢慢流\n"; // 走/流 油求
+        let neu = "大路朝天各自行\n小河有水慢慢游\n"; // 行/? 游=油求
+        let w = advise_rhyme(orig, neu);
+        assert!(w.iter().all(|i| i.severity == Severity::Warn));
     }
 
     #[test]

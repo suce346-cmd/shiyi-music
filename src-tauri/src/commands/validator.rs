@@ -500,7 +500,7 @@ fn is_lyric_punct(c: char) -> bool {
 
 /// 裸包装行判定（Q2收窄：此前仅“半角逗号+>15字”，合法歌词长句可被吞；
 /// 现加关键词双条件：含配器/空间/人声/能量词才算包装行）。
-fn is_bare_package_line(l: &str) -> bool {
+pub(crate) fn is_bare_package_line(l: &str) -> bool {
     let n = l.chars().filter(|c| !c.is_whitespace()).count();
     if !(l.contains(',') && n > 15) {
         return false;
