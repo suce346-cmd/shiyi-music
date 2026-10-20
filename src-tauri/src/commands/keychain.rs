@@ -478,5 +478,29 @@ mod tests {
             }
         }
         assert!(hits.is_empty(), "测试模块写/删了受保护账户：{:?}", hits);
+
+        // F8（P0 审计）：别名绕过——先把受保护账户绑定到变量、再把变量传给写函数，同行判定看不见。
+        // 加强：受保护字面量在测试模块里只允许出现在**纯函数/只读**调用行上；
+        // 唯一例外是运行期守卫自测 `guard_panics_on_protected_accounts`（其体内禁止任何写函数）。
+        let pure = ["precheck_set(", "validate_account(", "is_protected_account(", "cli_get(", "keychain_get(", "lib_get("];
+        let exempt_head = concat!("fn guard_panics_", "on_protected_accounts");
+        let ex_start = tests_src.find(exempt_head).expect("守卫自测应存在");
+        let ex_end = ex_start + tests_src[ex_start..].find("\n    }\n").expect("守卫自测体应可定位");
+        let exempt_body = &tests_src[ex_start..ex_end];
+        assert!(!writers.iter().any(|w| exempt_body.contains(w.as_str())), "守卫自测体内不得调用写函数");
+        let mut alias_hits = Vec::new();
+        let mut off = 0usize;
+        for line in tests_src.lines() {
+            let in_exempt = off >= ex_start && off < ex_end;
+            off += line.len() + 1;
+            let t = line.trim_start();
+            if in_exempt || t.starts_with("//") {
+                continue;
+            }
+            if banned.iter().any(|b| line.contains(b.as_str())) && !pure.iter().any(|p| line.contains(p)) {
+                alias_hits.push(t.to_string());
+            }
+        }
+        assert!(alias_hits.is_empty(), "受保护账户字面量出现在非只读上下文（可能经变量别名流入写函数）：{:?}", alias_hits);
     }
 }

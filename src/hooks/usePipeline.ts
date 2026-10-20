@@ -180,8 +180,6 @@ export const degradedFlagLabel = (flag: string): string => {
   }
 };
 
-/** 组装角色级 API 覆盖：过滤全空/全空格条目 + 非法角色 key（无覆盖的角色的不传给后端）
- * export 供单测（纯函数，无 Tauri 依赖） */
 /** 请求组装种类：生成 / 优化 / 断点续跑 */
 export type RequestKind = "generate" | "refine" | "resume";
 
@@ -231,6 +229,8 @@ export function buildPipelineRequest(
 export const phaseProgressNote = (phase: PhaseKind, preview: string | null): string =>
   phase === "structuring" ? "正在输出结构化方案…" : (preview?.trim() || "方案已通过校验");
 
+/** 组装角色级 API 覆盖：过滤全空/全空格条目 + 非法角色 key（无覆盖的角色的不传给后端）
+ * export 供单测（纯函数，无 Tauri 依赖） */
 export const buildRoleOverrides = (settings: AppSettings): PipelineRequest["role_overrides"] => {
   const overrides = settings.roleOverrides ?? {};
   const entries = Object.entries(overrides).filter(([k, v]) =>

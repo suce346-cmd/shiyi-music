@@ -88,13 +88,19 @@ pub fn extract_style_prompt(text: &str) -> Option<String> {
     Some(first.to_string())
 }
 
-/// 否定/退出项判定（P0-9）：`no X`、`without X`、`X drops out`、`X stop(s)` 不是在场乐器。
+/// 否定/退出项判定（P0-9）：`no X`、`without X`、`X drops out`、`X stop(s)` 不是在场乐器
+/// （`double/triple/quadruple/multiple stop(s)` 为弦乐演奏技法，除外——F9）。
 fn is_absent_item(part: &str) -> bool {
     let l = part.trim().to_lowercase();
+    // F9（P0 审计）：" stop" 尾项须排除演奏技法——弦乐 `double stops`/`triple stop` 是在场演奏，不是退出
+    let stop_tail = l.strip_suffix(" stops").or_else(|| l.strip_suffix(" stop"));
+    let stop_is_absence = stop_tail.is_some_and(|head| {
+        let prev = head.rsplit(' ').next().unwrap_or("");
+        !matches!(prev, "double" | "triple" | "quadruple" | "multiple")
+    });
     l.starts_with("no ")
         || l.starts_with("without ")
-        || l.ends_with(" stop")
-        || l.ends_with(" stops")
+        || stop_is_absence
         || l.ends_with(" drops out")
         || l.ends_with(" drop out")
 }
@@ -1777,6 +1783,10 @@ TRANSCRIPTION_ISSUE: 收敛方案含 ``` 围栏与参数行格式错误，需主
         assert_eq!(parse_section_instruments(l18), 2);
         // 中文能量尾项口径不变
         assert_eq!(parse_section_instruments("[古筝, 大提琴, 小空间, 能量:1]"), 2);
+        // F9：演奏技法 double/triple stop(s) 是在场乐器，不得误判为退出
+        assert_eq!(parse_section_instruments("[violin double stops, cello triple stop, drums stop, 能量:5]"), 2);
+        assert!(!is_absent_item("viola double stop"));
+        assert!(is_absent_item("Drums Stop"));
     }
 
     /// mode_c 带 extra 走正常校验路径
