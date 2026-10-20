@@ -445,6 +445,176 @@ pub(crate) async fn call_llm_silent(
     }
 }
 
+/// P1-2 结构化调用的请求体（纯函数，离线可测）。
+/// `none` 档不应走到这里（调用方先拒）；json_object 档在最前插入 schema system 消息。
+pub(crate) fn structured_body(
+    model: &str,
+    messages: &[Value],
+    max_tokens: u32,
+    temperature: f32,
+    mode: crate::llm_caps::StructuredMode,
+    schema_name: &str,
+    schema: &Value,
+) -> Value {
+    use crate::llm_caps::{response_format, schema_system_message, StructuredMode};
+    let mut msgs: Vec<Value> = Vec::with_capacity(messages.len() + 1);
+    if mode == StructuredMode::JsonObject {
+        msgs.push(schema_system_message(schema));
+    }
+    msgs.extend(messages.iter().cloned());
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": msgs,
+        "stream": false,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    });
+    if let Some(rf) = response_format(mode, schema_name, schema) {
+        body["response_format"] = rf;
+    }
+    body
+}
+
+/// `none` 档的固定报错（用户可见；不发请求、不自由文本兜底）。
+pub(crate) fn structured_unsupported_error(model: &str) -> AppError {
+    AppError::new(
+        ErrorKind::Validation,
+        format!(
+            "模型 {} 不支持结构化输出（json_schema / json_object 均不可用），请在设置中换用支持的模型或网关",
+            model
+        ),
+    )
+}
+
+/// 模型正文 → JSON → 本地 schema 校验 → 类型化。失败 = Parse，detail 含 JSON 路径。
+pub(crate) fn parse_structured<T: serde::de::DeserializeOwned>(raw: &str, schema: &Value) -> Result<(T, Value), AppError> {
+    let v: Value = serde_json::from_str(raw.trim()).map_err(|e| {
+        AppError::new(ErrorKind::Parse, format!("结构化输出不是合法 JSON: {}", e))
+    })?;
+    crate::plan::schema::check(schema, &v).map_err(|errs| {
+        let detail: Vec<String> = errs.iter().take(8).map(|e| e.to_string()).collect();
+        AppError::new(ErrorKind::Parse, format!("结构化输出未通过 schema 校验: {}", detail.join("; ")))
+    })?;
+    let t = serde_json::from_value(v.clone())
+        .map_err(|e| AppError::new(ErrorKind::Parse, format!("结构化输出反序列化失败: {}", e)))?;
+    Ok((t, v))
+}
+
+/// 结构化调用参数（端点 + 生成参数 + 档位/schema）；预算、消息与退避钩子单独传。
+pub(crate) struct StructuredCall<'a> {
+    pub base_url: &'a str,
+    pub api_key: &'a str,
+    pub model: &'a str,
+    pub max_tokens: u32,
+    pub gen: &'a crate::models::GenerationConfig,
+    pub run_id: &'a str,
+    pub reserve: std::time::Duration,
+    pub mode: crate::llm_caps::StructuredMode,
+    pub schema_name: &'a str,
+    pub schema: &'a Value,
+}
+
+/// P1-2 结构化调用（BLUEPRINT_v2 §2.2）：按档位带 response_format，返回本地校验通过的类型化值。
+/// - `none` 档直接报错，不发请求。
+/// - 允许 1 次**同请求**重发，仅限网络类错误或截断（finish_reason=length）；
+///   解析/校验失败不重发、不发"修复提示"，原样以 Parse 报出。
+/// - 非流式：结构化阶段不出 token 流，进度由调用方发 `PhaseProgress` 事件。
+/// - 思考参数不注入（部分网关 thinking 与 response_format 互斥）。
+pub(crate) async fn call_llm_structured<T: serde::de::DeserializeOwned>(
+    c: &StructuredCall<'_>,
+    messages: Vec<Value>,
+    budget: &SharedBudget,
+    notify: Option<BackoffHook<'_>>,
+) -> Result<(T, LLMResponse), AppError> {
+    let StructuredCall { base_url, api_key, model, max_tokens, gen, run_id, reserve, mode, schema_name, schema } = *c;
+    if mode == crate::llm_caps::StructuredMode::None {
+        return Err(structured_unsupported_error(model));
+    }
+    let client_timeout = budget.remaining().as_secs().clamp(10, 180);
+    let client = build_client(client_timeout)?;
+    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+    let max_tokens = max_tokens.min(gen.max_tokens());
+    let body = structured_body(model, &messages, max_tokens, gen.silent_temperature(), mode, schema_name, schema);
+    let mut resent = false;
+    loop {
+        let attempt = send_and_extract(&client, &url, api_key, &body, budget, run_id, reserve, notify).await;
+        let retryable = match &attempt {
+            Ok(resp) => is_truncated(&resp.finish_reason),
+            Err(e) => e.kind == ErrorKind::Network,
+        };
+        if retryable && !resent {
+            resent = true;
+            tracing::warn!(mode = mode.as_str(), "结构化调用网络失败或截断，同请求重发一次");
+            continue;
+        }
+        let resp = attempt?;
+        if is_truncated(&resp.finish_reason) {
+            return Err(AppError::new(ErrorKind::Parse, "结构化输出被截断（finish_reason=length），重发后仍截断".to_string()));
+        }
+        let (t, _) = parse_structured::<T>(&resp.raw, schema)?;
+        return Ok((t, resp));
+    }
+}
+
+/// 单档探测：发最小 response_format 请求，按状态码分类。
+async fn probe_one(client: &Client, url: &str, api_key: &str, model: &str, mode: crate::llm_caps::StructuredMode, budget: &SharedBudget, run_id: &str) -> Result<crate::llm_caps::ProbeOutcome, AppError> {
+    let body = crate::llm_caps::probe_body(model, mode);
+    let r = send_with_retry(
+        client.post(url).header("Authorization", format!("Bearer {}", api_key)).header("Content-Type", "application/json").json(&body),
+        budget,
+        run_id,
+        std::time::Duration::ZERO,
+        None,
+    )
+    .await?;
+    let status = r.status().as_u16();
+    let outcome = crate::llm_caps::classify_probe_status(status);
+    if outcome == crate::llm_caps::ProbeOutcome::Fatal {
+        let err = r.text().await.unwrap_or_else(|_| "unknown error".to_string());
+        return Err(AppError::api_status(status, &truncate_err(&err)));
+    }
+    Ok(outcome)
+}
+
+/// P1-2 能力探测（设置页"测试连接"成功后调用）：json_schema → json_object → none。
+/// 结果由前端按 `cap_key(base_url, model)` 缓存进 settings。鉴权/限流/5xx 原样报错，不记能力。
+#[tauri::command]
+pub async fn probe_structured_caps(
+    base_url: String,
+    api_key: String,
+    model: String,
+) -> Result<crate::llm_caps::StructuredMode, AppError> {
+    // S-1：与 test_api / 流水线同一道 URL 闸门
+    crate::models::validate_url(&base_url).map_err(|m| {
+        AppError::new(ErrorKind::Validation, format!("API 地址不合规：{}，请在设置中检查", m))
+    })?;
+    probe_structured_caps_unchecked(&base_url, &api_key, &model).await
+}
+
+/// 探测本体（URL 已过闸门；离线 mock 测试直接调用本函数）。
+async fn probe_structured_caps_unchecked(
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+) -> Result<crate::llm_caps::StructuredMode, AppError> {
+    use crate::budget::Budget;
+    use crate::llm_caps::{ProbeOutcome, StructuredMode};
+    use std::sync::Arc;
+    let client = build_client(60)?;
+    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+    let budget = Arc::new(Budget::with_timeout(std::time::Duration::from_secs(120)));
+    let run_id = format!(
+        "probe-caps-{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+    );
+    for mode in [StructuredMode::JsonSchema, StructuredMode::JsonObject] {
+        if probe_one(&client, &url, api_key, model, mode, &budget, &run_id).await? == ProbeOutcome::Supported {
+            return Ok(mode);
+        }
+    }
+    Ok(StructuredMode::None)
+}
+
 /// 调用 LLM 流式接口并逐 chunk 转发给前端（budget 透传gen 缺省 temperature 0.7）
 /// notify 透传退避播报钩子（#27-c）
 pub(crate) async fn call_llm_stream<R: Runtime>(
@@ -1219,5 +1389,190 @@ pub(crate) mod stream_it {
             .await
             .unwrap();
         assert_eq!(out.raw, "前尾行");
+    }
+}
+
+/// P1-2 离线 mock 网关：三档（json_schema / json_object / none）+ 探测 + 失败语义。
+#[cfg(test)]
+mod structured_it {
+    use super::*;
+    use crate::budget::Budget;
+    use crate::llm_caps::StructuredMode;
+    use crate::plan::{schema::song_plan_schema, SongPlan};
+    use std::io::{Read, Write};
+    use std::sync::{Arc, Mutex};
+
+    /// 依次应答 responses（每个连接一条，Connection: close），记录每个请求 JSON body。
+    fn serve_json(responses: Vec<(u16, String)>) -> (String, Arc<Mutex<Vec<Value>>>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen2 = seen.clone();
+        std::thread::spawn(move || {
+            for (status, body) in responses {
+                let Ok((mut s, _)) = listener.accept() else { return };
+                let mut buf = [0u8; 8192];
+                let mut req = Vec::new();
+                let head_end = loop {
+                    let n = s.read(&mut buf).unwrap_or(0);
+                    if n == 0 { return; }
+                    req.extend_from_slice(&buf[..n]);
+                    if let Some(i) = req.windows(4).position(|w| w == b"\r\n\r\n") { break i + 4; }
+                };
+                let head = String::from_utf8_lossy(&req[..head_end]).to_lowercase();
+                let len: usize = head
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length:").map(|v| v.trim().parse().unwrap_or(0)))
+                    .unwrap_or(0);
+                while req.len() < head_end + len {
+                    let n = s.read(&mut buf).unwrap_or(0);
+                    if n == 0 { break; }
+                    req.extend_from_slice(&buf[..n]);
+                }
+                if let Ok(v) = serde_json::from_slice::<Value>(&req[head_end..]) {
+                    seen2.lock().unwrap().push(v);
+                }
+                let resp = format!(
+                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = s.write_all(resp.as_bytes());
+            }
+        });
+        (format!("http://{addr}/v1"), seen)
+    }
+
+    fn completion(content: &str, finish: &str) -> String {
+        serde_json::json!({"choices":[{"message":{"content":content},"finish_reason":finish}]}).to_string()
+    }
+
+    fn plan_json() -> String {
+        serde_json::to_string(&crate::plan::fixtures::minimal_plan()).unwrap()
+    }
+
+    async fn call(url: &str, mode: StructuredMode) -> Result<(SongPlan, LLMResponse), AppError> {
+        let budget = Arc::new(Budget::with_timeout(std::time::Duration::from_secs(60)));
+        let schema = song_plan_schema();
+        let gen = crate::models::GenerationConfig::default();
+        let c = StructuredCall {
+            base_url: url,
+            api_key: "k",
+            model: "m",
+            max_tokens: 4000,
+            gen: &gen,
+            run_id: "run-structured-test",
+            reserve: std::time::Duration::ZERO,
+            mode,
+            schema_name: crate::plan::schema::SONG_PLAN_SCHEMA_NAME,
+            schema: &schema,
+        };
+        call_llm_structured::<SongPlan>(&c, vec![serde_json::json!({"role":"user","content":"x"})], &budget, None)
+        .await
+    }
+
+    #[tokio::test]
+    async fn json_schema_tier_sends_strict_schema_and_validates() {
+        let (url, seen) = serve_json(vec![(200, completion(&plan_json(), "stop"))]);
+        let (plan, _) = call(&url, StructuredMode::JsonSchema).await.expect("应通过");
+        assert_eq!(plan, crate::plan::fixtures::minimal_plan());
+        let req = &seen.lock().unwrap()[0];
+        assert_eq!(req["response_format"]["type"], "json_schema");
+        assert_eq!(req["response_format"]["json_schema"]["strict"], true);
+        assert_eq!(req["response_format"]["json_schema"]["schema"], song_plan_schema());
+        assert!(req.get("thinking").is_none());
+        assert_eq!(req["stream"], false);
+    }
+
+    #[tokio::test]
+    async fn json_object_tier_puts_schema_in_system_and_validates() {
+        let (url, seen) = serve_json(vec![(200, completion(&plan_json(), "stop"))]);
+        call(&url, StructuredMode::JsonObject).await.expect("应通过");
+        let req = &seen.lock().unwrap()[0];
+        assert_eq!(req["response_format"], serde_json::json!({"type":"json_object"}));
+        assert_eq!(req["messages"][0]["role"], "system");
+        assert!(req["messages"][0]["content"].as_str().unwrap().contains("\"additionalProperties\":false"));
+        assert_eq!(req["messages"][1]["content"], "x");
+    }
+
+    #[tokio::test]
+    async fn none_tier_errors_without_request_and_tells_user_to_switch() {
+        let (url, seen) = serve_json(vec![]);
+        let e = call(&url, StructuredMode::None).await.unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Validation);
+        assert!(e.message.contains("换用支持的模型"), "{}", e.message);
+        assert!(seen.lock().unwrap().is_empty(), "none 档不得发请求");
+    }
+
+    #[tokio::test]
+    async fn schema_violation_is_parse_with_json_path_and_no_retry() {
+        let mut v: Value = serde_json::from_str(&plan_json()).unwrap();
+        v.as_object_mut().unwrap().insert("bogus".into(), Value::Bool(true));
+        let (url, seen) = serve_json(vec![(200, completion(&v.to_string(), "stop")), (200, completion(&plan_json(), "stop"))]);
+        let e = call(&url, StructuredMode::JsonSchema).await.unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Parse);
+        assert!(e.message.contains("schema 校验") && e.message.contains("bogus"), "{}", e.message);
+        assert_eq!(seen.lock().unwrap().len(), 1, "校验失败不重发、不发修复提示");
+    }
+
+    #[tokio::test]
+    async fn non_json_text_is_parse_not_free_text_fallback() {
+        let (url, _) = serve_json(vec![(200, completion("好的，方案如下：……", "stop"))]);
+        let e = call(&url, StructuredMode::JsonObject).await.unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Parse);
+        assert!(e.message.contains("不是合法 JSON"), "{}", e.message);
+    }
+
+    #[tokio::test]
+    async fn truncation_resends_same_request_exactly_once() {
+        let (url, seen) = serve_json(vec![(200, completion("{\"sch", "length")), (200, completion(&plan_json(), "stop"))]);
+        call(&url, StructuredMode::JsonSchema).await.expect("重发一次后应通过");
+        {
+            let s = seen.lock().unwrap();
+            assert_eq!(s.len(), 2);
+            assert_eq!(s[0], s[1], "必须是同请求重发");
+        }
+
+        let (url, seen) = serve_json(vec![(200, completion("{", "length")), (200, completion("{", "length")), (200, completion(&plan_json(), "stop"))]);
+        let e = call(&url, StructuredMode::JsonSchema).await.unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Parse);
+        assert!(e.message.contains("截断"), "{}", e.message);
+        assert_eq!(seen.lock().unwrap().len(), 2, "最多重发 1 次");
+    }
+
+    async fn probe(responses: Vec<(u16, String)>) -> (Result<StructuredMode, AppError>, Vec<Value>) {
+        let (url, seen) = serve_json(responses);
+        let r = probe_structured_caps_unchecked(&url, "k", "m").await;
+        let s = seen.lock().unwrap().clone();
+        (r, s)
+    }
+
+    #[tokio::test]
+    async fn probe_tiers_schema_object_none() {
+        let ok = || (200, completion("{\"ok\":true}", "stop"));
+        let bad = || (400, "{\"error\":\"response_format unsupported\"}".to_string());
+        let (r, s) = probe(vec![ok()]).await;
+        assert_eq!(r.unwrap(), StructuredMode::JsonSchema);
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0]["response_format"]["type"], "json_schema");
+
+        let (r, s) = probe(vec![bad(), ok()]).await;
+        assert_eq!(r.unwrap(), StructuredMode::JsonObject);
+        assert_eq!(s[1]["response_format"]["type"], "json_object");
+
+        let (r, s) = probe(vec![bad(), bad()]).await;
+        assert_eq!(r.unwrap(), StructuredMode::None);
+        assert_eq!(s.len(), 2);
+
+        let (r, s) = probe(vec![(401, "{}".into())]).await;
+        assert_eq!(r.unwrap_err().kind, ErrorKind::Auth, "鉴权失败不得被记成能力档");
+        assert_eq!(s.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn probe_command_keeps_url_gate() {
+        let (url, seen) = serve_json(vec![(200, completion("{}", "stop"))]);
+        let e = probe_structured_caps(url, "k".into(), "m".into()).await.unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Validation);
+        assert!(seen.lock().unwrap().is_empty(), "闸门拒绝时不得发出请求");
     }
 }

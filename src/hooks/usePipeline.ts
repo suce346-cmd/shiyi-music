@@ -10,6 +10,7 @@ import type {
   PipelineRoleKey,
   ExpertCard,
   BackoffInfo,
+  PhaseKind,
 } from "../types";
 import { errText } from "../types";
 import { sanitizeStored } from "./useSettings";
@@ -219,13 +220,19 @@ export function buildPipelineRequest(
     round_gate: kind === "resume" ? false : (opts.settings.roundGate ?? false),
     // 产出语言：三路径一致透传（缺省/旧数据 → "zh"）
     output_lang: opts.settings.outputLang ?? "zh",
+    // P1-2：探测缓存透传（后端按 角色显式 → 缓存 → 缺省 json_object 解析档位）
+    structured_caps: sanitizeStored(opts.settings).structuredCaps,
   };
 }
+
+/** P1-2 结构化阶段进度文案（structuring = 正在输出；parsed = 预览或通用完成语） */
+export const phaseProgressNote = (phase: PhaseKind, preview: string | null): string =>
+  phase === "structuring" ? "正在输出结构化方案…" : (preview?.trim() || "方案已通过校验");
 
 export const buildRoleOverrides = (settings: AppSettings): PipelineRequest["role_overrides"] => {
   const overrides = settings.roleOverrides ?? {};
   const entries = Object.entries(overrides).filter(([k, v]) =>
-    ROLE_NAMES[k] && v && (v.model?.trim() || v.api_key?.trim() || v.base_url?.trim())
+    ROLE_NAMES[k] && v && (v.model?.trim() || v.api_key?.trim() || v.base_url?.trim() || v.structured_mode)
   );
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 };
@@ -508,6 +515,10 @@ export function usePipeline() {
               startedAt: Date.now(),
             },
           }));
+          break;
+        case "phase_progress":
+          // P1-2：结构化阶段无 token 流，以进度+解析后预览代替
+          updateExpert(e.role, { status: "working", note: phaseProgressNote(e.phase, e.preview) });
           break;
         case "backoff_end":
           // 退避结束、即将发起下一次尝试——撤下倒计时提示

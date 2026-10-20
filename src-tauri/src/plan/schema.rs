@@ -65,7 +65,7 @@ impl std::fmt::Display for PlanSchemaError {
     }
 }
 
-fn check(schema: &Value, instance: &Value) -> Result<(), Vec<PlanSchemaError>> {
+pub(crate) fn check(schema: &Value, instance: &Value) -> Result<(), Vec<PlanSchemaError>> {
     let validator = jsonschema::validator_for(schema).map_err(|e| {
         vec![PlanSchemaError { path: String::new(), message: format!("schema 无效: {e}") }]
     })?;

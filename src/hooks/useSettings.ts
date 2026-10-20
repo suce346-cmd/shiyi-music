@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { AppSettings, RoleApiOverride } from "../types";
+import type { AppSettings, RoleApiOverride, StructuredMode } from "../types";
+import { STRUCTURED_MODES } from "../types";
 
 const STORAGE_KEY = "suno-prompt-settings";
 /** localStorage 中的明文 key 哨兵——该字段在钥匙串，本地只存标记 */
@@ -69,10 +70,21 @@ export function sanitizeStored(raw: unknown): AppSettings {
         if (typeof e.model === "string") entry.model = e.model;
         if (e.api_key === KEYCHAIN_SENTINEL) entry.api_key = KEYCHAIN_SENTINEL;
         if (typeof e.base_url === "string") entry.base_url = e.base_url;
+        if (STRUCTURED_MODES.includes(e.structured_mode as StructuredMode)) {
+          entry.structured_mode = e.structured_mode as StructuredMode;
+        }
         cleaned[k] = entry;
       }
     }
     base.roleOverrides = cleaned;
+  }
+  // P1-2 探测缓存清洗：只留 string 键 + 合法档位值
+  if (typeof o.structuredCaps === "object" && o.structuredCaps !== null && !Array.isArray(o.structuredCaps)) {
+    const caps: Record<string, StructuredMode> = {};
+    for (const [k, v] of Object.entries(o.structuredCaps)) {
+      if (STRUCTURED_MODES.includes(v as StructuredMode)) caps[k] = v as StructuredMode;
+    }
+    base.structuredCaps = caps;
   }
   return base;
 }

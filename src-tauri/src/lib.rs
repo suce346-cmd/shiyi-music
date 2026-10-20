@@ -3,6 +3,7 @@ pub mod commands;
 pub mod energy;
 pub mod errors;
 pub mod knowledge;
+pub mod llm_caps;
 pub mod logging;
 pub mod models;
 pub mod plan;
@@ -33,6 +34,7 @@ pub fn run() {
             commands::orchestrator::pipeline_generate,
             commands::orchestrator::pipeline_refine,
             commands::llm::test_api,
+            commands::llm::probe_structured_caps,
             commands::orchestrator::cancel_pipeline,
             commands::orchestrator::interject_feedback,
             commands::orchestrator::round_gate_decide,

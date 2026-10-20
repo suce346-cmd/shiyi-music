@@ -14,6 +14,7 @@
 - **[S3 修复] 变更记录与 QA 数据重复（C-13/C-14）**：补齐 0.5.5 版本段与本 Unreleased 段；删除 `docs/qa/results_12round_final.jsonl`（与 `results_v4_final.jsonl` 字节相同，MD5 `0ddd1ecc…`）；新增守护单测：当前版本必须有 CHANGELOG 段、`docs/qa/*.jsonl` 不得内容重复。
 - **[S3 清理] 仓库垃圾清理（P1-J，§8 / D10 / D14）**：删除 8 份旧计划文档、`public/tauri.svg`、移动端图标（android/ios）与 Windows Store 图标（均零引用）；`speechOrder.test.ts` 移入 `src/test/`；`.gitignore` 增 `graphify-out/`、`.workbuddy/` 与审计派生物；9 处无主 `#[allow(dead_code)]` 逐个判定（测试专用改 `#[cfg(test)]`，无调用者 `logging::log_dir` 删除，其余为有调用者的 pub 项直接去掉）；Linux 构建的未使用导入告警修复。新增两项守护测试防回流。
 - **[新架构] SongPlan IR 类型与 Schema（P1-1，§2.1 / RULE-SUNO-PROFILE）**：新增 `src-tauri/src/plan/`（`mod.rs` 类型唯一定义点、`schema.rs` schemars 生成 + strict 后处理 + jsonschema 本地校验 + 快照、`suno_profile.rs` 平台限制带事实来源 + `get_suno_meta` 命令）。依赖 `schemars`、`jsonschema`。
+- **[新架构] 结构化调用 + 能力探测（P1-2，§2.2）**：新增 `llm_caps.rs`（`json_schema`/`json_object`/`none` 三档；解析顺序 角色显式 → `(base_url, model)` 探测缓存 → 缺省 `json_object`）与 `call_llm_structured`（任何档位都做本地 schema 二次校验；失败为 Parse 并带 JSON 路径，不静默降级、不自由文本兜底；仅网络/截断允许 1 次同请求重发；`none` 档不发请求，直接提示换模型）。新命令 `probe_structured_caps`（测试连接成功后自动探测，鉴权/限流/5xx 不记档）；设置页显示探测结果（`none` 为醒目告警），角色配置可显式选择档位；新增 `PhaseProgress` 事件（结构化阶段以进度+预览代替 token 流）。离线 mock 网关覆盖三档、探测、截断重发与校验失败。
 
 ## 0.5.5（2026-09-14 ~ 2026-10-04）钥匙串数据安全 · 产出语言 · 审计批修复
 

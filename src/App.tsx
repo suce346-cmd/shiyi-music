@@ -20,9 +20,10 @@ import ProviderTemplates from "./components/ProviderTemplates";
 import { modelsForBaseUrl } from "./data/providers";
 import { formatUrlIssue } from "./utils/urlGuard";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import type { AppError, Mode, ChatMessage, ChatTurn, HistoryEntry, LLMStatus, ExpertCard, PipelineRoleKey, StreamChunk } from "./types";
+import type { AppError, Mode, ChatMessage, ChatTurn, HistoryEntry, LLMStatus, ExpertCard, PipelineRoleKey, StreamChunk, StructuredMode } from "./types";
 import { acceptStreamChunk } from "./utils/streamChunk";
-import { MODE_LABELS, errKind, errText, isCancelledError } from "./types";
+import { MODE_LABELS, errKind, errText, isCancelledError, capKey, STRUCTURED_MODES } from "./types";
+import { probeStructuredCaps, withProbedCap, effectiveMode } from "./utils/structuredCaps";
 import { t } from "./i18n";
 
 const HISTORY_KEY = "suno-prompt-history";
@@ -181,7 +182,7 @@ export default function App() {
     const trimmed = value.trim();
     const current = settings.roleOverrides?.[role] ?? {};
     const next = { ...current, [field]: trimmed || undefined };
-    const cleaned = next.model || next.api_key || next.base_url ? next : undefined;
+    const cleaned = next.model || next.api_key || next.base_url || next.structured_mode ? next : undefined;
     const roleOverrides = { ...settings.roleOverrides };
     if (cleaned) {
       roleOverrides[role] = cleaned;
@@ -190,6 +191,15 @@ export default function App() {
     }
     updateSettings({ roleOverrides });
     setTestResult(null);
+  }, [settings, updateSettings]);
+
+  /** P1-2：设置/清除某角色的结构化档位（清除后条目全空则移除） */
+  const updateRoleStructuredMode = useCallback((role: PipelineRoleKey, mode: StructuredMode | undefined) => {
+    const next = { ...(settings.roleOverrides?.[role] ?? {}), structured_mode: mode };
+    const roleOverrides = { ...settings.roleOverrides };
+    if (next.model || next.api_key || next.base_url || next.structured_mode) roleOverrides[role] = next;
+    else delete roleOverrides[role];
+    updateSettings({ roleOverrides });
   }, [settings, updateSettings]);
 
   /** 设置导入导出结果提示 */
@@ -303,12 +313,15 @@ export default function App() {
         model: settings.model,
       });
       setTestResult("ok");
+      // P1-2：连接成功后探测结构化档位并缓存（探测失败不记档）
+      const mode = await probeStructuredCaps(settings.baseUrl, settings.apiKey, settings.model);
+      if (mode) updateSettings({ structuredCaps: withProbedCap(settingsRef.current.structuredCaps, settings.baseUrl, settings.model, mode) });
     } catch {
       setTestResult("fail");
     } finally {
       setTestingApi(false);
     }
-  }, [settings]);
+  }, [settings, updateSettings]);
 
   /** 角色级测试状态（idle/testing/ok/fail） */
   const [roleTestStates, setRoleTestStates] = useState<Record<string, "idle" | "testing" | "ok" | "fail">>({});
@@ -340,10 +353,11 @@ export default function App() {
   }, []);
 
   // 配置变更后旧测试徽标失效（✓/✗ 与当前配置不符）——settings 任何字段变化都重置
+  // P1-2：探测缓存写入（structuredCaps）不算配置变更——否则刚测出的 ✓ 会被自己清掉
+  const settingsSansCaps = JSON.stringify({ ...settings, structuredCaps: undefined });
   useEffect(() => {
     setRoleTestStates({});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings]);
+  }, [settingsSansCaps]);
   /** 当前配置快照：测试请求 resolve 时对比，配置已变则结果过期丢弃（防旧结果写入新配置旁） */
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
@@ -366,12 +380,14 @@ export default function App() {
       const cur = settingsRef.current;
       if (cur.apiKey !== snap.apiKey || cur.model !== snap.model || cur.baseUrl !== snap.baseUrl) return;
       setRoleTestStates((p) => ({ ...p, [role]: "ok" }));
+      const mode = await probeStructuredCaps(baseUrl, apiKey, model);
+      if (mode) updateSettings({ structuredCaps: withProbedCap(settingsRef.current.structuredCaps, baseUrl, model, mode) });
     } catch {
       const cur = settingsRef.current;
       if (cur.apiKey !== snap.apiKey || cur.model !== snap.model || cur.baseUrl !== snap.baseUrl) return;
       setRoleTestStates((p) => ({ ...p, [role]: "fail" }));
     }
-  }, [settings]);
+  }, [settings, updateSettings]);
 
   const saveToHistory = useCallback((input: string, output: string, conv: ChatTurn[], currentMode: Mode, usage?: { prompt_tokens: number; completion_tokens: number }) => {
     const entry: HistoryEntry = { id: newId(), mode: currentMode, input, output, conversation: conv, usage, timestamp: Date.now() };
@@ -912,6 +928,16 @@ export default function App() {
             {testResult === "fail" && t(settings.language, "settings.fail")}
             {testResult === null && (testingApi ? t(settings.language, "settings.testing") : t(settings.language, "settings.test"))}
           </button>
+          {/* P1-2：当前全局配置的结构化档位（探测结果） */}
+          {(() => {
+            const m = settings.structuredCaps?.[capKey(settings.baseUrl, settings.model)];
+            return m ? (
+              <p role={m === "none" ? "alert" : undefined}
+                className={`text-[10px] leading-relaxed ${m === "none" ? "text-danger" : "text-text-muted"}`}>
+                {t(settings.language, `settings.structured.${m}`)}
+              </p>
+            ) : null;
+          })()}
           {/* 日志/配置目录：两个低频入口堆叠成一列，与"测试连接"同排（一页化） */}
           <div className="space-y-1.5">
           {/* 打开日志目录（诊断用，失败提示路径） */}
@@ -992,6 +1018,20 @@ export default function App() {
                           onChange={e => updateRoleOverride(role, "base_url", e.target.value)}
                           placeholder="API 地址（留空继承全局）"
                           className="w-full bg-surface-0 border border-border/60 rounded-lg px-2.5 py-1.5 text-[11px] text-text-1 placeholder:text-text-muted/30 focus:outline-none focus:border-brand-500/40 transition-all duration-150" />
+                        {/* P1-2：结构化档位显式选择（自动 = 探测缓存 / 后端缺省 json_object） */}
+                        <select value={settings.roleOverrides?.[role]?.structured_mode ?? ""}
+                          aria-label={`${ROLE_NAMES[role]} 结构化输出档位`}
+                          onChange={e => updateRoleStructuredMode(role, (e.target.value || undefined) as StructuredMode | undefined)}
+                          className="w-full bg-surface-0 border border-border/60 rounded-lg px-2 py-1 text-[11px] text-text-1 focus:outline-none focus:border-brand-500/40">
+                          <option value="">{t(settings.language, "settings.structured.auto")}</option>
+                          {STRUCTURED_MODES.map((m) => <option key={m} value={m}>{m}</option>)}
+                        </select>
+                        {effectiveMode(settings.roleOverrides?.[role]?.structured_mode, settings.structuredCaps,
+                          roleBaseUrl, settings.roleOverrides?.[role]?.model || settings.model) === "none" && (
+                          <p role="alert" className="text-[9px] text-danger leading-relaxed">
+                            {t(settings.language, "settings.structured.none")}
+                          </p>
+                        )}
                         {roleUrlIssue && (
                           <p className="text-[9px] text-danger leading-relaxed">
                             {t(settings.language, `settings.url.err.${roleUrlIssue}`)}

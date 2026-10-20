@@ -29,6 +29,8 @@ export interface AppSettings {
   /** 产出语言三态（"zh" 全中文 / "mix" 中文歌词+英文 Style / "en" 全英文）：
    *  界面语言与专家讨论始终为中文。缺省 "zh"（旧数据无此字段 → 现状行为零漂移）。 */
   outputLang?: OutputLang;
+  /** P1-2 结构化能力探测缓存（键 = capKey(baseUrl, model)；测试连接成功后写入） */
+  structuredCaps?: Record<string, StructuredMode>;
 }
 
 /** 产出语言值域（单源；请求与设置共用）。BLUEPRINT_v2 §3.8 将收敛为 zh/en（另批执行）。 */
@@ -109,7 +111,20 @@ export interface RoleApiOverride {
   model?: string;
   api_key?: string;
   base_url?: string;
+  /** P1-2 结构化输出档位显式选择（缺省 = 探测缓存 / 后端缺省档 json_object） */
+  structured_mode?: StructuredMode;
 }
+
+/** P1-2 结构化输出档位（与 Rust `llm_caps::StructuredMode` 同源，跨语言锁见 wireProtocol.test.ts） */
+export type StructuredMode = "json_schema" | "json_object" | "none";
+export const STRUCTURED_MODES: readonly StructuredMode[] = ["json_schema", "json_object", "none"];
+
+/** 探测缓存键（与 Rust `llm_caps::cap_key` 同形：base_url 去空白与尾斜杠 + "|" + model 去空白） */
+export const capKey = (baseUrl: string, model: string): string =>
+  `${baseUrl.trim().replace(/\/+$/, "")}|${model.trim()}`;
+
+/** P1-2 结构化阶段进度值（与 Rust `models::PhaseKind` 同源） */
+export type PhaseKind = "structuring" | "parsed";
 
 /** 主持人阶段（与 Rust HostStage 对齐）：initial=阶段0统领初稿 / summarize=阶段1汇总分发 */
 export type HostStage = "initial" | "summarize";
@@ -145,7 +160,9 @@ export type PipelineEvent =
   /** #27-c 进入退避等待（原因 + 实际等待秒数，前端据此显示倒计时） */
   | { type: "backoff"; attempt: number; wait_secs: number; reason: BackoffReason }
   /** #27-c 退避结束、即将重试（前端据此撤下倒计时） */
-  | { type: "backoff_end"; attempt: number };
+  | { type: "backoff_end"; attempt: number }
+  /** P1-2 结构化阶段进度（该阶段无 token 流；parsed 时 preview 为结构化摘要） */
+  | { type: "phase_progress"; role: PipelineRoleKey; phase: PhaseKind; preview: string | null };
 
 /**
  * #27-c 退避原因（与 Rust `llm::BackoffReason::as_str` 同源）。
@@ -231,6 +248,8 @@ export interface PipelineRequest {
    *  C-04：**必填**——请求统一由 usePipeline.buildPipelineRequest 组装（run/refine/resume 单源），
    *  任何路径漏传即 TS 编译失败（旧 resume 漏传 → 后端缺省 zh，en/mix 设置在续跑被静默忽略）。 */
   output_lang: OutputLang;
+  /** P1-2 结构化能力探测缓存透传（旧后端忽略） */
+  structured_caps?: Record<string, StructuredMode>;
 }
 
 /** llm-chunk 流式事件载荷（与后端 models::StreamChunk 对齐）。

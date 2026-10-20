@@ -340,7 +340,7 @@ mod tests {
         let edge = GenerationConfig { temperature: Some(2.0), max_tokens: Some(1000) };
         assert!(edge.validate().is_ok());
         // generation 越界经 validate_request 透出
-        let mut req = PipelineRequest {
+        let mut req = PipelineRequest { structured_caps: None,
             output_lang: "zh".into(),
             mode: Mode::ModeB,
             user_input: "雨天".into(),
@@ -375,7 +375,7 @@ mod tests {
     #[test]
     fn validate_request_rejects_bad_input() {
         fn good() -> PipelineRequest {
-            PipelineRequest {
+            PipelineRequest { structured_caps: None,
                 output_lang: "zh".into(),
                 mode: Mode::ModeB,
                 user_input: "雨天".into(),
@@ -494,7 +494,7 @@ mod tests {
     #[test]
     fn validate_request_rejects_role_override_internal_url() {
         fn good() -> PipelineRequest {
-            PipelineRequest {
+            PipelineRequest { structured_caps: None,
                 output_lang: "zh".into(),
                 mode: Mode::ModeB,
                 user_input: "雨天".into(),
@@ -516,24 +516,24 @@ mod tests {
         // 合法覆盖通过
         let mut r = good();
         let mut map = HashMap::new();
-        map.insert(PipelineRole::Emotion, RoleApiOverride { model: None, api_key: None, base_url: Some("https://1.1.1.1/v1".into()) });
+        map.insert(PipelineRole::Emotion, RoleApiOverride { structured_mode: None, model: None, api_key: None, base_url: Some("https://1.1.1.1/v1".into()) });
         r.role_overrides = Some(map);
         assert!(validate_request(&r, None).is_ok());
         // 覆盖指向内网 → 拒绝且报出角色名
         let mut map = HashMap::new();
-        map.insert(PipelineRole::Emotion, RoleApiOverride { model: None, api_key: None, base_url: Some("http://127.0.0.1:9000/v1".into()) });
+        map.insert(PipelineRole::Emotion, RoleApiOverride { structured_mode: None, model: None, api_key: None, base_url: Some("http://127.0.0.1:9000/v1".into()) });
         r.role_overrides = Some(map);
         let e = validate_request(&r, None).unwrap_err();
         assert_eq!(e.kind, ErrorKind::Validation);
         assert!(e.message.contains("情感分析师"), "报错应带角色名：{}", e.message);
         // 覆盖为空串 → 拒绝
         let mut map = HashMap::new();
-        map.insert(PipelineRole::Lyricist, RoleApiOverride { model: None, api_key: None, base_url: Some("   ".into()) });
+        map.insert(PipelineRole::Lyricist, RoleApiOverride { structured_mode: None, model: None, api_key: None, base_url: Some("   ".into()) });
         r.role_overrides = Some(map);
         assert_eq!(validate_request(&r, None).unwrap_err().kind, ErrorKind::Validation);
         // 覆盖非 http(s) → 拒绝
         let mut map = HashMap::new();
-        map.insert(PipelineRole::Host, RoleApiOverride { model: None, api_key: None, base_url: Some("ftp://x.com".into()) });
+        map.insert(PipelineRole::Host, RoleApiOverride { structured_mode: None, model: None, api_key: None, base_url: Some("ftp://x.com".into()) });
         r.role_overrides = Some(map);
         assert_eq!(validate_request(&r, None).unwrap_err().kind, ErrorKind::Validation);
     }
@@ -562,7 +562,7 @@ mod tests {
 
     #[test]
     fn role_api_override_roundtrip() {
-        let ov = RoleApiOverride {
+        let ov = RoleApiOverride { structured_mode: None,
             model: Some("m".into()),
             api_key: None,
             base_url: None,
@@ -657,6 +657,9 @@ pub struct RoleApiOverride {
     pub api_key: Option<String>,
     #[serde(default)]
     pub base_url: Option<String>,
+    /// P1-2：结构化输出档位显式选择（None = 走探测缓存 / 缺省档，见 `llm_caps::resolve_mode`）
+    #[serde(default)]
+    pub structured_mode: Option<crate::llm_caps::StructuredMode>,
 }
 
 /// 流水线请求（前端 → 后端）
@@ -699,6 +702,9 @@ pub struct PipelineRequest {
     /// 未知值 → 保守按 "zh" 处理（不做静默猜测）。
     #[serde(default = "default_output_lang")]
     pub output_lang: String,
+    /// P1-2：结构化能力探测缓存（键 = `llm_caps::cap_key(base_url, model)`）；旧前端无此字段 → None
+    #[serde(default)]
+    pub structured_caps: Option<HashMap<String, crate::llm_caps::StructuredMode>>,
 }
 
 /// output_lang 缺省值：全中文（现状行为）。
@@ -1007,6 +1013,17 @@ pub enum PipelineEvent {
     Backoff { attempt: u32, wait_secs: u64, reason: String },
     /// #27-c 退避结束、即将发起下一次尝试——前端据此撤下倒计时提示。
     BackoffEnd { attempt: u32 },
+    /// P1-2 结构化阶段进度（该阶段不出 token 流）：structuring = 正在输出方案；
+    /// parsed = 已通过本地 schema 校验，preview 为人类可读摘要（供圆桌面板结构化预览）。
+    PhaseProgress { role: PipelineRole, phase: PhaseKind, preview: Option<String> },
+}
+
+/// `PipelineEvent::PhaseProgress` 的阶段值（wire = snake_case）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PhaseKind {
+    Structuring,
+    Parsed,
 }
 
 /// 事件信封——run_id 归属 + 事件本体（前端按 run_id 过滤，替代旧纯 token 补丁的后端原生支持）

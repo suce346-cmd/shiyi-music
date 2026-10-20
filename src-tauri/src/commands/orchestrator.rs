@@ -3362,7 +3362,7 @@ mod tests {
     #[test]
     fn resolve_api_partial_override_falls_back_per_field() {
         let mut map = std::collections::HashMap::new();
-        map.insert(PipelineRole::Auditor, crate::models::RoleApiOverride {
+        map.insert(PipelineRole::Auditor, crate::models::RoleApiOverride { structured_mode: None,
             model: Some("auditor-strong".into()),
             api_key: None,
             base_url: None,
@@ -3379,7 +3379,7 @@ mod tests {
     #[test]
     fn resolve_api_full_override_uses_override() {
         let mut map = std::collections::HashMap::new();
-        map.insert(PipelineRole::Host, crate::models::RoleApiOverride {
+        map.insert(PipelineRole::Host, crate::models::RoleApiOverride { structured_mode: None,
             model: Some("host-model".into()),
             api_key: Some("host-key".into()),
             base_url: Some("https://host.example.com/v1".into()),
@@ -3885,7 +3885,7 @@ mod tests {
     }
 
     fn make_request(overrides: Option<std::collections::HashMap<PipelineRole, crate::models::RoleApiOverride>>) -> PipelineRequest {
-        PipelineRequest {
+        PipelineRequest { structured_caps: None,
             output_lang: "zh".into(),
             mode: Mode::ModeB,
             user_input: "雨天".into(),
@@ -4340,7 +4340,7 @@ mod tests {
                     reason: "审计样例".into(),
                 }], "审计样例 reason".into()),
             ];
-            let req = PipelineRequest {
+            let req = PipelineRequest { structured_caps: None,
                 output_lang: "zh".into(),
                 mode: m.clone(),
                 user_input: "审计样例输入：深夜加班打工人的心酸".into(),
