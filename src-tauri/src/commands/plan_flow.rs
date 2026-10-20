@@ -169,11 +169,11 @@ pub async fn host_initial_plan<R: Runtime>(
         &schema,
     );
     let messages = vec![json!({"role":"system","content":system}), json!({"role":"user","content":user})];
-    let (ir, resp): (PlanIr, _) = llm::call_llm_structured(&call, messages, budget, None).await?;
+    let hook = super::orchestrator::backoff_hook(app.clone(), run_id.to_string());
+    let (ir, resp): (PlanIr, _) = llm::call_llm_structured(&call, messages, budget, Some(&hook)).await?;
+    super::orchestrator::emit_usage(app, PipelineRole::Host, &resp, run_id);
     let preview = Some(format!("title={:?} sections={}", ir.0.title, ir.0.sections.len()));
     emit_progress(app, run_id, PipelineRole::Host, PhaseKind::Parsed, preview);
-    // usage 由调用方 emit（与旧路径一致，便于测试桩）
-    let _ = resp;
     Ok(ir.0)
 }
 
@@ -205,7 +205,9 @@ pub async fn host_summarize_plan<R: Runtime>(
         &schema,
     );
     let messages = vec![json!({"role":"system","content":system}), json!({"role":"user","content":user})];
-    let (summary, _resp): (HostSummary, _) = llm::call_llm_structured(&call, messages, budget, None).await?;
+    let hook = super::orchestrator::backoff_hook(app.clone(), run_id.to_string());
+    let (summary, resp): (HostSummary, _) = llm::call_llm_structured(&call, messages, budget, Some(&hook)).await?;
+    super::orchestrator::emit_usage(app, PipelineRole::Host, &resp, run_id);
     emit_progress(
         app,
         run_id,
@@ -245,7 +247,8 @@ pub async fn role_review_structured<R: Runtime>(
         &schema,
     );
     let messages = vec![json!({"role":"system","content":system}), json!({"role":"user","content":user})];
-    let (out, resp) = llm::call_llm_structured::<ReviewOut>(&call, messages, budget, None).await?;
+    let hook = super::orchestrator::backoff_hook(app.clone(), run_id.to_string());
+    let (out, resp) = llm::call_llm_structured::<ReviewOut>(&call, messages, budget, Some(&hook)).await?;
     emit_progress(
         app,
         run_id,
@@ -311,7 +314,9 @@ pub async fn auditor_finalize<R: Runtime>(
             &schema,
         );
         let messages = vec![json!({"role":"system","content":system}), json!({"role":"user","content":user})];
-        let (next, _resp) = llm::call_llm_structured::<SongPlan>(&call, messages, budget, None).await?;
+        let hook = super::orchestrator::backoff_hook(app.clone(), run_id.to_string());
+        let (next, resp) = llm::call_llm_structured::<SongPlan>(&call, messages, budget, Some(&hook)).await?;
+        super::orchestrator::emit_usage(app, PipelineRole::Auditor, &resp, run_id);
         plan = next;
         emit_progress(
             app,

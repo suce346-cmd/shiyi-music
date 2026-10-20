@@ -8,7 +8,7 @@
 //!   全角色与校验员无异议或满 3 轮收敛
 //! - 阶段 2：校验员按标准格式输出最终提示词包；代码硬校验兜底（失败打回重格式化）
 
-use crate::commands::{cancel, gate, interject, llm, plan_flow, prompts, roles, validator};
+use crate::commands::{cancel, gate, interject, llm, plan_flow, prompts, roles};
 use crate::energy::plan_energy_range;
 use crate::errors::AppError;
 use crate::knowledge::KnowledgeBase;
@@ -404,7 +404,6 @@ fn keyword_table_render(
 }
 
 
-
 // ---------------------------------------------------------------------------
 // 注入量规范（条数上限）——集中定义，测试锁定，禁止散改
 // 依据：知识库注入是"参考素材"而非"全量拷贝"，条数过多则 LLM 记不住重点。
@@ -667,14 +666,10 @@ async fn execute_review<R: Runtime>(
     run_id: &str,
 ) -> Result<ReviewResult, AppError> {
     use crate::models::PipelineEnvelope;
-    // 生成参数（缺省默认；调用点透传给 llm 层）
-    let gen = req.generation.clone().unwrap_or_default();
-    // 本函数事件包 envelope
+    // 本函数事件包 run_id
     let emit = |event: PipelineEvent| {
         let _ = app.emit("pipeline", PipelineEnvelope::new(run_id.to_string(), event));
     };
-    // #27-c 退避播报钩子（本函数两次调用共用，同一 run 同一信封）
-    let backoff = backoff_hook(app.clone(), run_id.to_string());
     let kb = load_knowledge()?;
     let r = roles::role_for(role);
 
@@ -705,7 +700,6 @@ async fn execute_review<R: Runtime>(
 
     let (base_url, api_key, model) = resolve_api(req, role);
     emit(PipelineEvent::StepStart { role });
-    let _ = (&gen, &backoff); // 结构化路径由 plan_flow 内建重发；保留绑定以免未用告警
     let (out, resp) = match plan_flow::role_review_structured(
         app, req, role, system, user, budget, run_id, &base_url, &api_key, &model,
     )
@@ -718,11 +712,6 @@ async fn execute_review<R: Runtime>(
                 flag: "call_degraded".into(),
                 detail: format!("{} 结构化审改解析失败，意见作废（已降级警示）: {}", role.name(), e.message),
             });
-            emit_usage(app, role, &crate::models::LLMResponse {
-                raw: String::new(),
-                finish_reason: None,
-                usage: None,
-            }, run_id);
             let result = ReviewResult {
                 agree: false,
                 changes: vec![],
@@ -1055,7 +1044,6 @@ async fn run_host_initial<R: Runtime>(
 }
 
 
-
 /// 主持人汇总冲突预检（P1-3：content 为 JSON Value）。
 type ConflictPair = (usize, usize, usize, usize, String);
 
@@ -1164,50 +1152,6 @@ async fn run_host_summarize<R: Runtime>(
 // 校验员（阶段 2：最终格式输出端口）
 // ---------------------------------------------------------------------------
 
-/// Mode C 改词专项（阶段 2 auditor 格式输出的 user 侧追加块）。
-/// L-2 单源：行数口径与 validator 同一数字——validator 允许尾部 ≤LYRIC_FILL_TAIL_ALLOW 行收尾
-/// （validator.rs:266），旧规则此处写"总行数完全一致/禁止增删"，与校验员系统 prompt 和
-/// 硬校验的"尾部 ≤2 行"互相打架，产生无意义打回循环。
-#[cfg(test)]
-fn mode_c_special_block() -> String {
-    let tail = crate::rules::LYRIC_FILL_TAIL_ALLOW;
-    format!(
-        "\n\n【Mode C 改词专项（必须满足，校验会打回）】\n\
-1. 歌词是原歌词的逐行改写：新歌词总行数与原歌词一致（原歌词每行对应新歌词一行，仅允许尾部 ≤{} 行收尾）\n\
-2. 每行字数（不含断句空格）与原歌词对应行完全一致\n\
-3. 禁止中途增删歌词行、禁止自由创作新歌词段落（尾部收尾行不计入增删）；段落结构必须与原歌词一致（原歌词几段新歌词就几段，原歌词无 Hook/Chorus 段则禁止新增，禁止为 Hook 加段）\n\
-4. 全部歌词行总数等于原歌词行数，尾部收尾最多加 {} 行\n\
-5. 说明行必须带方括号（[乐器+行为, 空间, 力度]），禁止裸写说明行",
-        tail, tail
-    )
-}
-
-/// 校验员格式输出 system 构建单源（全文重输与定点重写共用——契约/知识注入口径一致）。
-#[cfg(test)]
-fn auditor_format_system(req: &PipelineRequest, plan: Option<&str>) -> Result<String, AppError> {
-    let auditor = roles::auditor();
-    let kb = load_knowledge()?;
-    // Mode C 切换专用格式规范（通用规范诱导新增歌词段，与逐行对齐约束冲突）
-    let mut system = if req.mode == Mode::ModeC {
-        crate::rules::interpolate(roles::auditor_format_prompt_mode_c())
-    } else {
-        crate::rules::interpolate(auditor.system_prompt)
-    };
-    if let Ok(rules) = kb.render_table("suno_rules", None, Some(INJECT_MAX_FULL_ROWS), Some(req.mode.to_str_name())) {
-        system.push_str(&rules);
-        system.push('\n');
-    }
-    // C2/ADR-1：转写契约注入（开关关=不注入，回 v0.5.1 重写语义）
-    if transcription_fidelity_enabled() {
-        system.push_str(roles::TRANSCRIPTION_CONTRACT);
-    }
-    let _ = plan; // P1-3：信封转写规则已退役
-    // 产出语言三态：mix = STYLE 节描述译英文（覆盖上方"不得增删内容"的语言部分），
-    // LYRICS 节逐字保留；en = 整包英文兜底；zh = 空串零漂移。
-    system.push_str(final_pack_lang_directive(req));
-    Ok(system)
-}
-
 
 /// 圆桌流水线事件发射单源（run_id 绑定 envelope）。
 fn emit_pipeline_event<R: tauri::Runtime>(
@@ -1234,212 +1178,12 @@ fn backoff_event(n: llm::BackoffNotice) -> PipelineEvent {
 
 /// #27-c 退避播报钩子（单源）：llm 层进入/退出退避时回调 → 转成 pipeline 事件。
 /// 事件带 run_id 信封，前端按 run 归属过滤（跨 run 串台不会显示到别的 run 上）。
-fn backoff_hook<R: Runtime>(
+pub(crate) fn backoff_hook<R: Runtime>(
     app: AppHandle<R>,
     run_id: String,
 ) -> impl Fn(llm::BackoffNotice) + Send + Sync {
     move |n| emit_pipeline_event(&app, &run_id, backoff_event(n))
 }
-
-
-
-
-/// C2/D6：转写保真功能开关。默认开；env SHIYI_TRANSCRIPTION_FIDELITY=0 一键回 v0.5.1 行为
-/// （契约不注入、保真不校验、打回全部全文重输）——出问题可不发版关闭。
-#[cfg(test)]
-fn transcription_fidelity_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var("SHIYI_TRANSCRIPTION_FIDELITY").ok().as_deref() != Some("0"))
-}
-
-#[cfg(test)]
-const TRANSCRIPTION_ISSUE_PREFIX: &str = "TRANSCRIPTION_ISSUE:";
-
-/// C2/ADR-1：提取并剥离终稿中的转写问题标记行（契约第 3 条）。
-/// 标记 = 转写者申报"收敛方案本身有硬伤"，不得进入交付包；描述返回给调用方走回炉/显式降级。
-#[cfg(test)]
-fn extract_and_strip_transcription_issues(text: &str) -> (String, Vec<String>) {
-    let mut descs = Vec::new();
-    let mut kept: Vec<&str> = Vec::new();
-    for line in text.lines() {
-        match line.trim().strip_prefix(TRANSCRIPTION_ISSUE_PREFIX) {
-            Some(desc) => {
-                let desc = desc.trim();
-                if !desc.is_empty() {
-                    descs.push(desc.to_string());
-                }
-            }
-            None => kept.push(line),
-        }
-    }
-    (kept.join("\n"), descs)
-}
-
-/// 结构标签行判定（'[' 开头且无逗号——说明行含逗号，与 extract_section_tags 同判据）。
-#[cfg(test)]
-fn is_section_tag_line(l: &str) -> bool {
-    let t = l.trim();
-    t.starts_with('[') && t.ends_with(']') && !t.contains(',')
-}
-
-/// 终稿/重写输出解析出的段落：标签（小写归一）+ 段体（含标签行与换行）+ 段体在源文本中的字节区间。
-#[cfg(test)]
-struct PlanSegment {
-    tag: String,
-    body: String,
-    start: usize,
-    end: usize,
-}
-
-/// 单遍解析：标签行开启新段（段起点=标签行字节起点，段终点=下一标签行起点或文末）；
-/// 标签前的前导内容（Style Prompt 等）不属任何段，splice 不触碰。
-#[cfg(test)]
-fn parse_segments(text: &str) -> Vec<PlanSegment> {
-    let mut segs: Vec<PlanSegment> = Vec::new();
-    let mut acc = 0usize;
-    for line in text.split_inclusive('\n') {
-        let start = acc;
-        acc += line.len();
-        if is_section_tag_line(line) {
-            segs.push(PlanSegment {
-                tag: line.trim().to_lowercase(),
-                body: line.to_string(),
-                start,
-                end: acc,
-            });
-        } else if let Some(last) = segs.last_mut() {
-            last.body.push_str(line);
-            last.end = acc;
-        }
-    }
-    segs
-}
-
-/// 同名标签按出现顺序一一配对（每个标签一个消费游标）；
-/// 重写段数多于终稿同名段数时多余段忽略。返回 (base 段索引, 新段体) 列表。
-#[cfg(test)]
-fn pair_segment_replacements(base: &[PlanSegment], rewrites: &[PlanSegment]) -> Vec<(usize, String)> {
-    let mut cursor: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-    let mut replacements = Vec::new();
-    for seg in rewrites {
-        let used = cursor.entry(seg.tag.as_str()).or_insert(0);
-        let nth = base
-            .iter()
-            .enumerate()
-            .filter(|(_, b)| b.tag == seg.tag)
-            .nth(*used);
-        if let Some((i, _)) = nth {
-            replacements.push((i, seg.body.clone()));
-            *used += 1;
-        }
-    }
-    replacements
-}
-
-/// 把配对结果按 base 段字节区间写回：未匹配区间按字节原样保留，未点名段落逐字节不变；
-/// 新段体短于/长于原段都按区间替换（换行结尾对齐补齐）。
-#[cfg(test)]
-fn apply_segment_replacements(base: &str, base_segs: &[PlanSegment], replacements: &[(usize, String)]) -> String {
-    let mut out = String::with_capacity(base.len() + 64);
-    let mut pos = 0usize;
-    for (idx, new_body) in replacements {
-        let seg = &base_segs[*idx];
-        out.push_str(&base[pos..seg.start]);
-        // 新段体补齐换行对齐：原段以换行结尾而新段体没有时补上
-        let base_body = &base[seg.start..seg.end];
-        let mut body = new_body.clone();
-        if base_body.ends_with('\n') && !body.ends_with('\n') {
-            body.push('\n');
-        }
-        out.push_str(&body);
-        pos = seg.end;
-    }
-    out.push_str(&base[pos..]);
-    out
-}
-
-/// C2/ADR-1：定点重写拼接——把定点重写输出中的段落按结构标签替换进终稿。
-/// 无任何一段成功匹配 → None（调用方回退全文重输通道）。
-#[cfg(test)]
-fn splice_sections(base: &str, rewrites: &str) -> Option<String> {
-    let base_segs = parse_segments(base);
-    let rewrite_segs = parse_segments(rewrites);
-    if base_segs.is_empty() || rewrite_segs.is_empty() {
-        return None;
-    }
-    let mut replacements = pair_segment_replacements(&base_segs, &rewrite_segs);
-    if replacements.is_empty() {
-        return None;
-    }
-    // 重写段可能乱序（模型不保证按原文档顺序输出）——按 base 位置排序后顺序拼接
-    replacements.sort_by_key(|(i, _)| *i);
-    Some(apply_segment_replacements(base, &base_segs, &replacements))
-}
-
-
-
-
-
-/// D-责任分离（2026-09-09）：打回 issue 责任归属。
-/// Plan = 方案内容缺陷（主持人回炉修：配器/字数/Hook/骤停/行宽/行数/Style 长度/参数）；
-/// Transcription = 排版缺陷（校验员回炉修：保真搬运差异/格式要素缺失/截断）。
-/// 匹配串与 validator.rs 的 issue 文案逐字对齐（单测锁口径）。
-/// plan 参数用于定责分叉：如"未找到任何说明行"——方案有说明行=转写丢失（校验员），
-/// 方案本身没有=方案缺陷（主持人让制作人按 R-4 补写）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg(test)]
-enum IssueOwner {
-    Plan,
-    Transcription,
-}
-
-#[cfg(test)]
-fn classify_issue_owner(issue: &str, plan: &str) -> IssueOwner {
-    // 转写类：保真搬运差异（envelope 下只含 LYRICS 节真实歌词差异）
-    if issue.starts_with("保真校验") {
-        return IssueOwner::Transcription;
-    }
-    if issue == TRUNCATION_ISSUE {
-        return IssueOwner::Transcription;
-    }
-    // 排版要素缺失/变形（转写契约允许校验员补齐/修正的格式要素）
-    if issue.contains("未找到 Style Prompt 字段") || issue.contains("Style Prompt 标签") {
-        return IssueOwner::Transcription;
-    }
-    if issue.contains("缺参数行") || issue.contains("未发现能量标注") {
-        return IssueOwner::Transcription;
-    }
-    if issue.contains("未找到任何说明行") {
-        // 定责分叉：方案 LYRICS 节有说明行 → 转写丢失（校验员补回）；方案本身没有 → 方案缺陷
-        let plan_has_desc = crate::rules::parse_plan_sections(plan)
-            .map(|s| s.lyrics_lines().iter().any(|l| l.starts_with('[') && l.ends_with(']') && l.contains(',')))
-            .unwrap_or(false);
-        return if plan_has_desc { IssueOwner::Transcription } else { IssueOwner::Plan };
-    }
-    if issue.contains("结构标签不足") {
-        return IssueOwner::Transcription;
-    }
-    // 方案内容类：结构/编曲/字数/长度/参数值
-    // 说明行超 → Plan（R-4：说明行最终形态归制作人，压缩发生在方案侧；保真不比说明行，无冲突）
-    if issue.contains("Hook 出现")
-        || issue.contains("配器")
-        || issue.contains("字数不符")
-        || issue.contains("歌词行超")
-        || issue.contains("行数")
-        || issue.contains("骤停")
-        || issue.contains("能量差")
-        || issue.contains("Style Prompt 长度")
-        || issue.contains("Style Prompt 过短")
-        || issue.contains("参数越界")
-        || issue.contains("说明行超")
-    {
-        return IssueOwner::Plan;
-    }
-    // 未识别文案保守归方案侧（内容缺陷的代价是降级，排版误归主持人的代价是多一轮整合——保守取重）
-    IssueOwner::Plan
-}
-
-
 
 
 async fn produce_final_text<R: Runtime>(
@@ -1478,7 +1222,7 @@ async fn produce_final_text<R: Runtime>(
 
 
 /// 单次调用结束后发射用量事件（usage为None时不发射——网关未返回不阻塞流程）
-fn emit_usage<R: tauri::Runtime>(
+pub(crate) fn emit_usage<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     role: PipelineRole,
     resp: &crate::models::LLMResponse,
@@ -1515,21 +1259,6 @@ fn strip_json_fence(t: &str) -> String {
     }
 }
 
-/// 把主持人汇总输出切分为（纯方案, 下轮任务段）。
-/// 末尾出现「【任务分发】」等标记时切分；未命中或切出空方案（畸形：标记在最前）视为无任务段，全文当方案。
-#[cfg(test)]
-fn split_tasks(text: &str) -> (String, String) {
-    for marker in ["【任务分发】", "【下轮任务】", "【任务】"] {
-        if let Some(pos) = text.find(marker) {
-            let plan = text[..pos].trim();
-            let tasks = text[pos + marker.len()..].trim();
-            if !plan.is_empty() && !tasks.is_empty() {
-                return (plan.to_string(), tasks.to_string());
-            }
-        }
-    }
-    (text.trim().to_string(), String::new())
-}
 
 /// 从 refine 输入提取【上一版方案】段。
 /// 取最后一个标记之后全文（同理：上一版方案内可能含标记字样）；缺失/空白返回 None。
@@ -1544,37 +1273,6 @@ fn extract_previous_plan(user_input: &str) -> Option<String> {
     }
 }
 
-/// 从最终文本收集硬校验问题。
-/// 全模式启用（历史修复）：mode_c 的 lyric_fill 已过滤包装行 + 去空白计数，
-/// 对标准提示词包可安全执行字数对齐校验，不再跳过。
-/// Style Prompt 统一取 validator::extract_style_prompt 的冒号后正文——
-/// 过短/BPM 校验不再被 "Style Prompt**: " 标签前缀虚增长度；"风格:" 前缀兼容已下沉至该实现。
-/// BPM 只信任显式标注（knowledge::plan_bpm_value，无 BPM 字样返回 None），
-/// 不再从行内任意数字猜值（"80年代" 等年代词误报源已移除）。
-/// C-11（P0-7）：`pub` 供 tests/large_scale_matrix 以生产终稿门口径测量（集成测试是外部 crate，
-/// `pub(crate)` 不可见）；非稳定 API。
-#[doc(hidden)]
-pub fn collect_hard_issues(mode: &Mode, final_text: &str, extra: Option<&str>) -> Vec<String> {
-    let mut issues = Vec::new();
-    let v = validator::validate_for_mode(mode.to_str_name(), final_text, extra);
-    issues.extend(v.issues);
-    if let Some(style_prompt) = validator::extract_style_prompt(final_text) {
-        // Style Prompt 长度门（上限 ≤350 / 下限 ≥30）：四模式唯一接线点 = 此处，
-        // 执行者唯一 = validator::style_prompt_length_issues（模式域单源见 rules::STYLE_PROMPT_*_MODES）。
-        issues.extend(validator::style_prompt_length_issues(mode.to_str_name(), &style_prompt));
-        // BPM 模式感知检查（对齐原指令：仅 mode_d 要求 BPM>=90）
-        // Q3存在性门：D 终稿无 BPM 标注直接打回（此前缺标注一路放行）；显式-only 语义不变。
-        if mode.to_str_name() == "mode_d" && crate::knowledge::plan_bpm_value(&style_prompt).is_none() {
-            issues.push("缺少 BPM 标注（抖音模式须写明 BPM≥90 数值）".to_string());
-        }
-        if let Some(bpm) = crate::knowledge::plan_bpm_value(&style_prompt) {
-            if let Some(msg) = validator::check_bpm_range(mode.to_str_name(), bpm) {
-                issues.push(msg);
-            }
-        }
-    }
-    issues
-}
 
 // ---------------------------------------------------------------------------
 // 主流程
@@ -1771,7 +1469,11 @@ async fn run_pipeline_inner<R: Runtime>(
     checkpoint()?;
     let mut current_plan = if incremental {
         // 增量起步：从 user_input 的【上一版方案】段提取；缺失则回落全量阶段 0（不静默用空方案）
-        match extract_previous_plan(&request.user_input) {
+        // P1-3：上一版须为 SongPlan JSON（检查点口径）；渲染后的交付包文本不可回填 IR →
+        // 回落全量阶段 0（上一版文本仍在 user_input 内作上下文），避免讨论跑完才在定稿处 Parse 失败。
+        match extract_previous_plan(&request.user_input)
+            .filter(|p| plan_flow::plan_from_checkpoint(p).is_ok())
+        {
             Some(plan) => plan,
             None => run_host_initial(&app, &request, &budget, &run_id).await?,
         }
@@ -2002,9 +1704,9 @@ async fn run_pipeline_inner<R: Runtime>(
         });
     }
 
-    // ---- 阶段 2：校验员转写契约输出 + 保真/硬校验打回（与 resume 共用 produce_final_text 单源实现）----
+    // ---- 阶段 2：校验员结构化定稿 + plan::validate 打回 ≤2 次 + render_suno（与 resume 共用 produce_final_text）----
     // R3：阶段 2 入口同样落检查点（含收敛后的 current_plan），终稿失败可直接续终稿
-    //     （检查点存修复前方案：TRANSCRIPTION_ISSUE 回炉只影响本次终稿产出，续跑语义不变）
+    //     （检查点存修复前方案：定稿重试只影响本次终稿产出，续跑语义不变）
     {
         let cp = crate::commands::checkpoint::PipelineCheckpoint {
             // B-3：mode 单源 to_str_name（旧规则用 Debug 字符串变换，两处序列化口径漂移风险）
@@ -2140,7 +1842,7 @@ pub async fn pipeline_resume<R: Runtime>(
     }
     // 续跑用新预算（15 分钟满额），不继承已耗尽的旧预算——旧预算耗尽正是失败原因
     let budget = std::sync::Arc::new(Budget::with_timeout(PIPELINE_TIMEOUT));
-    // 断点方案直接进阶段 2（转写契约 + 保真/硬校验打回 ≤2 次），与主流程共用 produce_final_text 单源实现
+    // 断点方案直接进阶段 2（结构化定稿 + plan::validate 打回 ≤2 次），与主流程共用 produce_final_text 单源实现
     let mode = &request.mode;
     // 续跑登记活动 run 并清旧取消位（与 run_pipeline 入口同语义）；结束无论成败移除（D-06）
     let (final_text, _issues) = cancel::with_active_run(
@@ -2360,50 +2062,8 @@ mod tests {
         interject::reset(rid);
     }
 
-    // ---- D-责任分离：issue 责任分类（口径与 validator 文案逐字对齐） ----
 
-    const EMPTY_PLAN: &str = "";
 
-    #[test]
-    fn classify_fidelity_issues_go_to_auditor() {
-        assert_eq!(classify_issue_owner("保真校验: 收敛方案第5行歌词「xx」在终稿中缺失", EMPTY_PLAN), IssueOwner::Transcription);
-        assert_eq!(classify_issue_owner(TRUNCATION_ISSUE, EMPTY_PLAN), IssueOwner::Transcription);
-        assert_eq!(classify_issue_owner("未找到 Style Prompt 字段", EMPTY_PLAN), IssueOwner::Transcription);
-        assert_eq!(classify_issue_owner("缺参数行（末尾须输出 `Weirdness=..`）", EMPTY_PLAN), IssueOwner::Transcription);
-        assert_eq!(classify_issue_owner("结构标签不足 2 个（当前 1）", EMPTY_PLAN), IssueOwner::Transcription);
-    }
-
-    #[test]
-    fn classify_desc_line_missing_splits_by_plan() {
-        let plan_with_desc = "<<<LYRICS>>>\n[Intro]\n[pad, 能量:2]\n凌晨\n<<<STYLE>>>\nStyle Prompt: x\n<<<PARAMS>>>\nW=1";
-        // 方案有说明行 → 终稿丢失 = 转写缺陷（校验员补回）
-        assert_eq!(classify_issue_owner("未找到任何说明行（每段应含 [乐器1+行为, ...] 说明行）", plan_with_desc), IssueOwner::Transcription);
-        // 方案本身没有说明行 → 方案缺陷（主持人让制作人按 R-4 补写）
-        assert_eq!(classify_issue_owner("未找到任何说明行（每段应含 [乐器1+行为, ...] 说明行）", EMPTY_PLAN), IssueOwner::Plan);
-    }
-
-    #[test]
-    fn classify_plan_content_issues_go_to_host() {
-        assert_eq!(classify_issue_owner("最弱段配器 2 件（要求 >= 3 件）", EMPTY_PLAN), IssueOwner::Plan);
-        assert_eq!(classify_issue_owner("Hook 出现 0 次（要求 >= 2）", EMPTY_PLAN), IssueOwner::Plan);
-        assert_eq!(
-            classify_issue_owner(
-                &format!("说明行超 {} 字符（{} 字符）: [x]", crate::rules::DESC_LINE_MAX_CHARS, crate::rules::DESC_LINE_MAX_CHARS + 10),
-                EMPTY_PLAN
-            ),
-            IssueOwner::Plan
-        );
-        assert_eq!(classify_issue_owner("缺少骤停标记（结尾应一刀切）", EMPTY_PLAN), IssueOwner::Plan);
-        assert_eq!(classify_issue_owner("共 2 行字数不符", EMPTY_PLAN), IssueOwner::Plan);
-        assert_eq!(classify_issue_owner("Style Prompt 长度 380 超限（> 350）", EMPTY_PLAN), IssueOwner::Plan);
-        assert_eq!(classify_issue_owner("参数越界: Weirdness=50", EMPTY_PLAN), IssueOwner::Plan);
-        assert_eq!(classify_issue_owner("歌词行超 10 字（13 字）: x", EMPTY_PLAN), IssueOwner::Plan);
-    }
-
-    #[test]
-    fn classify_unknown_conservative_plan() {
-        assert_eq!(classify_issue_owner("某种未来新增的未知缺陷", EMPTY_PLAN), IssueOwner::Plan, "未识别文案保守归方案侧");
-    }
 
     // ---- C4/D4：冲突预检标注（红灯先行——检测桩返回空时冲突用例必须失败） ----
 
@@ -2465,73 +2125,6 @@ mod tests {
 
     // ---- C2/ADR-1：定点重写拼接 + 转写标记剥离（红灯先行——桩返回 None/空时必须失败） ----
 
-    #[test]
-    fn splice_replaces_only_target_section() {
-        let base = "Style Prompt: test, folk, piano\n\
-[Intro]\n\
-[piano, 能量:2]\n\
-(oom~)\n\
-[Verse]\n\
-[piano, 能量:3]\n\
-深夜 灯亮 键盘响\n\
-窗外 雨落 心火燃\n\
-[Chorus]\n\
-[piano, bass, 能量:7]\n\
-雨声 先落下来\n";
-        let rewrites = "[Verse]\n\
-[piano, 能量:3]\n\
-深夜 灯亮 琴声远\n\
-窗外 雨落 心火燃\n";
-        let spliced = splice_sections(base, rewrites).expect("应有段落被替换");
-        // 未点名段落逐字节不变
-        assert!(spliced.contains("[Intro]\n[piano, 能量:2]\n(oom~)\n"), "Intro 被改动: {}", spliced);
-        assert!(spliced.contains("[Chorus]\n[piano, bass, 能量:7]\n雨声 先落下来\n"), "Chorus 被改动: {}", spliced);
-        // 违规段被替换
-        assert!(spliced.contains("琴声远"), "Verse 未替换: {}", spliced);
-        assert!(!spliced.contains("键盘响"), "旧词残留: {}", spliced);
-    }
-
-    #[test]
-    fn splice_repeated_tags_paired_positionally() {
-        let base = "[Hook]\n干就 完了 干就 完了\n[Verse]\n白天 挨骂 晚上 加班\n[Hook]\n干就 完了 干就 完了\n";
-        let rewrites = "[Hook]\n冲就 对了 冲就 对了\n[Hook]\n拼就 赢了 拼就 赢了\n";
-        let spliced = splice_sections(base, rewrites).expect("两段 Hook 均应被替换");
-        assert!(spliced.contains("[Hook]\n冲就 对了 冲就 对了\n[Verse]"), "第一个 Hook 按位替换: {}", spliced);
-        assert!(spliced.ends_with("[Hook]\n拼就 赢了 拼就 赢了\n"), "第二个 Hook 按位替换: {}", spliced);
-        assert!(spliced.contains("白天 挨骂 晚上 加班"), "Verse 被改动: {}", spliced);
-    }
-
-    #[test]
-    fn splice_no_matching_tag_returns_none() {
-        let base = "[Verse]\n深夜 灯亮 键盘响\n";
-        let rewrites = "[Refrain]\n完全 陌生的 段落\n";
-        assert!(splice_sections(base, rewrites).is_none(), "无匹配标签应回退全文重输");
-    }
-
-    #[test]
-    fn transcription_marker_extracted_and_stripped() {
-        let text = "TRANSCRIPTION_ISSUE: 第2行字数不符（原 7 字 vs 新 8 字）\nStyle Prompt: test\n[Verse]\n歌词 行";
-        let (stripped, descs) = extract_and_strip_transcription_issues(text);
-        assert_eq!(descs, vec!["第2行字数不符（原 7 字 vs 新 8 字）".to_string()], "标记描述应被提取");
-        assert!(!stripped.contains("TRANSCRIPTION_ISSUE"), "标记不得留在交付包: {}", stripped);
-        assert!(stripped.contains("Style Prompt: test"), "正文不得受损: {}", stripped);
-    }
-
-    #[test]
-    fn transcription_marker_absent_yields_no_desc() {
-        let (stripped, descs) = extract_and_strip_transcription_issues("Style Prompt: test\n[Verse]\n歌词 行");
-        assert!(descs.is_empty());
-        assert_eq!(stripped, "Style Prompt: test\n[Verse]\n歌词 行");
-    }
-
-    #[test]
-    fn transcription_contract_locked() {
-        // 契约三要素锁定（防退化成无约束格式化）
-        let c = roles::TRANSCRIPTION_CONTRACT;
-        assert!(c.contains("【转写契约"), "缺契约头");
-        assert!(c.contains("TRANSCRIPTION_ISSUE"), "缺标记申报通道");
-        assert!(c.contains("三类格式操作"), "缺允许操作清单");
-    }
 
     #[test]
     fn steps_for_mode_b_includes_lyricist() {
@@ -2653,17 +2246,6 @@ mod tests {
         assert!(!plain.contains("【原歌词"));
     }
 
-    /// L-2：Mode C 专项块尾部收尾口径与 validator 单源（≤LYRIC_FILL_TAIL_ALLOW 行），
-    /// 旧规则写"总行数完全一致/禁止增删"，与校验员系统 prompt、硬校验的"尾部 ≤2 行"打架。
-    #[test]
-    fn mode_c_special_block_tail_single_source() {
-        let b = mode_c_special_block();
-        let tail = crate::rules::LYRIC_FILL_TAIL_ALLOW;
-        assert!(b.contains(&format!("仅允许尾部 ≤{} 行收尾", tail)), "缺尾部收尾允许: {}", b);
-        assert!(b.contains(&format!("尾部收尾最多加 {} 行", tail)), "缺收尾上限: {}", b);
-        assert!(!b.contains("总行数必须与原歌词完全一致"), "残留与 validator 冲突的严格等行数措辞");
-        assert!(!b.contains("禁止增删歌词行"), "残留与尾部收尾允许矛盾的旧措辞");
-    }
 
     /// 校验员讨论轮 prompt 同样携带无修订的总体意见 + Mode C 专项保留
     #[test]
@@ -2843,113 +2425,6 @@ mod tests {
         assert!(r2.checked.is_empty());
     }
 
-    #[test]
-    fn split_tasks_with_marker() {
-        let (plan, tasks) = split_tasks("方案内容第一行\n第二行\n【任务分发】\n- 情感分析师：调整能量\n- 制作人：改配器");
-        assert!(plan.contains("方案内容第一行"));
-        assert!(!plan.contains("任务分发"), "方案不应含任务段: {}", plan);
-        assert!(tasks.contains("情感分析师"));
-        assert!(tasks.contains("制作人"));
-    }
-
-    #[test]
-    fn split_tasks_no_marker_keeps_whole() {
-        let (plan, tasks) = split_tasks("只有方案没有任务");
-        assert_eq!(plan, "只有方案没有任务");
-        assert!(tasks.is_empty());
-    }
-
-    #[test]
-    fn split_tasks_marker_at_start_keeps_all_as_plan() {
-        // 畸形：标记在最前、无方案 → 全文当方案，避免空方案传给下一轮
-        let (plan, tasks) = split_tasks("【任务分发】\n只有任务没有方案");
-        assert_eq!(plan, "【任务分发】\n只有任务没有方案");
-        assert!(tasks.is_empty());
-    }
-
-    #[test]
-    fn split_tasks_alternate_markers() {
-        let (plan, tasks) = split_tasks("方案\n【下轮任务】\n任务A");
-        assert!(plan.contains("方案"));
-        assert!(tasks.contains("任务A"));
-        let (plan2, tasks2) = split_tasks("方案2\n【任务】\n任务B");
-        assert!(plan2.contains("方案2"));
-        assert!(tasks2.contains("任务B"));
-    }
-
-    /// 过短校验按冒号后正文计数——旧行级计数被 "Style Prompt**: " 前缀虚增 16 字符。
-    /// 正文 15 字符：旧实现 15+16=31 ≥30 放行（放水），新实现按正文判过短。
-    #[test]
-    fn style_prompt_short_check_uses_body_not_line() {
-        let text = "**Style Prompt**: 深夜室内民谣钢琴与弦乐交织回响\n[Verse 1]\n歌词";
-        let issues = collect_hard_issues(&Mode::ModeA, text, None);
-        assert!(issues.iter().any(|i| i.contains("过短")), "正文 15 字符应报过短: {:?}", issues);
-        // 正文充足（≥30）时不报过短
-        let text_ok = "**Style Prompt**: 深夜室内民谣基调, 68BPM D小调, 钢琴与弦乐交织, 气声念白, 温暖木质空间, 能量低回\n[Verse 1]\n歌词";
-        let issues_ok = collect_hard_issues(&Mode::ModeA, text_ok, None);
-        assert!(!issues_ok.iter().any(|i| i.contains("过短")), "正文充足不应报过短: {:?}", issues_ok);
-    }
-
-    /// 第三批锁：Style Prompt ≤350 上限门必须在接线点对 C/D 生效——
-    /// 此前 C/D 上游（CHECKLIST_C/D、mode_d prompt）承诺了上限，下游零执行者。
-    #[test]
-    fn style_prompt_max_gate_wired_for_c_and_d() {
-        let long = format!("**Style Prompt**: {}", "a,".repeat(200));
-        // D 模式（validate_douyin 路径）
-        let text_d = format!(
-            "{}\n[Hook]\n[suona, 808]\n我 真的 会谢\n[Hook]\n我 真的 会谢\n[all instruments cut abruptly]\n参数: Weirdness=15 | Style Influence=90 | Audio Influence=0",
-            long
-        );
-        let issues_d = collect_hard_issues(&Mode::ModeD, &text_d, None);
-        assert!(issues_d.iter().any(|i| i.contains("350")), "D 上限门未接线: {:?}", issues_d);
-        // C 模式（validate_lyric_fill 路径）
-        let text_c = format!("{}\n[Verse]\n我们 很早前 就 谋过面", long);
-        let issues_c = collect_hard_issues(&Mode::ModeC, &text_c, Some("我们 很早前 就 谋过面"));
-        assert!(issues_c.iter().any(|i| i.contains("350")), "C 上限门未接线: {:?}", issues_c);
-    }
-
-    /// 旧语义保留：`风格:` 前缀行同样能提取正文（原 extract_style_prompt_line 认得它）
-    #[test]
-    fn style_prompt_supports_legacy_grey_prefix() {
-        let text = "风格：深夜室内民谣基调, 68BPM D小调, 钢琴与弦乐交织, 气声念白, 温暖木质空间\n[Verse 1]\n歌词";
-        let issues = collect_hard_issues(&Mode::ModeA, text, None);
-        assert!(!issues.iter().any(|i| i.contains("过短")), "风格: 前缀应提取到正文: {:?}", issues);
-    }
-
-    /// +B7 集成：mode_d 的 BPM 只按显式标注判——"80年代" 不再被当成 BPM=80 误报
-    #[test]
-    fn bpm_check_not_fooled_by_era_words() {
-        let text = "**Style Prompt**: 80年代复古Disco, 125BPM, 律动铜管, 痞气男声, 拥挤商场混响, 高能持续\n[Hook]\n[suona, 808]\n我 真的 会谢\n[Hook]\n我 真的 会谢\n[Hook]\n[all instruments cut abruptly]";
-        let issues = collect_hard_issues(&Mode::ModeD, text, None);
-        assert!(
-            !issues.iter().any(|i| i.contains("BPM")),
-            "125BPM 应正确提取，不得因年代词误报 BPM 不足: {:?}",
-            issues
-        );
-    }
-
-    /// 旧规则保留：显式 BPM 不足（mode_d 要求 ≥90）仍必须报
-    #[test]
-    fn bpm_explicit_violation_still_reported() {
-        let text = "**Style Prompt**: 深夜室内民谣基调, 68BPM, 钢琴弦乐, 气声念白, 温暖空间\n[Hook]\n[suona, 808]\n我 真的 会谢\n[Hook]\n我 真的 会谢\n[Hook]\n[all instruments cut abruptly]";
-        let issues = collect_hard_issues(&Mode::ModeD, text, None);
-        assert!(
-            issues.iter().any(|i| i.contains("BPM 68") || i.contains("低于")),
-            "显式 68BPM 应报 BPM 不足: {:?}",
-            issues
-        );
-    }
-
-    /// Q3存在性门：Mode D 终稿无 BPM 标注直接打回（此前一路放行）
-    #[test]
-    fn bpm_missing_in_mode_d_reported() {
-        let text = "**Style Prompt**: 抖音神曲基调, 律动铜管, 痞气男声, 拥挤商场混响, 高能持续\n[Hook]\n[suona, 808]\n我 真的 会谢\n[Hook]\n我 真的 会谢\n[Hook]\n[all instruments cut abruptly]";
-        let issues = collect_hard_issues(&Mode::ModeD, text, None);
-        assert!(issues.iter().any(|i| i.contains("缺少 BPM")), "无 BPM 应报缺标注: {:?}", issues);
-        // A 模式无 BPM 不报（仅 D 设存在性门）
-        let issues_a = collect_hard_issues(&Mode::ModeA, text, None);
-        assert!(!issues_a.iter().any(|i| i.contains("缺少 BPM")), "A 模式不应报缺 BPM: {:?}", issues_a);
-    }
 
     /// Q4模式锁（B-5 行为化）：错配拒绝、匹配放行、旧检查点空 mode 放行。
     #[test]
@@ -3838,12 +3313,36 @@ mod tests {
     /// RULE-STRUCTURED-ONLY：编排层不得再调用信封/降级路径
     #[test]
     fn no_legacy_envelope_symbols() {
-        let src = include_str!("orchestrator.rs");
-        // 生产段：去掉 tests 模块后再扫
-        let prod = src.split("#[cfg(test)]").next().unwrap_or(src);
-        assert!(!prod.contains("enforce_envelope"), "生产段不得调用 enforce_envelope");
-        assert!(!prod.contains("envelope_fallback"), "生产段不得发 envelope_fallback");
-        assert!(!prod.contains("plan_envelope_enabled()"), "生产段不得读信封开关");
+        // BLUEPRINT_v2 §3.2 / §5.1#1-4：信封与转写保真旧路径全仓退役（src + prompt 快照）。
+        // 禁用词以拼接构造，避免本测试自匹配。
+        let banned: Vec<String> = [
+            ["enforce_", "envelope"], ["envelope_", "fallback"], ["plan_envelope", "_enabled"],
+            ["envelope_", "spec"], ["envelope_", "defect"], ["parse_plan", "_sections"],
+            ["Plan", "Sections"], ["TRANSCRIPTION", "_CONTRACT"], ["TRANSCRIPTION", "_ISSUE"],
+            ["transcription", "_fidelity"], ["<<<", "LYRICS>>>"], ["方案", "信封"], ["转写", "契约"],
+        ]
+        .iter()
+        .map(|p| p.concat())
+        .collect();
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files = Vec::new();
+        fn walk(d: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() { walk(&p, out) } else if p.extension().is_some_and(|x| x == "rs" || x == "txt") { out.push(p) }
+            }
+        }
+        walk(&root.join("src"), &mut files);
+        walk(&root.join("tests/fixtures/prompts"), &mut files);
+        assert!(files.len() > 20, "扫描面异常: {}", files.len());
+        let mut hits = Vec::new();
+        for f in &files {
+            let s = std::fs::read_to_string(f).unwrap();
+            for b in &banned {
+                if s.contains(b.as_str()) { hits.push(format!("{}: {}", f.display(), b)) }
+            }
+        }
+        assert!(hits.is_empty(), "旧信封/转写保真残留：\n{}", hits.join("\n"));
     }
 
     /// C3 快照：四模式 prompt 渲染输出须与改前快照逐字节一致（占位符恰好还原当日数字）。
@@ -3887,93 +3386,4 @@ mod tests {
         println!("dumped to target/large-test/host_system_d.txt");
     }
 
-    /// 提示词全量导出（矛盾/孤立指令审计基线）：逐模式逐调用点，
-    /// 输出 target/prompt-audit/ 下每份 LLM 实际可见文本。
-    #[test]
-    #[ignore]
-    fn dump_all_prompts_for_audit() {
-        use crate::commands::roles;
-        use crate::models::PipelineRequest;
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/prompt-audit");
-        std::fs::create_dir_all(&dir).unwrap();
-        let w = |name: &str, body: &str| {
-            std::fs::write(dir.join(format!("{}.txt", name)), body).unwrap();
-        };
-
-        // 1) 角色系统提示词（跨模式共享）
-        w("role_host", &crate::rules::interpolate(roles::host().system_prompt));
-        w("role_emotion", &crate::rules::interpolate(roles::emotion().system_prompt));
-        w("role_lyricist", &crate::rules::interpolate(roles::lyricist().system_prompt));
-        w("role_reviser", &crate::rules::interpolate(roles::reviser().system_prompt));
-        w("role_producer", &crate::rules::interpolate(roles::producer().system_prompt));
-        w("role_style_analyst", &crate::rules::interpolate(roles::style_analyst().system_prompt));
-        w("role_auditor_review", &crate::rules::interpolate(roles::auditor().system_prompt));
-        w("role_auditor_format_mode_c", &crate::rules::interpolate(roles::auditor_format_prompt_mode_c()));
-        w("transcription_contract", roles::TRANSCRIPTION_CONTRACT);
-        w("schema_wide", roles::REVIEW_SCHEMA_WIDE);
-        w("schema_lyric", roles::REVIEW_SCHEMA_LYRIC);
-
-        // 1b) 思维资产注入实况（#15/#16 可目检证据）：同一方案文本逐角色注入，
-        //     可直接看到"引用必达行 + 相关性补足行"与截断说明。
-        //     #29：注入上下文取"该角色真实出场的模式"（style_analyst 仅 mode_d 出场，
-        //     否则 LC-10/LC-24 的抖音限定行会被条件门挡掉，目检证据失真）。
-        let kb = crate::knowledge::KnowledgeBase::load_embedded().unwrap();
-        let sample_plan = "Style Prompt: 深夜室内民谣 能量:2\n[Verse 1]\n[felt piano, 能量:2]\n凌晨的灯还亮着\n[Chorus]\n[full band, 能量:8]\n我想你了\n参数: Weirdness=24 | Style Influence=80 | Audio Influence=0";
-        for (key, rp) in [
-            ("emotion", PipelineRole::Emotion),
-            ("lyricist", PipelineRole::Lyricist),
-            ("reviser", PipelineRole::Reviser),
-            ("producer", PipelineRole::Producer),
-            ("style_analyst", PipelineRole::StyleAnalyst),
-        ] {
-            let r = roles::role_for(rp);
-            let mode = [Mode::ModeA, Mode::ModeB, Mode::ModeC, Mode::ModeD]
-                .into_iter()
-                .find(|m| steps_for_mode(m).iter().any(|s| s.role == rp))
-                .unwrap_or(Mode::ModeA);
-            w(
-                &format!("role_{}_injection", key),
-                &inject_knowledge(&kb, r.knowledge_tables, r.craft_refs, sample_plan, mode.to_str_name(), Some(rp.storage_key())),
-            );
-        }
-
-        // 2) 逐模式装配体（stage0/汇总/校验员格式/清单/primer）
-        for m in [Mode::ModeA, Mode::ModeB, Mode::ModeC, Mode::ModeD] {
-            let name = m.to_str_name();
-            w(&format!("{}_host_initial_system", name), &host_initial_system(&m, &kb, "（样例方案占位）"));
-            w(&format!("{}_checklist", name), &crate::rules::checklist(name));
-            if let Some(p) = crate::rules::host_primer(name) {
-                w(&format!("{}_primer", name), &crate::rules::interpolate(p));
-            }
-            // 汇总 system + user（样例修订：触发冲突预检路径的真实输入形态）
-            w(
-                &format!("{}_summarize_system", name),
-                &host_summarize_system(&m, &kb, "（样例方案占位）"),
-            );
-            let changes = vec![
-                (PipelineRole::Lyricist, vec![ReviewChange {
-                    target: "lyrics".into(),
-                    content: serde_json::Value::String("（样例修订文本：用于审计汇总输入形态）".into()),
-                    reason: "审计样例".into(),
-                }], "审计样例 reason".into()),
-            ];
-            let req = PipelineRequest { structured_caps: None,
-                output_lang: "zh".into(),
-                mode: m.clone(),
-                user_input: "审计样例输入：深夜加班打工人的心酸".into(),
-                model: "x".into(), api_key: "x".into(), base_url: "https://example.invalid".into(),
-                extra: None, original_lyrics: None, role_overrides: None,
-                thinking: false, refine_targets: None, generation: None, run_id: Some("audit".into()),
-                round_gate: None,
-            };
-            w(&format!("{}_summarize_user", name), &build_summarize_user_prompt("（当前方案占位）", &changes, req.original_lyrics_text()));
-
-            // 校验员格式输出 system（带样例信封方案——走信封分支）
-            let sample_plan = "<<<LYRICS>>>\n[Intro]\n[pad, 能量:2]\n凌晨 两点半\n<<<STYLE>>>\nStyle Prompt: dark trap, 140BPM\n<<<PARAMS>>>\nWeirdness=18|StyleInfluence=92|AudioInfluence=0\n<<<NOTES>>>\n分析：略";
-            let fmt_sys = auditor_format_system(&req, Some(sample_plan)).unwrap();
-            w(&format!("{}_auditor_format_system", name), &fmt_sys);
-            w(&format!("{}_mode_c_special", name), &mode_c_special_block());
-        }
-        println!("prompt-audit dumped to target/prompt-audit/");
-    }
 }

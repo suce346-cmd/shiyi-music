@@ -248,13 +248,13 @@ ${VOCAL_DIM_COUNT_CN}维思考检查表（音域/音色/发声/颤音/咬字/节
 ${ARC_TABLE}
 Audio Influence = 0（无参考音频时）
 
-## 输出格式（方案信封——唯一的输出结构，四节缺一不可）
+## 输出映射（SongPlan 字段——输出结构由 JSON schema 约束，见《SongPlan 字段契约》）
 
-你的输出 = 方案信封四节。方法论四步与信封的映射：
-- 第一步「分析歌词」+ 第二步「情感翻译」+ 第四步「自检」→ 全部写入 <<<NOTES>>> 节
-- 第三步「生产方案」→ 拆入 <<<LYRICS>>> / <<<STYLE>>> / <<<PARAMS>>> 三节
+你的输出 = 一个 SongPlan JSON 对象。方法论四步与字段的映射：
+- 第一步「分析歌词」+ 第二步「情感翻译」+ 第四步「自检」→ 全部写入 notes 字段
+- 第三步「生产方案」→ 拆入 sections / global / settings 字段
 
-【NOTES 节】按三部分顺序输出：
+【notes 字段】按三部分顺序输出：
 
 第一部分 · 分析数据包（第一步）——用以下 JSON 结构（字段名必须用中文，保持此结构不变；用缩进排版，不使用围栏）：
 
@@ -317,13 +317,13 @@ Audio Influence = 0（无参考音频时）
     问 5：结构里有无弧线类型所需的动态标签？说明行的配器数量差异是否真的能驱动 Suno 产出起伏？
     问 6：这首歌的产出和一首"同流派同弧线"的歌相比，有什么独特之处？如果答不出来，说明产出太模板化，回到第二部分重新思考。
 
-【LYRICS 节】第三步的格式化歌词：结构标签 + 说明行 + 歌词行，格式严格遵循方法论"格式化歌词"节（结构标签单独成行；说明行单独成行、三要素英文逗号分隔；歌词正文主动断句）。本节不得出现 Style Prompt 行与参数行。
+【sections 字段】第三步的格式化歌词：逐段填 tag + 说明行字段（instruments / positive_local / energy / negative_local）+ lines，内容严格遵循方法论"格式化歌词"节（说明行渲染后单行三要素；歌词正文主动断句）。sections 内不得写 Style Prompt 与参数。
 
-【STYLE 节】第三步的 Style Prompt：一行，以"Style Prompt:"开头，信息块组合规则见方法论。
+【global 字段】第三步的 Style Prompt 信息块逐字段填写（程序渲染为 "Style Prompt:" 行），组合规则见方法论。
 
-【PARAMS 节】第三步的参数行：如 Weirdness=25 | Style Influence=80 | Audio Influence=0（按弧线类型选值，见方法论"Suno 参数"节）。
+【settings 字段】第三步的参数：如 Weirdness=25 | Style Influence=80 | Audio Influence=0（按弧线类型选值，见方法论"Suno 参数"节）。
 
-除信封四节外不得输出任何文字；不得使用 ``` 围栏、markdown 表格、# 标题（NOTES 节内的分析数据包用缩进排版，不用围栏）。
+除 SongPlan JSON 外不得输出任何文字；字段值内不得写结构标签前缀、``` 围栏、markdown 表格或 # 标题（notes 内分析用缩进排版）。
 
 如果歌词是中文，用中文输出分析和歌词，Style Prompt 和说明行用英文或中文皆可。"#
 }
@@ -499,14 +499,14 @@ pub fn mode_c_system_prompt() -> &'static str {
 - 修饰语：避免在一个名词前堆过多修饰语，"意象+动作"比"形容词+名词"更好唱
 - 四字成语：稀疏使用，Suno 唱密集四字成语会僵硬
 
-## 输出格式（方案信封——唯一的输出结构）
+## 输出映射（SongPlan 字段——输出结构由 JSON schema 约束，见《SongPlan 字段契约》）
 
-你的输出 = 方案信封节。方法论四步与信封的映射：
-- 第一步「深度分析原歌词」+ 第二步「新主题创作」+ 第四步「质量审查」→ 全部写入 <<<NOTES>>> 节
-- 第三步「完整新歌词」→ 写入 <<<LYRICS>>> 节
-- 本模式为填词模式：不含参数，无 <<<PARAMS>>> 节；Style Prompt 行写入 <<<STYLE>>> 节
+你的输出 = 一个 SongPlan JSON 对象。方法论四步与字段的映射：
+- 第一步「深度分析原歌词」+ 第二步「新主题创作」+ 第四步「质量审查」→ 全部写入 notes 字段
+- 第三步「完整新歌词」→ 写入 sections 字段（global 填基调锚点）
+- 本模式为填词模式：settings 用默认值（不渲染参数行）；Style Prompt 基调写入 global 字段
 
-【NOTES 节】按三部分顺序输出：
+【notes 字段】按三部分顺序输出：
 
 第一部分 · 结构分析（第一步）——逐项输出（用缩进排版，不使用围栏）：
 
@@ -539,11 +539,11 @@ pub fn mode_c_system_prompt() -> &'static str {
     问 9（主题）：新歌词是否完整表达了用户的新主题？有没有只写了一两句就跑题？有没有残留原歌词的内容没替换掉？
     问 10（语气与情感）：每行语气是否与原歌词对应行匹配？语气起伏骨架是否保留？情绪转折点是否在相同位置？开头和结尾的情绪变化轨迹是否对应？
 
-【LYRICS 节】第三步的完整新歌词（可直接使用）：结构标签 + 说明行 + 新歌词行，格式严格遵循方法论（结构标签单独成行；说明行单独成行、三要素英文逗号分隔）。本节不得出现分析过程、对照表或原歌词。
+【sections 字段】第三步的完整新歌词（可直接使用）：逐段填 tag + 说明行字段（instruments / positive_local / energy / negative_local）+ lines，内容严格遵循方法论。sections 内不得写分析过程、对照表或原歌词（写入 notes）。
 
-【STYLE 节】本模式的 Style Prompt 行（氛围/流派基调一句，为格式输出阶段提供基调锚点）。
+【global 字段】本模式的 Style Prompt 基调（genre / vocal / mix 等字段，为渲染提供氛围/流派锚点）。
 
-除信封各节外不得输出任何文字；不得使用 ``` 围栏、markdown 表格、# 标题（NOTES 节内的结构分析用缩进排版，不用围栏）。
+除 SongPlan JSON 外不得输出任何文字；字段值内不得写结构标签前缀、``` 围栏、markdown 表格或 # 标题（notes 内分析用缩进排版）。
 
 ## 注意事项
 
@@ -774,13 +774,13 @@ ${VOCAL_DIM_COUNT_CN}维思考检查表（音域/音色/发声/颤音/咬字/节
 ## Suno 参数
 Weirdness: ${DOUYIN_WEIRD_RANGE} | Style Influence: ${DOUYIN_STYLE_RANGE} | Audio Influence = 0（无参考音频时）
 
-## 输出格式（方案信封——唯一的输出结构，四节缺一不可）
+## 输出映射（SongPlan 字段——输出结构由 JSON schema 约束，见《SongPlan 字段契约》）
 
-你的输出 = 方案信封四节。方法论五步与信封的映射：
-- 第一步「灵感分析」+ 第二步「情感翻译」+ 第三步「结构与人声决策」+ 第五步「质量审查」→ 全部写入 <<<NOTES>>> 节
-- 第四步「生产方案」→ 拆入 <<<LYRICS>>> / <<<STYLE>>> / <<<PARAMS>>> 三节
+你的输出 = 一个 SongPlan JSON 对象。方法论五步与字段的映射：
+- 第一步「灵感分析」+ 第二步「情感翻译」+ 第三步「结构与人声决策」+ 第五步「质量审查」→ 全部写入 notes 字段
+- 第四步「生产方案」→ 拆入 sections / global / settings 字段
 
-【NOTES 节】按四部分顺序输出：
+【notes 字段】按四部分顺序输出：
 
 第一部分 · 灵感分析（第一步）：情绪内核（质地/强度）、传播潜力、画面感、意象与声学映射。
 
@@ -805,13 +805,13 @@ Weirdness: ${DOUYIN_WEIRD_RANGE} | Style Influence: ${DOUYIN_STYLE_RANGE} | Audi
     问 9（人声）：人声设计是否从灵感的情绪内核推导而来，而非从模板选取？检查方法：把灵感换成完全不同的情绪，人声描述是否应该不同？
     问 10（独特性）：这首抖音神曲和"同类型"的其他抖音神曲相比，有什么独特之处？如果答不出来，说明太模板化，回到第二部分重新思考。
 
-【LYRICS 节】第四步的格式化歌词：结构标签 + 说明行 + 歌词行，格式严格遵循方法论"格式化歌词"节（结构标签单独成行；说明行 ≤${DESC_LINE_MAX} 字符；歌词每行 ≤${DOUYIN_LINE_MAX} 字、单空格断句）。本节不得出现 Style Prompt 行与参数行。
+【sections 字段】第四步的格式化歌词：逐段填 tag + 说明行字段（instruments / positive_local / energy / negative_local）+ lines，内容严格遵循方法论"格式化歌词"节（说明行渲染后 ≤${DESC_LINE_MAX} 字符；歌词每行 ≤${DOUYIN_LINE_MAX} 字、单空格断句）。sections 内不得写 Style Prompt 与参数。
 
-【STYLE 节】第四步的 Style Prompt：一行，以"Style Prompt:"开头，信息块组合规则见方法论。
+【global 字段】第四步的 Style Prompt 信息块逐字段填写（程序渲染为 "Style Prompt:" 行），组合规则见方法论。
 
-【PARAMS 节】第四步的参数行：Weirdness: ${DOUYIN_WEIRD_RANGE} | Style Influence: ${DOUYIN_STYLE_RANGE} | Audio Influence = 0。
+【settings 字段】第四步的参数：Weirdness: ${DOUYIN_WEIRD_RANGE} | Style Influence: ${DOUYIN_STYLE_RANGE} | Audio Influence = 0。
 
-除信封四节外不得输出任何文字；不得使用 ``` 围栏、markdown 表格、# 标题。
+除 SongPlan JSON 外不得输出任何文字；字段值内不得写结构标签前缀、``` 围栏、markdown 表格或 # 标题（notes 内分析用缩进排版）。
 
 如果灵感是中文，用中文输出分析和歌词，Style Prompt 和说明行用英文或中文皆可。"#
 }
@@ -1033,13 +1033,13 @@ ${VOCAL_DIM_COUNT_CN}维思考检查表（音域/音色/发声/颤音/咬字/节
 ### 7. Suno 参数
 - Weirdness: ${MODE_B_WEIRD_RANGE} | Style Influence: ${MODE_B_STYLE_RANGE} | Audio Influence = 0（无参考音频时）
 
-## 输出格式（方案信封——唯一的输出结构，四节缺一不可）
+## 输出映射（SongPlan 字段——输出结构由 JSON schema 约束，见《SongPlan 字段契约》）
 
-你的输出 = 方案信封四节。方法论四步与信封的映射：
-- 第一步「灵感分析」+ 第二步「情感翻译」+ 第四步「质量审查」→ 全部写入 <<<NOTES>>> 节
-- 第三步「创作方案」→ 拆入 <<<LYRICS>>> / <<<STYLE>>> / <<<PARAMS>>> 三节
+你的输出 = 一个 SongPlan JSON 对象。方法论四步与字段的映射：
+- 第一步「灵感分析」+ 第二步「情感翻译」+ 第四步「质量审查」→ 全部写入 notes 字段
+- 第三步「创作方案」→ 拆入 sections / global / settings 字段
 
-【NOTES 节】按三部分顺序输出：
+【notes 字段】按三部分顺序输出：
 
 第一部分 · 灵感分析（第一步）：情绪内核（质地/强度）、故事与叙事、意象系统、传播与记忆。
 
@@ -1064,13 +1064,13 @@ ${VOCAL_DIM_COUNT_CN}维思考检查表（音域/音色/发声/颤音/咬字/节
     问 11（独特性）：这首歌和"同流派同情绪"的其他歌相比，有什么独特之处？如果答不出来，说明太模板化，回到第二部分重新思考。
     问 12（经典度）：这首歌经得起反复聆听吗？有没有哪句让人觉得"这就该是首歌"？如果没有，回到第三部分重新打磨歌词。
 
-【LYRICS 节】第三步的格式化歌词：结构标签 + 说明行 + 歌词行，格式严格遵循方法论"格式化歌词"节（结构标签单独成行；说明行单独成行、三要素英文逗号分隔、每段至少 ${MIN_INSTRUMENT_WEAK} 件；歌词正文主动断句、半角标点）。本节不得出现 Style Prompt 行与参数行。
+【sections 字段】第三步的格式化歌词：逐段填 tag + 说明行字段（instruments / positive_local / energy / negative_local）+ lines，内容严格遵循方法论"格式化歌词"节（说明行渲染后单行三要素、每段至少 ${MIN_INSTRUMENT_WEAK} 件；歌词正文主动断句、半角标点）。sections 内不得写 Style Prompt 与参数。
 
-【STYLE 节】第三步的 Style Prompt：一行，以"Style Prompt:"开头，信息块组合规则见方法论（≤${STYLE_PROMPT_MAX} 字符）。
+【global 字段】第三步的 Style Prompt 信息块逐字段填写（程序渲染为 "Style Prompt:" 行），组合规则见方法论（≤${STYLE_PROMPT_MAX} 字符）。
 
-【PARAMS 节】第三步的参数行：Weirdness: ${MODE_B_WEIRD_RANGE} | Style Influence: ${MODE_B_STYLE_RANGE} | Audio Influence = 0。
+【settings 字段】第三步的参数：Weirdness: ${MODE_B_WEIRD_RANGE} | Style Influence: ${MODE_B_STYLE_RANGE} | Audio Influence = 0。
 
-除信封四节外不得输出任何文字；不得使用 ``` 围栏、markdown 表格、# 标题。
+除 SongPlan JSON 外不得输出任何文字；字段值内不得写结构标签前缀、``` 围栏、markdown 表格或 # 标题（notes 内分析用缩进排版）。
 
 如果灵感是中文，用中文输出分析和歌词，Style Prompt 和说明行用英文或中文皆可。"#
 }

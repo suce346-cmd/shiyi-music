@@ -70,10 +70,6 @@ pub fn host() -> Role {
 //    `validator.rs` 的硬校验代码同步维护——改任一处必须改另一处。
 // ---------------------------------------------------------------------------
 
-/// C2/ADR-1：转写契约（orchestrator 在开关开时注入校验员格式输出 system）。
-/// 目的：把阶段 2 从"重新创作"约束为"受控转写"——收敛承诺传递到终稿；
-/// 违规由保真校验（check_transcription_fidelity）+ 定点重写兜住。
-pub const TRANSCRIPTION_CONTRACT: &str = "\n【转写契约（最高优先级，覆盖一切格式化冲动）】你拿到的是已收敛的最终方案，你的任务是【转写】不是【重写】：\n1. 歌词部分逐行保留：每行字数、行数、断句空格、用语一律不变——原文某行 7 字，输出必须 7 字；原文 3 行，输出必须 3 行。说明行（[乐器+行为, …] 行）、结构标签、Style Prompt 行与参数行都是必须转写的格式要素，一个都不得省略（终稿缺其中任何一项即失败）。\n2. 你只允许做三类格式操作：补齐缺失的格式要素（说明行/参数行/结构标签）、修正说明行格式（配器表述/能量标注）、调整段落标签命名。\n3. 若发现收敛方案本身违反硬规则（字数不符/缺骤停/参数越界等），不要自行修改——原样转写并在输出第一行加标记 `TRANSCRIPTION_ISSUE: <问题描述>`（系统会把方案回炉给主持人修正，你改了反而破坏责任链）。例外：若调用方在输入中列出【格式问题】清单，其中列出的违规项必须修正到合规（修正优先于'原样保留'），其余内容仍逐字转写。\n";
 
 /// 校验员·讨论轮审查人设（阶段 1：审查方案与角色修订，提出观点返回主持人）。
 /// 与 auditor()（阶段 2 格式端口）职责分离：讨论轮提观点，终局做格式输出。
@@ -84,12 +80,6 @@ pub fn auditor_review_prompt() -> &'static str {
 /// 校验员·讨论轮审查输出 schema（与动态角色宽 schema 同构，措辞按审查人设）
 pub const REVIEW_SCHEMA_AUDITOR: &str = r#"{"agree": true, "checked": ["已核查项1", "已核查项2", "已核查项3"], "reason": "总体意见"} | {"agree": false, "changes": [{"target": "/global|/sections/N/instruments|/sections/N/lines|/settings|/notes", "content": "<该字段替换后的完整 JSON 值>", "reason": "理由"}], "reason": "总体意见"}"#;
 
-/// 校验员·Mode C 专用格式规范（阶段 2）。
-/// Mode C 的第一约束是歌词逐行对齐原歌词（行数一致、每行字数一致）——通用格式规范
-/// 的段落结构要求会诱导新增歌词段，故 Mode C 切换为专用规范（系统提示词级，非 user 补丁）。
-pub fn auditor_format_prompt_mode_c() -> &'static str {
-    "你是 Suno 流水线的【校验员】（最终格式输出端口，Mode C 改词版）。你拿到主持人收敛后的完整改词方案，按标准格式输出最终可直接用于 Suno 的提示词包。歌词必须逐行对齐原歌词（行数一致、每行字数一致）——这是 Mode C 的第一约束，违反即失败。\n输出格式要求（严格遵守）：\n1. 输出纯文本 Markdown，禁止 JSON 对象、禁止 ``` 代码围栏、禁止任何解释或前言\n2. 第一行写 Style Prompt（≤${STYLE_PROMPT_MAX} 字符，逗号分隔信息块）：流派基调+调性节奏+编配乐器+人声质感+空间氛围+情绪弧线\n3. 歌词：段落结构必须与原歌词一致（原歌词几段新歌词就几段，禁止新增 Hook/Chorus 段）；每段先写结构标签（英文方括号单独成行），紧跟一行说明行 [乐器1+行为, 乐器2+行为, …, ${DESC_LINE_SPACE_SLOT}, 人声状态]（乐器逐个列名+行为动词按主次排列（主奏在前、支撑次之、色彩点缀最后），禁 full band；配器数差 ≥${MIN_INSTRUMENT_GAP} 件、单段 ${INSTRUMENT_RANGE} 件；说明行整行含方括号 ≤${DESC_LINE_MAX} 字符（缺 ${DESC_LINE_SPACE_SLOT} 或人声状态槽位必须补齐后再输出））；歌词行数必须等于原歌词行数（允许尾部 ≤${LYRIC_FILL_TAIL} 行收尾），每行字数（不含断句空格）与原歌词对应行完全一致——差一个字都算失败，必须逐行等字数\n4. 歌词正文：断句用单空格，换行=强停顿；禁止 `/` 与 `、`；标点全半角；说明行人声状态必须与 Style Prompt 人声质感保持一致（不一致视为格式缺陷）\n5. 末尾输出参数行：`参数: Weirdness=… | Style Influence=… | Audio Influence=0`\n只输出最终提示词包，不要解释。"
-}
 
 pub fn auditor() -> Role {
     Role {
@@ -508,56 +498,6 @@ mod tests {
         assert!(sa.system_prompt.contains("拟声语气型"), "style_analyst prompt 缺失抖音 Hook 形态");
     }
 
-    /// 护栏：校验员人声一致性自查 + 参数模式感知（防格式缺陷漏检）
-    #[test]
-    fn auditor_prompts_have_vocal_consistency_and_mode_aware_params() {
-        // 标准 auditor 最终输出：说明行人声必须映射 Style Prompt 人声序列
-        let a = auditor();
-        assert!(
-            a.system_prompt.contains("人声状态必须能映射到 Style Prompt 的人声描述序列"),
-            "标准 auditor 缺人声一致性自查"
-        );
-        // mode_c auditor：同样要求人声一致（auditor_format_prompt_mode_c 直接返回 prompt 文本）
-        let am = auditor_format_prompt_mode_c();
-        assert!(
-            am.contains("说明行人声状态必须与 Style Prompt 人声质感保持一致"),
-            "mode_c auditor 缺人声一致性自查"
-        );
-        // 校验员讨论轮审查：参数区间模式感知（抖音不套 A/B 弧线区间）
-        // C3：断言渲染后文本——数字经 rules::interpolate 从常量流入
-        let ap = crate::rules::interpolate(auditor_review_prompt());
-        assert!(ap.contains("参数区间按模式判定"), "auditor_review_prompt 缺参数模式判定");
-        assert!(
-            ap.contains(&format!("抖音模式 Weirdness {}-{}", crate::rules::DOUYIN_WEIRD_MIN, crate::rules::DOUYIN_WEIRD_MAX)),
-            "auditor_review_prompt 缺抖音参数区间"
-        );
-        // 抖音叙事型例外条款（ADR-2，与硬校验同口径）：≥N 叙事段 + 写明'叙事型'归类，缺一打回。
-        // N 的断言**由常量派生**（禁止硬写 2）：人设文案与 rules::NARRATIVE_SECTIONS_MIN 不同源即红。
-        let narrative = format!("≥{} 个叙事段", crate::rules::NARRATIVE_SECTIONS_MIN);
-        assert!(ap.contains("可回落 A/B 弧线区间"), "auditor_review_prompt 缺抖音叙事型例外");
-        assert!(ap.contains(&narrative), "auditor_review_prompt 缺例外结构门槛");
-        assert!(ap.contains("写明'叙事型'归类"), "auditor_review_prompt 缺归类声明要求");
-        assert!(ap.contains("二者缺一"), "auditor_review_prompt 缺缺一打回声明");
-        // 输出端口/情感分析师/制作人同样带例外（同口径，同样按常量派生断言）
-        for (name, text) in [
-            ("auditor 输出端口", auditor().system_prompt),
-            ("情感分析师", emotion().system_prompt),
-            ("制作人", producer().system_prompt),
-        ] {
-            let rendered = crate::rules::interpolate(text);
-            assert!(rendered.contains(&narrative), "{}缺例外结构门槛", name);
-            assert!(rendered.contains("写明'叙事型'归类"), "{}缺归类声明要求", name);
-        }
-        // 审计补位护栏：结构标签表完整（11 个，缺 Intro/Interlude/Build Up/Breakdown 会漏输出段落）
-        let a = auditor();
-        for tag in ["Intro", "Interlude", "Build Up", "Breakdown"] {
-            assert!(a.system_prompt.contains(tag), "标准 auditor 结构标签表缺: {}", tag);
-        }
-        // 弧线扩充护栏：10 种弧线形态须在清单单源中覆盖（Q5：人设只指清单，不再复写全表）
-        for arc in ["阶梯上升", "渐进爆发", "U型", "单峰", "回环"] {
-            assert!(crate::rules::checklist("mode_a").contains(arc), "清单缺弧线形态: {}", arc);
-        }
-    }
     /// 护栏：制作人 prompt 必须包含编曲方法论关键维度（防后续退化）
     #[test]
     fn producer_prompt_has_full_dimensions() {

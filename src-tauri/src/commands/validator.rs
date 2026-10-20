@@ -182,7 +182,7 @@ fn declared_minimal_sections(text: &str) -> Vec<String> {
 }
 
 /// 说明行长度门（终稿层单源，A/B/C/D 全模式共用）：上限 rules::DESC_LINE_MAX_CHARS。
-/// 与方案侧信封门（rules::envelope_defect_mode）同读一个常量、共用同一个行型谓词（rules::is_desc_line）——
+/// 与 plan::validate 同读一个常量、共用同一个行型谓词（rules::is_desc_line）——
 /// 上游输出约束与下游校验约束不再各写一套（R1 根因：上游零告知 + 下游 80 硬门 → 必然降级）。
 /// 报前 3 条明细 + 总数汇总（与其他硬门同口径），文案给出可执行的修复方向。
 pub fn desc_line_length_issues(text: &str) -> Vec<String> {
@@ -509,20 +509,12 @@ fn is_bare_package_line(l: &str) -> bool {
     ["voice", "vocal", "人声", "room", "空间", "hall", "能量", "energy", "混响", "reverb", "氛围", "atmosphere", "guitar", "piano", "cello", "drums", "bass", "synth"].iter().any(|k| ll.contains(k))
 }
 
-/// 歌词行判定的排除前缀表（单源）：抖音逐行字数门与 C2 保真校验共用同一分类。
-/// '（' 与「注：」「结构归类」开头的方案元信息行同样不算歌词（两侧对称排除，保真比对不受干扰）；
-/// TRANSCRIPTION_ISSUE 标记行不算歌词（P4 实网防御：标记若残留在任何输出中，不得按歌词计字数）。
-/// `<<<` 信封标记形态同样排除（第二十五批 Q3 实网修复）：主持人可能把标记**错写**成
-/// `<<<STYLE>>`/`<<<PARAMS>>`（少一个 `>`）——错写行不被 `rules::parse_plan_sections` 识别为
-/// 节边界 → 落进 LYRICS 节 → 被当歌词行 → 保真校验报"收敛方案第 N 行歌词「<<<STYLE>>」缺失"
-/// → 打回耗尽降级（2026-09-19 实跑复现，validation_passed=false）。信封标记（含一切 `<<<` 变体）
-/// 都不是歌词，两侧对称排除。
-/// Suno 终稿行型解析（非"猜"）：终稿格式由转写契约明确定义——结构标签 `[X]`（无逗号）、
-/// 说明行 `[乐器, ...]`（含逗号）、歌词行（其余）。本函数只在这类格式已定义的场合使用
-/// （终稿侧行提取 / 信封 LYRICS 节内部分行型）；主持人自由文本上禁止使用（D-Envelope 已除）。
+/// 歌词行判定的排除前缀表（单源）：文本校验器（validate_douyin 等）的行型分类。
+/// '（' 与「注：」「结构归类」开头的方案元信息行不算歌词；`<<<` 形态（历史分节标记）同样排除。
+/// 终稿行型：结构标签 `[X]`（无逗号）、说明行 `[乐器, ...]`（含逗号）、歌词行（其余）。
 const LYRIC_LINE_EXCLUDED_PREFIXES: &[&str] = &[
     "[", "#", "-", "*", "（", "注：", "结构归类", "Style", "风格", "参数", "Weirdness",
-    "TRANSCRIPTION_ISSUE", "<<<",
+    "<<<",
 ];
 
 /// 歌词行判定（单源）：排除空行/结构标签/说明行/元信息/Style Prompt/参数行/裸包装行。
@@ -533,106 +525,11 @@ fn is_lyric_line(l: &str) -> bool {
         && !is_bare_package_line(l)
 }
 
-/// 保真比对行集：歌词行 + 1-based 行号 + 去全部空白（与 count_lyric_chars 断句口径一致）。
-fn normalized_lyric_lines(text: &str) -> Vec<(usize, String)> {
-    text.lines()
-        .map(|l| l.trim())
-        .enumerate()
-        .filter(|(_, l)| is_lyric_line(l))
-        .map(|(i, l)| (i + 1, l.chars().filter(|c| !c.is_whitespace()).collect()))
-        .collect()
-}
 
-/// 终稿多出的歌词行（multiset 消费后仍剩余的终稿行）→ 逐条报（含行号与行原文）。
-fn extra_line_issues(final_lines: &[(usize, String)], remaining: &mut Vec<(usize, String)>) -> Vec<String> {
-    let mut issues = Vec::new();
-    for (no, line) in final_lines {
-        match remaining.iter().position(|(_, p)| p == line) {
-            Some(i) => {
-                remaining.remove(i);
-            }
-            None => issues.push(format!(
-                "保真校验: 终稿第{}行歌词「{}」未见于收敛方案（转写不得改写歌词正文）",
-                no, line
-            )),
-        }
-    }
-    issues
-}
 
-/// 终稿缺失的歌词行（multiset 消费后仍剩余的方案行）→ 逐条报（含行号与行原文）。
-fn missing_line_issues(remaining: &[(usize, String)]) -> Vec<String> {
-    remaining
-        .iter()
-        .map(|(no, line)| {
-            format!(
-                "保真校验: 收敛方案第{}行歌词「{}」在终稿中缺失（转写不得删改歌词正文）",
-                no, line
-            )
-        })
-        .collect()
-}
 
-/// 歌词行 multiset diff：终稿多出/缺失各报一条，详列上限 6 条（其余计数汇总）。
-fn lyric_multiset_issues(plan_lines: &[(usize, String)], final_lines: &[(usize, String)]) -> Vec<String> {
-    let mut remaining = plan_lines.to_vec();
-    let mut issues = extra_line_issues(final_lines, &mut remaining);
-    issues.extend(missing_line_issues(&remaining));
-    // 打回信息可执行化：只详列前 6 处，其余计数汇总（与 lyric_fill 的 mismatches 汇总同思路）
-    if issues.len() > 6 {
-        let total = issues.len();
-        issues.truncate(6);
-        issues.push(format!("保真校验: 另有 {} 处歌词行差异未逐一列出", total - 6));
-    }
-    issues
-}
 
-/// C2/ADR-1：转写保真校验——比对收敛方案与终稿的歌词正文（multiset diff）。
-/// mode_c 返回空：validate_lyric_fill 已以原歌词为基准逐行硬校验，且尾部 ≤2 行收尾的
-/// 合法差异会使 plan 基比对产生假阳性（ADR-1 附注）。
-/// 说明行/标签/参数行不比——转写契约允许转写者补齐/修正这些格式要素。
-///
-/// D-Envelope（2026-09-09）：方案合规信封时只比对 LYRICS 节——围栏/表格/参数行/元话语
-/// 物理上在节外，启发式分类器在方案侧退役（40 例实测 81% 误报根除）。
-/// 方案不合信封（信封降级回退/开关关）→ **跳过保真**（返回空）：
-/// 对自由文本跑启发式保真 = 81% 噪音回归，宁可此 run 无保真（硬校验全量保留 + envelope_fallback
-/// 已诚实声明），也不再制造冤案挤占打回额度。开关关（显式回退 v0.5.1 语义）仍走启发式。
-pub fn check_transcription_fidelity(converged_plan: &str, final_text: &str, mode: &str) -> Vec<String> {
-    check_transcription_fidelity_impl(converged_plan, final_text, mode, crate::rules::plan_envelope_enabled())
-}
 
-fn check_transcription_fidelity_impl(converged_plan: &str, final_text: &str, mode: &str, envelope: bool) -> Vec<String> {
-    if mode == "mode_c" {
-        return Vec::new();
-    }
-    if envelope {
-        // Q3（第二十五批）语义精确化：`envelope` 参数是**信封门开关**，不等于"本方案实际合规信封"。
-        // 实网复现：主持人两次未过信封契约 → `envelope_fallback` 回退自由格式，但开关仍开 →
-        // 旧实现直接走信封闭环，`parse_plan_sections` 因残留 `<<<LYRICS>>>` 返回 Some，
-        // 把错写标记（`<<<STYLE>>`）划入 LYRICS 节 → 误报"缺失" → 打回耗尽降级
-        // （2026-09-19 实跑：validation_passed=false / 终稿 612 字）。
-        // 现前置**合规判定**（单源 `envelope_defect_mode`，与信封门同一判据）：不合规即跳过保真，
-        // 与函数文档"方案不合信封 → 跳过保真，不制造启发式噪音"的声明严格一致。
-        if crate::rules::envelope_defect_mode(converged_plan, mode).is_some() {
-            return Vec::new();
-        }
-        return match crate::rules::parse_plan_sections(converged_plan) {
-            Some(sections) => {
-                let plan_lines: Vec<(usize, String)> = sections
-                    .lyrics_lines()
-                    .into_iter()
-                    .filter(|l| is_lyric_line(l))
-                    .enumerate()
-                    .map(|(i, l)| (i + 1, l.chars().filter(|c| !c.is_whitespace()).collect()))
-                    .collect();
-                let final_lines = normalized_lyric_lines(final_text);
-                lyric_multiset_issues(&plan_lines, &final_lines)
-            }
-            None => Vec::new(), // 信封降级回退：跳过保真，不制造启发式噪音
-        };
-    }
-    lyric_multiset_issues(&normalized_lyric_lines(converged_plan), &normalized_lyric_lines(final_text))
-}
 
 /// Mode C：校验填词（字数对齐）
 pub fn validate_lyric_fill(original: &str, new: &str) -> ValidationResult {
@@ -1066,112 +963,11 @@ mod tests {
 
     // ---- C2/ADR-1：转写保真校验（红灯先行——桩返回空时篡改/增删用例必须失败） ----
 
-    /// 第二十五批 Q3 修复锁（实网降级根治，红灯先行）：
-    /// ① 信封标记形态（含主持人**错写变体** `<<<STYLE>>`/`<<<PARAMS>>`——少一个 `>`）在任何一侧
-    ///    都不得被当歌词行。实网：错写标记不被 `parse_plan_sections` 识别为节边界 → 落进 LYRICS 节
-    ///    → 保真报"收敛方案第 5 行歌词「<<<STYLE>>」在终稿中缺失" → 打回耗尽降级
-    ///    （2026-09-19 实跑复现：validation_passed=false，终稿 612 字）。
-    /// ② 自由格式/信封回退方案（标记错写、节序错乱）→ 保真必须**跳过**（返回空）：不得在自由文本上
-    ///    跑行型启发式（81% 噪音史），更不得把节外散文行当歌词制造冤案挤占打回额度。
-    /// ③ 合规信封方案仍照常保真（不得为修 ①② 而误杀真缺陷）。
-    #[test]
-    fn fidelity_skips_freeform_plan_and_ignores_envelope_marks() {
-        // ① 标记形态（正确 + 错写）都不是歌词行；真歌词行不被误杀
-        for l in ["<<<LYRICS>>>", "<<<STYLE>>>", "<<<STYLE>>", "<<<PARAMS>>", "<<<NOTES>>>"] {
-            assert!(!is_lyric_line(l), "{:?} 不得按歌词行计（信封标记及其错写变体）", l);
-        }
-        for l in ["凌晨 两点半", "我不睡 我不退", "深夜 灯亮 键盘响"] {
-            assert!(is_lyric_line(l), "{:?} 必须仍是歌词行（防误杀）", l);
-        }
-        // ② 自由格式（错写标记 + LYRICS 节内混入节外散文）→ 跳过保真
-        let freeform = "<<<LYRICS>>>\n凌晨 两点半\n这里是分析散文的续行内容\n<<<STYLE>>\nStyle Prompt: x\n<<<PARAMS>>\nW=1";
-        let final_ok = "Style Prompt: x\n[Verse]\n[pad, close room, voice hushed, 能量:2]\n凌晨 两点半\n参数: Weirdness=18 | Style Influence=82 | Audio Influence=0";
-        assert!(
-            crate::rules::envelope_defect_mode(freeform, "mode_a").is_some(),
-            "fixture 必须是不合规信封（错写标记）"
-        );
-        assert!(
-            check_transcription_fidelity_impl(freeform, final_ok, "mode_a", true).is_empty(),
-            "自由格式/信封回退方案必须跳过保真（否则散文行/错写标记被当歌词 → 冤案降级）"
-        );
-        // ③ 合规信封仍照常抓真缺陷（篡改歌词必须报）
-        let ok_plan = "<<<LYRICS>>>\n[Verse]\n[pad, close room, voice hushed, 能量:2]\n凌晨 两点半\n<<<STYLE>>>\nStyle Prompt: x\n<<<PARAMS>>>\nW=1";
-        let tampered = "Style Prompt: x\n[Verse]\n[pad, close room, voice hushed, 能量:2]\n凌晨 三点半\n参数: Weirdness=18 | Style Influence=82 | Audio Influence=0";
-        let issues = check_transcription_fidelity_impl(ok_plan, tampered, "mode_a", true);
-        assert!(!issues.is_empty(), "合规信封下篡改歌词必须被抓（不得误杀真缺陷）");
-        assert!(issues[0].contains("凌晨三点半"), "报错须含终稿行原文（去空白口径）: {:?}", issues);
-    }
 
-    /// 收敛方案 fixture：A 模式完整方案（歌词行 5 行：oom + 4 正文行）
-    fn fidelity_plan() -> String {
-        "Style Prompt: 深夜室内民谣, F#小调, felt piano, nylon guitar, 男声低语, 小房间混响, 从压抑到微亮\n\
-[Intro]\n\
-[felt piano, soft pad, 能量:2]\n\
-(oom~)\n\
-[Verse]\n\
-[felt piano, nylon guitar, 能量:3]\n\
-深夜 灯亮 键盘响\n\
-窗外 雨落 心火燃\n\
-[Chorus]\n\
-[felt piano, nylon guitar, upright bass, 能量:7]\n\
-雨声 先落下来\n\
-心火 不肯灭\n\
-参数: Weirdness=25 | Style Influence=80 | Audio Influence=0"
-            .to_string()
-    }
 
-    /// 纯格式化转写（契约允许）：标签改名 + 说明行改写 + 断句空格变化 → 必须通过
-    #[test]
-    fn fidelity_pure_reformat_passes() {
-        let final_text = "Style Prompt: 深夜室内民谣, F#小调, felt piano, nylon guitar, 男声低语, 小房间混响, 从压抑到微亮\n\
-[Instrumental Intro]\n\
-[felt piano only, 能量:2]\n\
-(oom~)\n\
-[Verse]\n\
-[felt piano and nylon guitar, 能量:3]\n\
-深夜  灯亮 键盘响 \n\
-窗外 雨落 心火燃\n\
-[Chorus]\n\
-[felt piano, nylon guitar, upright bass, 能量:7]\n\
-雨声 先落下来\n\
-心火 不肯灭\n\
-参数: Weirdness=25 | Style Influence=80 | Audio Influence=0";
-        let issues = check_transcription_fidelity_impl(&fidelity_plan(), final_text, "mode_a", false);
-        assert!(issues.is_empty(), "纯格式化不应报保真问题: {:?}", issues);
-    }
 
-    /// 歌词改写（转写篡改）：第 7 行"键盘响"→"琴声远" → 报且含行号与两侧原文
-    #[test]
-    fn fidelity_rewritten_line_fails_with_line_no_and_both_sides() {
-        let final_text = fidelity_plan().replace("深夜 灯亮 键盘响", "深夜 灯亮 琴声远");
-        let issues = check_transcription_fidelity_impl(&fidelity_plan(), &final_text, "mode_a", false);
-        assert!(!issues.is_empty(), "改写歌词行应报保真问题");
-        assert!(issues.iter().any(|i| i.contains("第7行")), "缺终稿行号: {:?}", issues);
-        assert!(issues.iter().any(|i| i.contains("琴声远")), "缺终稿原文: {:?}", issues);
-        assert!(issues.iter().any(|i| i.contains("键盘响")), "缺收敛方案原文: {:?}", issues);
-    }
 
-    /// 加行 + 删行 → 双向都报
-    #[test]
-    fn fidelity_added_and_dropped_lines_fail() {
-        let final_text = fidelity_plan()
-            .replace("窗外 雨落 心火燃\n", "") // 删行
-            .replace("雨声 先落下来", "雨声 先落下来\n临时 凑数 一行词"); // 加行
-        let issues = check_transcription_fidelity_impl(&fidelity_plan(), &final_text, "mode_a", false);
-        assert!(issues.iter().any(|i| i.contains("未见于收敛方案")), "加行未报: {:?}", issues);
-        assert!(issues.iter().any(|i| i.contains("在终稿中缺失")), "删行未报: {:?}", issues);
-    }
 
-    /// 方案元信息行（结构归类说明）不参与比对——终稿省略不算缺失
-    #[test]
-    fn fidelity_meta_lines_not_flagged() {
-        let plan = fidelity_plan().replace(
-            "参数: Weirdness=25",
-            "结构归类：叙事型弧线，参数沿用弧线区间\n参数: Weirdness=25",
-        );
-        let issues = check_transcription_fidelity_impl(&plan, &fidelity_plan(), "mode_a", false);
-        assert!(issues.is_empty(), "元信息行不应参与保真比对: {:?}", issues);
-    }
 
     /// D-极简段豁免：声明"极简段"的 2 件段落豁免下限；未声明的仍拦截
     #[test]
@@ -1196,33 +992,7 @@ mod tests {
         assert!(issues[0].contains("第4行"), "应带行号: {:?}", issues);
     }
 
-    /// mode_c 交由 validate_lyric_fill 原词基准硬校验——保真层 no-op（不双报）
-    #[test]
-    fn fidelity_mode_c_delegates_to_hard_validation() {
-        let issues = check_transcription_fidelity(&fidelity_plan(), "完全 不同 的 歌词", "mode_c");
-        assert!(issues.is_empty(), "mode_c 保真层应 no-op: {:?}", issues);
-    }
 
-    /// P4 实网防御：TRANSCRIPTION_ISSUE 标记行残留时不得按歌词计（mode_d 首轮实网误报根因）
-    #[test]
-    fn transcription_marker_line_never_counted_as_lyric() {
-        let text = "Style Prompt: dark electronic rock, 128BPM, 808 sub, dense hi-hats, raspy male voice, office room tone, 先压后炸\n\
-[Hook]\n\
-[808 sub, hi-hats, guitar, 能量:9]\n\
-干就 完了 干就 完了\n\
-[Hook]\n\
-[808 sub, hi-hats, guitar, 能量:9]\n\
-干就 完了 干就 完了\n\
-[all instruments cut]\n\
-TRANSCRIPTION_ISSUE: 收敛方案含 ``` 围栏与参数行格式错误，需主持人回炉修正这行远超十字\n\
-参数: Weirdness=15 | Style Influence=90 | Audio Influence=0";
-        let r = validate_douyin(text);
-        assert!(
-            !r.issues.iter().any(|i| i.contains("TRANSCRIPTION_ISSUE")),
-            "标记行不得计入歌词行字数门: {:?}",
-            r.issues
-        );
-    }
 
     #[test]
     fn style_prompt_too_long_fails() {
@@ -1911,22 +1681,4 @@ TRANSCRIPTION_ISSUE: 收敛方案含 ``` 围栏与参数行格式错误，需主
         assert!(!r.issues.iter().any(|i| i.contains("超 12 字")), "issues: {:?}", r.issues);
 }
 
-/// D-Envelope 保真回归（40 例实测 81% 误报的死刑验证）：
-/// 围栏/表格/参数行/元话语在方案 NOTES 或节外——一律不得报"歌词缺失"；
-/// LYRICS 节内真实歌词差异——必须带行号报出。
-#[test]
-fn fidelity_envelope_ignores_markdown_artifacts() {
-    let plan = "<<<LYRICS>>>\n[Intro]\n[clean pad, 能量:2]\n凌晨 两点半\n<<<STYLE>>>\nStyle Prompt: dark trap\n<<<PARAMS>>>\nWeirdness=18|StyleInfluence=92|AudioInfluence=0\n<<<NOTES>>>\n```markdown\n|参数|值|\n|---|---|\n已收敛，无需下一轮讨论。\n```";
-    // 终稿与 LYRICS 节一致（围栏/表格/元话语哪怕全丢也不算违规）
-    let final_ok = "Style Prompt: dark trap, 140BPM\n[Intro]\n[clean pad, 能量:2]\n凌晨 两点半\n参数: Weirdness=18|StyleInfluence=92|AudioInfluence=0";
-    assert!(
-        check_transcription_fidelity(plan, final_ok, "mode_d").is_empty(),
-        "markdown 制品不得再触发保真误报"
-    );
-    // LYRICS 节歌词被改 → 必须报（带行号）
-    let final_bad = "Style Prompt: dark trap, 140BPM\n[Intro]\n[clean pad, 能量:2]\n凌晨 三点半\n参数: Weirdness=18|StyleInfluence=92|AudioInfluence=0";
-    let issues = check_transcription_fidelity(plan, final_bad, "mode_d");
-    assert!(!issues.is_empty(), "LYRICS 节真实歌词差异必须报出");
-    assert!(issues[0].contains("第"), "报错应带行号: {:?}", issues);
-}
 }

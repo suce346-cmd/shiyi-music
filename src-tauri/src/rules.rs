@@ -50,8 +50,8 @@ pub const LYRIC_LINE_CHORUS_MAX: usize = 9;
 /// D 模式 BPM 下限
 pub const DOUYIN_BPM_MIN: u32 = 90;
 /// 全模式说明行上限字符数（含方括号、整行计）。
-/// 单源：上游告知（四模式 checklist + D primer + 信封规范 + 各角色提示词经 ${DESC_LINE_MAX} 插值）
-/// 与下游强制（rules::envelope_defect_mode 方案侧左移 + validator::desc_line_length_issues 终稿侧硬门）
+/// 单源：上游告知（四模式 checklist + D primer + 说明行契约 + 各角色提示词经 ${DESC_LINE_MAX} 插值）
+/// 与下游强制（plan::validate 说明行长度硬门）
 /// 同读此值——上游输出约束与下游校验约束共用一个数字，口径不可能再分叉。
 /// 旧值 80 的判废依据（2026-09-17 实测）：最强段 ≥5 件且每件带行为动词的英文说明行最简约 90-100 字符，
 /// 与 80 上限在数学上不可能同时满足 → 5/5 run 全部被信封门拦下、0 次干净通过（14 条超限行 81-117 字符）。
@@ -238,6 +238,7 @@ pub const RULE_EXECUTOR_FILES: &[&str] = &[
     // 产出硬门执行者
     "commands/validator.rs",
     "commands/orchestrator.rs",
+    "plan/validate.rs",
     // 准入硬门执行者（#26 新增三条规则所在处）
     "models/mod.rs",
     "commands/interject.rs",
@@ -271,14 +272,13 @@ pub const RULE_REGISTRY: &[RuleSpec] = &[
     RuleSpec { id: "hook_min_count", modes: &["mode_d"], symbols: &["HOOK_MIN_COUNT"], executor: "validate_douyin" },
     RuleSpec { id: "verse_max_lines", modes: &["mode_d"], symbols: &["VERSE_MAX_LINES"], executor: "validate_douyin" },
     RuleSpec { id: "douyin_line_max", modes: &["mode_d"], symbols: &["DOUYIN_LINE_MAX_CHARS"], executor: "validate_douyin" },
-    // 说明行上限：方案侧信封门（envelope_defect_mode）左移拦截 + 终稿侧 A/B/C/D 全模式硬门，
+    // 说明行上限：A/B/C/D 全模式硬门，
     // 两侧同读 DESC_LINE_MAX_CHARS（旧 douyin_desc_line_max 仅 D 单模式 + 80 上限，已废）
     RuleSpec { id: "desc_line_max_terminal", modes: ALL_MODES, symbols: &["DESC_LINE_MAX_CHARS", "is_desc_line"], executor: "desc_line_length_issues" },
     // 执行者更正（第三批）：原挂 check_style_prompt_blocks（不消费 DOUYIN_BPM_MIN、只查下限），
     // 真执行者 = check_bpm_range（validator::check_bpm_range 消费 DOUYIN_BPM_MIN，经 orchestrator 接线）。
     RuleSpec { id: "douyin_bpm_min", modes: &["mode_d"], symbols: &["DOUYIN_BPM_MIN"], executor: "check_bpm_range" },
     RuleSpec { id: "lyric_fill_tail_allow", modes: &["mode_c"], symbols: &["LYRIC_FILL_TAIL_ALLOW"], executor: "validate_lyric_fill" },
-    // D-Envelope：方案信封契约——解析器是"方案是否符合结构"的唯一执行者（2026-09-09）
     // P1-3：信封退役；字段契约由 plan_field_contract 注入，终稿门 = plan::validate
     // -----------------------------------------------------------------------
     // 准入限额族（第十三批 D1 补登记）：与上面的**产出硬门族**不同，这三条是**请求准入硬门**
@@ -758,9 +758,6 @@ pub const PROSE_CARRIERS: &[ProseCarrier] = &[
     ProseCarrier { name: "ARC_DENSITY_TABLE", text: ARC_DENSITY_TABLE, csv_locked: &[] },
     ProseCarrier { name: "ARC_DENSITY_NEW_TABLE", text: ARC_DENSITY_NEW_TABLE, csv_locked: &[] },
     ProseCarrier { name: "DOUYIN_DYNAMIC_TABLE", text: DOUYIN_DYNAMIC_TABLE, csv_locked: &[] },
-    // 信封契约正文（第二十批补登记）：随 `envelope_spec()` 进主持人上下文——此前它
-    // 既不在两个源文件里、也不在本表里，属于"漏网载体"（发现网 `prose_definitions_are_covered_by_scan_or_registry` 报红暴露）
-    ProseCarrier { name: "ENVELOPE_SPEC_BASE", text: ENVELOPE_SPEC_BASE, csv_locked: &[] },
     // 说明行契约正文（第二十三批）：旧实现是 `desc_line_contract()` 的 format! 局部手写，
     // 既不进扫描面也不被入网自证发现——改常量不联动它。现为注册载体。
     ProseCarrier { name: "DESC_LINE_CONTRACT", text: DESC_LINE_CONTRACT, csv_locked: &[] },
@@ -1080,7 +1077,6 @@ mod tests {
             carriers.push((format!("carrier:{}", c.name), interpolate(c.text)));
         }
         carriers.push(("minimal_section_exemption".to_string(), minimal_section_exemption()));
-        carriers.push(("envelope_spec".to_string(), envelope_spec()));
         carriers.push(("desc_line_contract".to_string(), desc_line_contract()));
         carriers.push(("plan_field_contract".to_string(), plan_field_contract()));
         carriers.push(("territory_rules_text".to_string(), territory_rules_text()));
@@ -1100,10 +1096,6 @@ mod tests {
             "role:auditor_review".to_string(),
             interpolate(roles::auditor_review_prompt()),
         ));
-        carriers.push((
-            "role:auditor_mode_c".to_string(),
-            interpolate(roles::auditor_format_prompt_mode_c()),
-        ));
         for (name, r) in [
             ("emotion", roles::emotion()),
             ("lyricist", roles::lyricist()),
@@ -1114,7 +1106,6 @@ mod tests {
             carriers.push((format!("role:{}", name), interpolate(r.system_prompt)));
             carriers.push((format!("role_schema:{}", name), interpolate(r.output_schema)));
         }
-        carriers.push(("transcription_contract".to_string(), roles::TRANSCRIPTION_CONTRACT.to_string()));
         for (name, p) in [
             ("mode_a", crate::commands::prompts::mode_a_system_prompt()),
             ("mode_b", crate::commands::prompts::mode_b_system_prompt()),
@@ -2267,7 +2258,7 @@ mod tests {
         }
         // 扫描面自证：发现逻辑失效（判据写错/被空串喂饱）时本锁会静默空转
         assert!(discovered.len() >= 8, "散文定义发现数异常（{}）——发现逻辑可能已失效", discovered.len());
-        for known in ["CHECKLIST_A", "PRIMER_AB", "ENVELOPE_SPEC_BASE"] {
+        for known in ["CHECKLIST_A", "PRIMER_AB", "PLAN_FIELD_CONTRACT"] {
             assert!(
                 discovered.iter().any(|n| n == known),
                 "发现逻辑漏掉了已知载体 {}（扫描面自证）",
@@ -2568,9 +2559,6 @@ mod tests {
         let auditor = crate::commands::roles::auditor().system_prompt;
         assert!(auditor.contains("${DESC_LINE_SPACE_SLOT}"), "校验员 prompt 未引用槽位");
         assert!(auditor.contains("必须补齐后再输出"), "校验员 prompt 缺补齐语义（只说上限不管缺项）");
-        let auditor_c = crate::commands::roles::auditor_format_prompt_mode_c();
-        assert!(auditor_c.contains("${DESC_LINE_SPACE_SLOT}"), "Mode C 校验员 prompt 未引用槽位");
-        assert!(auditor_c.contains("必须补齐后再输出"), "Mode C 校验员 prompt 缺补齐语义");
         // ④ 说明行契约（渲染后含槽位名，零残留）
         let contract = desc_line_contract();
         assert!(contract.contains(DESC_LINE_SPACE_SLOT), "说明行契约缺槽位名");
@@ -2672,44 +2660,13 @@ mod tests {
     }
 }
 
-// ===========================================================================
-// D-Envelope（2026-09-09）：方案信封契约——收敛方案的文档结构单一真源
-// ===========================================================================
-// 根因（40 例大型实测）：主持人自由 markdown 输出（```围栏/表格/元话语混入方案正文），
-// 保真校验靠启发式分类器"猜"哪些行是歌词——猜错 212/263（81%）。
-// 彻底修复：方案必须用固定信封分节，下游按节处理，"猜"这个动作退役。
-// 开关 plan_envelope_enabled()（默认开）：OFF 回退自由格式 + 启发式分类（旧行为）。
-
-/// 信封节标记（顺序固定；NOTES 可省略）
-pub const ENV_LYRICS: &str = "<<<LYRICS>>>";
-pub const ENV_STYLE: &str = "<<<STYLE>>>";
-pub const ENV_PARAMS: &str = "<<<PARAMS>>>";
-pub const ENV_NOTES: &str = "<<<NOTES>>>";
-
-/// 信封规范正文（不含说明行契约行——该行带数字，由 `envelope_spec()` 拼接，防手写漂移）。
-/// 节序 NOTES-first：顺应模型"先思考后产出"天性（40 例实测分析散文前置的固有习惯），
-/// 方法论四步的产出全部归属 NOTES 节，格式宪法与方法论不再冲突。
-const ENVELOPE_SPEC_BASE: &str = "\
-【方案信封契约（最高优先级，覆盖一切格式化冲动）】你的方案必须且只能按以下节输出，节标记独立成行、一字不差：
-<<<NOTES>>>
-（方法论要求的逐项分析、情感翻译、质量审查结论、裁决理由、整合说明——全部且只能写进本节）
-<<<LYRICS>>>
-（歌词正文：结构标签行 + 说明行 + 歌词行。Style Prompt 行与参数行不得写进本节）
-<<<STYLE>>>
-（Style Prompt 行，含\"Style Prompt:\"标签）
-<<<PARAMS>>>
-（参数行，如 Weirdness=18|StyleInfluence=92|AudioInfluence=0）
-节标记之外不得输出任何文字；禁止使用 markdown 代码围栏（```）、表格（|---|）、标题（#）等任何额外格式，NOTES 节内的结构化内容用缩进排版。";
-
 /// 说明行契约全文（单源，含数字）：上游告知与下游强制同读一段。
 ///
 /// 三条格式形态条款（2026-09-18 补，审计 #20 剩余）：乐器主次排列、人声映射序列、能量标注
 /// 书写格式——旧版只写在 `roles::auditor()`（下游格式端口）里，上游主持人完全看不见，
-/// 于是主持人产出不合下游规范的排版 → 校验员按自己那份规范改写 → 与转写契约"逐字保留"
-/// 冲突 → TRANSCRIPTION_ISSUE 回炉。格式契约只在下游 = 必然降级环，现上移单源。
+/// 于是主持人产出不合下游规范的排版 → 下游打回。格式契约只在下游 = 必然降级环，现上移单源。
 ///
-/// 注入策略（见 `host_system_with`）：信封开关开 → 随 `envelope_spec()` 注入；
-/// 开关关 → 由 `host_system_with` 单独注入本段，保证"上游告知"不随开关消失。
+/// 注入策略：由 `host_system_with` 无条件注入（P1-3 信封退役后唯一注入点）。
 ///
 /// 第二十三批：旧实现是 `format!` 局部手写（`≥5 件`/`单段 3-7 件`/`0-10` 直接写死在函数体里），
 /// 既不在守护网扫描面、又不被入网自证发现（`fn -> String` 不是"散文定义"的发现形态）——
@@ -2748,7 +2705,7 @@ const PLAN_FIELD_CONTRACT: &str = "【SongPlan 字段契约（最高优先级：
 
 
 /// 说明行契约正文（单源：本文件唯一一份；数值一律 `${占位符}`）。
-const DESC_LINE_CONTRACT: &str = "【说明行契约（全模式统一）】每段说明行形如 [乐器1+行为, 乐器2+行为, …, ${DESC_LINE_SPACE_SLOT}, 人声状态]（A/B 模式另在行尾标 能量:X），整行含方括号 ≤${DESC_LINE_MAX} 字符。上限宽松：不得为缩短而删乐器或行为动词（最强段 ≥${MIN_INSTRUMENT_STRONG} 件、单段 ${INSTRUMENT_RANGE} 件照常执行），也不得靠堆修饰词占满；超过上限的说明行会被信封门与终稿硬校验拦下。\n\
+const DESC_LINE_CONTRACT: &str = "【说明行契约（全模式统一）】每段说明行形如 [乐器1+行为, 乐器2+行为, …, ${DESC_LINE_SPACE_SLOT}, 人声状态]（A/B 模式另在行尾标 能量:X），整行含方括号 ≤${DESC_LINE_MAX} 字符。上限宽松：不得为缩短而删乐器或行为动词（最强段 ≥${MIN_INSTRUMENT_STRONG} 件、单段 ${INSTRUMENT_RANGE} 件照常执行），也不得靠堆修饰词占满；超过上限的说明行会被 plan::validate 硬校验拦下。\n\
 1. 乐器主次：乐器逐个列名 + 行为动词，按主次排列（主奏在前、支撑次之、色彩点缀最后）；禁 full band 等笼统写法。\n\
 2. 槽位齐全：每段说明行必须同时含乐器集、${DESC_LINE_SPACE_SLOT}（声场或力度动态，如 close room / wide hall / 突转）、人声状态——缺任一槽位即格式缺陷（制作人逐段核对，校验员在终稿端口补齐）。\n\
 3. 人声映射：每段说明行的人声状态必须能映射到 Style Prompt 的人声描述序列（高能段用开放真声形态、低能段用气声/假声形态），不得自造与 Style Prompt 无关的人声描述。\n\
@@ -2781,221 +2738,16 @@ pub fn minimal_section_exemption() -> String {
     )
 }
 
-/// 信封规范完整文本（单源：阶段 0/汇总/纠错重写三个注入点 + 方案侧说明行门同读）。
-/// 说明行契约（R1 根因修复）：旧版全文不提说明行上限，而上限又硬门在方案侧——
-/// 上游零告知、下游强制 = 必然降级；现把上限连同"不得为缩短删乐器"的边界写进规范。
-pub fn envelope_spec() -> String {
-    format!("{}\n{}", ENVELOPE_SPEC_BASE, desc_line_contract())
-}
-
-/// 解析结果：四个节（NOTES 可为空串）
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlanSections {
-    pub lyrics: String,
-    pub style: String,
-    pub params: String,
-    pub notes: String,
-}
-
-impl PlanSections {
-    /// LYRICS 节的非空行（保留原始顺序与内容——保真比对与转写指令共用）
-    pub fn lyrics_lines(&self) -> Vec<&str> {
-        self.lyrics.lines().map(|l| l.trim_end()).filter(|l| !l.trim().is_empty()).collect()
-    }
-}
-
-/// 解析方案信封（顺序无关容错版）。
-/// 实测模型（40 例+探测）会颠倒数序、漏 PARAMS、在标记外写分析散文——严格顺序版全部误杀。
-/// 规则：LYRICS 节必须存在（保真正源）；其余节按标记提取（缺失=空串，由 envelope_defect
-/// 出缺陷清单逼主持人补齐）；标记前后的游离内容（分析散文）自然落节外被忽略。
-pub fn parse_plan_sections(plan: &str) -> Option<PlanSections> {
-    let markers = [ENV_LYRICS, ENV_STYLE, ENV_PARAMS, ENV_NOTES];
-    let mut pos: Vec<(usize, usize)> = Vec::new(); // (marker_idx, line_idx)
-    for (li, line) in plan.lines().enumerate() {
-        let t = line.trim();
-        if let Some(mi) = markers.iter().position(|m| *m == t) {
-            if pos.iter().any(|(m, _)| *m == mi) {
-                return None; // 同一标记出现两次
-            }
-            pos.push((mi, li));
-        }
-    }
-    if !pos.iter().any(|(m, _)| *m == 0) {
-        return None; // LYRICS 节是保真正源，必须存在
-    }
-    let line_of = |mi: usize| -> Option<usize> {
-        pos.iter().find(|(m, _)| *m == mi).map(|(_, l)| *l)
-    };
-    // 每节内容 = 自身标记行下一行 → 按行号排序的下一个标记行（任何类型）或文末
-    let mut sorted: Vec<(usize, usize)> = pos.clone();
-    sorted.sort_by_key(|(_, l)| *l);
-    let sec = |mi: usize| -> String {
-        let Some(start) = line_of(mi) else { return String::new() };
-        let start = start + 1;
-        let end = sorted.iter().find(|(_, l)| *l >= start).map(|(_, l)| *l).unwrap_or(plan.lines().count());
-        plan.lines().skip(start).take(end.saturating_sub(start)).collect::<Vec<_>>().join("\n")
-    };
-    Some(PlanSections {
-        lyrics: sec(0),
-        style: sec(1),
-        params: sec(2),
-        notes: sec(3),
-    })
-}
-
 /// 说明行行型判定（单源）：方括号整行包裹 + 含逗号（三要素分隔）。
-/// 方案侧信封门（envelope_defect_mode）与终稿侧硬门（validator::desc_line_length_issues）共用同一谓词，
-/// 且两侧都先 trim——旧实现方案侧不 trim，缩进过的超长说明行能绕过方案侧门却被终稿侧拦下，
-/// 属"同一契约两套判法"的降级源，已收口。
+/// 先 trim 再判（缩进行同判）。
 pub fn is_desc_line(line: &str) -> bool {
     let t = line.trim();
     t.starts_with('[') && t.ends_with(']') && t.contains(',')
 }
 
-/// 信封缺陷清单（纯函数可测）：None=合规；Some=人类可读违规明细（供纠错重写）。
-/// 覆盖：结构（LYRICS 缺失/重复）、节缺失、说明行长度。
-/// 模式感知：LYRICS 全模式必须；STYLE 全模式必须（C 由格式阶段排版但方案仍需提供）；
-/// PARAMS 仅 a/b/d（C 无参数规则，方案不含参数节）。
-pub fn envelope_defect_mode(plan: &str, mode: &str) -> Option<String> {
-    let mut defects: Vec<String> = Vec::new();
-    let sections = match parse_plan_sections(plan) {
-        Some(s) => s,
-        None => return Some("缺少 <<<LYRICS>>>/<<<STYLE>>>/<<<PARAMS>>> 信封分节（LYRICS 节为保真正源必须存在），或节标记重复/有误；不得使用 ``` 围栏、表格等禁止格式。".to_string()),
-    };
-    if sections.style.trim().is_empty() {
-        defects.push("缺少 <<<STYLE>>> 节（Style Prompt 行）".to_string());
-    }
-    if mode != "mode_c" && sections.params.trim().is_empty() {
-        defects.push("缺少 <<<PARAMS>>> 节（参数行）".to_string());
-    }
-    let over: Vec<String> = sections
-        .lyrics_lines()
-        .into_iter()
-        .filter(|l| is_desc_line(l))
-        .filter(|l| l.chars().count() > DESC_LINE_MAX_CHARS)
-        .map(|l| format!("[{}]…（{} 字符）", l.chars().take(40).collect::<String>(), l.chars().count()))
-        .collect();
-    if !over.is_empty() {
-        defects.push(format!(
-            "说明行超过 {} 字符上限 {} 行，必须压缩到限内（保乐器+行为动词，删修饰词/重复空间描述；不得删乐器——配器 {}-{} 件与最强段 ≥{} 件照常校验）：\n- {}",
-            DESC_LINE_MAX_CHARS,
-            over.len(),
-            MIN_INSTRUMENT_WEAK,
-            INSTRUMENT_MAX,
-            MIN_INSTRUMENT_STRONG,
-            over.join("\n- ")
-        ));
-    }
-    if defects.is_empty() {
-        None
-    } else {
-        Some(defects.join("\n"))
-    }
-}
-
-/// 信封开关（默认开；env PLAN_ENVELOPE_CONTRACT=0 一键回退自由格式 + 启发式分类旧行为）
-pub fn plan_envelope_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var("PLAN_ENVELOPE_CONTRACT").ok().as_deref() != Some("0"))
-}
-
 #[cfg(test)]
-mod envelope_tests {
+mod desc_line_tests {
     use super::*;
-
-    const OK_PLAN: &str = "<<<LYRICS>>>\n[Intro]\n[clean pad, 能量:2]\n凌晨 两点半\n<<<STYLE>>>\nStyle Prompt: dark trap, 140BPM\n<<<PARAMS>>>\nWeirdness=18|StyleInfluence=92|AudioInfluence=0\n<<<NOTES>>>\n裁决理由：略";
-
-    #[test]
-    fn parse_valid_envelope_all_sections() {
-        let s = parse_plan_sections(OK_PLAN).expect("合规信封应解析成功");
-        assert!(s.lyrics.contains("凌晨 两点半"));
-        assert!(s.style.contains("dark trap"));
-        assert!(s.params.contains("Weirdness=18"));
-        assert!(s.notes.contains("裁决理由"));
-    }
-
-    #[test]
-    fn parse_notes_optional() {
-        let plan = "<<<LYRICS>>>\n歌词行\n<<<STYLE>>>\nStyle Prompt: x\n<<<PARAMS>>>\nW=1";
-        let s = parse_plan_sections(plan).expect("NOTES 可省略");
-        assert!(s.notes.is_empty());
-        assert_eq!(s.lyrics.trim(), "歌词行");
-    }
-
-    #[test]
-    fn parse_requires_lyrics_only() {
-        assert!(parse_plan_sections("歌词直接开写没有信封").is_none(), "无 LYRICS 节应拒绝");
-        // 缺 STYLE/PARAMS 解析放行（节=空串），由 envelope_defect 出缺陷清单逼主持人补齐
-        let s = parse_plan_sections("<<<LYRICS>>>\n歌词\n<<<PARAMS>>>\nW=1").expect("缺 STYLE 容错");
-        assert!(s.style.is_empty() && s.params.contains("W=1"));
-        assert!(envelope_defect_mode("<<<LYRICS>>>\n歌词\n<<<PARAMS>>>\nW=1", "mode_a").unwrap().contains("STYLE"));
-    }
-
-    #[test]
-    fn parse_tolerates_order_and_prefix_prose() {
-        // 实测形态：分析散文在标记外 + STYLE/LYRICS 顺序颠倒——容错版应正确提取
-        let plan = "### Step 1 灵感分析\n（大量分析散文……）\n<<<STYLE>>>\nStyle Prompt: dark trap\n<<<LYRICS>>>\n[Intro]\n[pad, 能量:2]\n凌晨 两点半\n<<<PARAMS>>>\nWeirdness=18|StyleInfluence=92|AudioInfluence=0";
-        let s = parse_plan_sections(plan).expect("顺序颠倒+前置散文应容错解析");
-        assert!(s.lyrics.contains("凌晨 两点半") && !s.lyrics.contains("分析散文"));
-        assert!(s.style.contains("dark trap"));
-        assert!(s.params.contains("Weirdness=18"));
-    }
-
-    #[test]
-    fn envelope_defect_flags_missing_sections() {
-        // 模型漏 PARAMS 节的实测形态——缺陷清单必须点名，逼主持人补齐
-        let plan = "<<<LYRICS>>>\n[Intro]\n[pad, 能量:2]\n凌晨\n<<<STYLE>>>\nStyle Prompt: x";
-        let defect = envelope_defect_mode(plan, "mode_a").expect("缺 PARAMS 节应报缺陷");
-        assert!(defect.contains("PARAMS"), "应点名缺 PARAMS 节: {}", defect);
-        assert!(!defect.contains("说明行超过"), "无超长说明行不应报");
-    }
-
-    #[test]
-    fn parse_rejects_duplicate() {
-        let dup = "<<<LYRICS>>>\n词\n<<<LYRICS>>>\n词2\n<<<STYLE>>>\nx\n<<<PARAMS>>>\nW=1";
-        assert!(parse_plan_sections(dup).is_none(), "重复标记应拒绝");
-    }
-
-    #[test]
-    fn parse_fences_and_tables_stay_outside_sections() {
-        // 主持人把围栏/表格写在 NOTES 里——合法，且不污染 LYRICS
-        let plan = "<<<LYRICS>>>\n[Intro]\n[pad, 能量:1]\n凌晨\n<<<STYLE>>>\nStyle Prompt: x\n<<<PARAMS>>>\nW=1\n<<<NOTES>>>\n```markdown\n|参数|值|\n|---|---|\n```";
-        let s = parse_plan_sections(plan).expect("NOTES 中的 markdown 应合法");
-        assert!(!s.lyrics.contains("```"));
-        assert!(!s.lyrics.contains("|参数|"));
-        assert!(s.notes.contains("```"));
-    }
-
-    #[test]
-    fn envelope_defect_detects_overlong_desc_lines() {
-        let long_desc = format!("[{}, soft pad, wide hall, 能量:3]", "a".repeat(DESC_LINE_MAX_CHARS));
-        let plan = format!("<<<LYRICS>>>\n[Intro]\n{}\n凌晨\n<<<STYLE>>>\nStyle Prompt: x\n<<<PARAMS>>>\nW=1", long_desc);
-        let defect = envelope_defect_mode(&plan, "mode_a").expect("超长说明行应报缺陷");
-        assert!(defect.contains("说明行超过"), "缺陷文案应说明行超长: {}", defect);
-        assert!(defect.contains("不得删乐器"), "纠错文案须写明边界（删修饰词而非删乐器）: {}", defect);
-    }
-
-    /// 边界：恰好等于上限的说明行必须放行（上限口径=含方括号整行字符数），超 1 字符即拦
-    #[test]
-    fn envelope_desc_line_boundary_at_limit() {
-        let mk = |extra: usize| format!("[{}, room]", "a".repeat(DESC_LINE_MAX_CHARS - 8 + extra));
-        let plan_of = |l: &str| format!("<<<LYRICS>>>\n[Intro]\n{}\n凌晨\n<<<STYLE>>>\nStyle Prompt: x\n<<<PARAMS>>>\nW=1", l);
-        let exact = mk(0);
-        assert_eq!(exact.chars().count(), DESC_LINE_MAX_CHARS, "夹具须恰好等于上限: {}", exact.chars().count());
-        assert!(envelope_defect_mode(&plan_of(&exact), "mode_a").is_none(), "恰好等于上限应放行");
-        assert!(envelope_defect_mode(&plan_of(&mk(1)), "mode_a").is_some(), "超 1 字符应拦");
-    }
-
-    /// 边界：全中文超长说明行不得 panic（旧实现按字节切片 &l[..40] 会在多字节边界崩），
-    /// 且缩进过的超长说明行同样被方案侧拦下（与终稿侧 trim 口径一致）
-    #[test]
-    fn envelope_desc_line_cjk_overlong_no_panic() {
-        let cjk = format!("[{}, 能量:3]", "钢琴铺底".repeat(60)); // 240 汉字 + 尾项，远超上限
-        assert!(cjk.chars().count() > DESC_LINE_MAX_CHARS);
-        let plan = format!("<<<LYRICS>>>\n[Intro]\n    {}\n凌晨\n<<<STYLE>>>\nStyle Prompt: x\n<<<PARAMS>>>\nW=1", cjk);
-        let defect = envelope_defect_mode(&plan, "mode_a").expect("缩进中文超长说明行应报缺陷");
-        assert!(defect.contains("说明行超过"), "{}", defect);
-    }
 
     /// R1 数学相容锁：上限必须容得下"最强段 ≥5 件且每件带行为动词"的合法说明行。
     /// 旧值 80 在此必然失败（5 件×行为动词 ≈90-100 字符）——"5/5 run 全被信封门拦"的根因。
@@ -3041,18 +2793,6 @@ mod envelope_tests {
         assert!(violations.is_empty(), "说明行示例超过 {} 字符上限：\n{}", DESC_LINE_MAX_CHARS, violations.join("\n"));
     }
 
-    /// 上游告知锁：信封规范必须写明说明行上限与"不得为缩短删乐器"的边界（否则又是零告知强制）
-    #[test]
-    fn envelope_spec_states_desc_line_limit() {
-        let spec = envelope_spec();
-        assert!(spec.contains("说明行契约"), "信封规范缺说明行契约行");
-        assert!(spec.contains(&format!("≤{}", DESC_LINE_MAX_CHARS)), "信封规范缺上限数字");
-        assert!(spec.contains("不得为缩短而删乐器"), "信封规范缺防误删边界的表述");
-        for m in [ENV_LYRICS, ENV_STYLE, ENV_PARAMS, ENV_NOTES] {
-            assert!(spec.contains(m), "信封规范缺节标记 {}", m);
-        }
-    }
-
     /// 行型谓词单源：缩进/未缩进同判（旧方案侧不 trim → 缩进行漏检，与终稿侧判法分叉）
     #[test]
     fn is_desc_line_trim_invariant() {
@@ -3060,11 +2800,6 @@ mod envelope_tests {
         assert!(is_desc_line("   [pad, 能量:2]  "));
         assert!(!is_desc_line("[Chorus]"));
         assert!(!is_desc_line("凌晨 两点半, 就是这样"));
-    }
-
-    #[test]
-    fn envelope_defect_clean_plan_passes() {
-        assert!(envelope_defect_mode(OK_PLAN, "mode_a").is_none());
     }
 
     #[test]

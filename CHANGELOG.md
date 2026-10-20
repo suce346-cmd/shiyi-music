@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **[P1-3/4 复审修复] 信封/转写保真全仓退役**：模式 prompt 输出节改为 SongPlan 字段映射（原文仍要求 `<<<NOTES>>>` 等四节文本，与结构化 schema 冲突）；删除 `envelope_spec`/`parse_plan_sections`/`envelope_defect_mode`/`plan_envelope_enabled`、`check_transcription_fidelity`、`TRANSCRIPTION_CONTRACT`、`auditor_format_prompt_mode_c`、`collect_hard_issues` 及 cfg(test) 旧辅助函数与对应测试；结构化调用补发 usage 与退避事件；refine 上一版非 SongPlan JSON 时回落阶段 0；守护测试扩至 `src/**` + prompt 快照。
 - **[S2 修复] 结构化能力探测误判**：400 类响应仅当 body/code 明示与 `response_format`/`json_schema`/`json_object` 相关时才降档或记 `none`；缺模型/欠费等不再污染能力缓存。探测 `max_tokens` 提至 64。
 - **[S2 修复] schema strictify 误删字段名**：只剥 schema 元键 `description`/`format`，不再误删 `properties` 里同名的字段定义。
 - **[文档] 审计交付入库（P1-J 余）**：`docs/audit-2026-10-19/`（README/REPORT/BLUEPRINT_v2）与 `docs/research/`；BLUEPRINT 对齐 F1 读回校验、C-12=DNS、P0-3 验证列=`runIdWire`、§3.7 英文硬门在 validate（不写 schema description）、`LyricLang` 唯一定义点、§2.1 Interlude+minimal+lyrics_lang、P1-1 位置列去掉 validate/render。

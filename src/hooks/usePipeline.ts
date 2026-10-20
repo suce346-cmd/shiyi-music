@@ -171,7 +171,7 @@ export const degradedFlagLabel = (flag: string): string => {
       return "门决策记录";
     case "call_degraded":
       return "解析降级";
-    case "envelope_fallback":
+    case "envelope_fallback": // 仅历史记录回放兼容（P1-3 后端已不再发射）
       return "格式降级";
     case "budget_degraded":
       return "预算降级";
