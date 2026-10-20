@@ -96,17 +96,44 @@ fn removed_junk_assets_stay_removed() {
     let r = repo();
     for p in [
         "public/tauri.svg",
+        "public/vite.svg",
         "src-tauri/icons/android",
         "src-tauri/icons/ios",
         "src-tauri/icons/StoreLogo.png",
         "src-tauri/icons/Square30x30Logo.png",
         "src/utils/speechOrder.test.ts",
         "docs/2026-09-14-v055-keychain-fix-plan.md",
+        "docs/qa/results_v3_final.jsonl",
+        "docs/qa/results_v4_final.jsonl",
+        "docs/qa/results_12round_final.jsonl",
+        "docs/qa/b02-root-cause.md",
+        "docs/qa/p1-3-4-acceptance.md",
+        "docs/qa/p1-6-scenario-reclass.md",
+        "docs/qa/p1-13-ambiguities.md",
+        "docs/audit-2026-10-19/REPORT.md",
+        "docs/audit-2026-10-19/README.md",
+        "docs/audit-2026-10-19/p3-reaudit.md",
+        "docs/audit-2026-10-19/p3-retire-text-validators.md",
+        "docs/audit-2026-10-19/BLUEPRINT_v2.md",
+        "docs/audit-2026-10-19/full-review-2026-10-20.md",
     ] {
         assert!(!r.join(p).exists(), "已清理资产回流: {p}");
     }
+    // 上移后的真源必须在
+    for p in ["docs/BLUEPRINT_v2.md", "docs/full-review-2026-10-20.md", "docs/RELEASE.md"] {
+        assert!(r.join(p).is_file(), "缺少文档真源: {p}");
+    }
     let gi = std::fs::read_to_string(r.join(".gitignore")).unwrap();
-    for pat in ["graphify-out/", ".workbuddy/", ".DS_Store"] {
+    for pat in [
+        "graphify-out/",
+        ".workbuddy/",
+        ".DS_Store",
+        ".env",
+        ".env.*",
+        ".secrets/",
+        "*.pem",
+        "*.key",
+    ] {
         assert!(gi.lines().any(|l| l.trim() == pat), ".gitignore 缺 {pat}");
     }
 }

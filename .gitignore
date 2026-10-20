@@ -39,3 +39,10 @@ docs/audit-*/build.py
 
 # Vitest coverage
 coverage/
+
+# Secrets / credentials (never commit)
+.env
+.env.*
+.secrets/
+*.pem
+*.key

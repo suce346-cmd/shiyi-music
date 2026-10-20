@@ -23,7 +23,7 @@ pub const MIN_INSTRUMENT_GAP: usize = 2;
 pub const INSTRUMENT_MAX: usize = 7;
 /// 最弱段至少件数（L-3 用户决策 2026-09-06：单段下限统一按 3——旧值 2 与"单段 3-7 件"打架）
 pub const MIN_INSTRUMENT_WEAK: usize = 3;
-/// 最强段至少件数（b02-root-cause.md 结论 4：摇滚三/四件套最强 4 件合理；P1-4 IR 门用此值。文本门仍读同一常量。）
+/// 最强段至少件数（配器门：摇滚三/四件套最强 4 件合理；P1-4 IR 门用此值。）
 pub const MIN_INSTRUMENT_STRONG: usize = 4;
 /// 声明极简段下限（b02 结论 2：仅 intro/outro/bridge/interlude 且 energy ≤ MINIMAL_ENERGY_MAX）
 pub const MIN_INSTRUMENT_MINIMAL: usize = 1;

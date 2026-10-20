@@ -1,7 +1,7 @@
 //! SongPlan 校验门（BLUEPRINT_v2 §2.3 / P1-4）——终稿的**唯一**硬门。
 //!
 //! 输入只有结构化字段：门只数 `sections[].instruments.len()`、只读 `energy`，不再对文本做
-//! 关键词启发式（b02-root-cause.md 结论 1：文本口径 8/11 例出错）。
+//! 关键词启发式（配器门归因：文本口径 8/11 例出错，已弃用文本计数）。
 //! 阈值全部来自 `rules`（数字单源，提示词插值同源 → 上游告知 = 下游校验）与 `suno_profile`。
 
 use std::collections::BTreeMap;
@@ -684,7 +684,7 @@ fn check_douyin(p: &SongPlan, out: &mut Vec<Issue>) {
     crate::plan::douyin::validate_douyin_v2(p, out);
 }
 
-/// 段下限（b02-root-cause.md 结论 2–4）：声明极简 1 / Chorus 类 3 / 其余 2
+/// 段下限（配器门归因结论）：声明极简 1 / Chorus 类 3 / 其余 2
 pub fn section_floor(s: &super::Section) -> usize {
     if s.minimal && kind_allows_minimal(s.kind) {
         rules::MIN_INSTRUMENT_MINIMAL

@@ -204,7 +204,7 @@ pub struct ModeMeta { pub lyrics_lang: LyricLang } // Zh|En；与 §3.8 IPC outp
 | P0-6 C-10 | `useSettings.ts`（`ensureInKeychain` / `PlaintextHold` / `persistNonSecrets(s, hold)`） | **F1 读回校验后才清**：明文仅当钥匙串读回值=明文时才可从 hold 释放并哨兵化；`persistNonSecrets` 对 hold 中未验证明文原样落盘；迁移失败保留明文+`secretErrors` 就地显示 `[可合并:P0-1]` | 钥匙串写入失败 → 明文保留、Key 仍可用 | vitest `useSettingsSecrets`：读回一致才清 / 读回失败保留明文 / 验证完成前写出不哨兵化 | revert |
 | P0-7 C-11 | `tests/large_scale_matrix.rs:165,236` | 路径改 `env!("CARGO_MANIFEST_DIR")/../target/large-test`；测量改调 `collect_hard_issues`（orchestrator.rs:1960，改 `pub #[doc(hidden)]`——外部 tests crate 需可见）。**注：本步是过渡口径**，§5.1 #5 删除 `collect_hard_issues` 之前，矩阵必须先切到 `plan::validate`（见 #5 前置） | 读数变严 | 编译通过；离线 dry-run | revert |
 | P0-8 C-13/C-14 | `CHANGELOG.md`、`docs/qa/` | 补 0.5.5 + Unreleased；删 `results_12round_final.jsonl`（与 v4 同 MD5 `0ddd1ecc…`）`[可合并:P1-J]` | 无 | `md5 docs/qa/*.jsonl` 无重复 | git revert |
-| P0-9 B-02 归因（先于 IR 设计） | `docs/qa/results_v3_final.jsonl` | 对 11 例配器失败逐例归因（Intro/Outro 弱段？极简段未声明？计数口径？），结论决定 §2.3 A 模式 `validate_arc_mode_a` 的门语义。**实施登记**：除文档外含一处代码修正——`validator::parse_section_instruments` 剥离英文 `energy:` 尾项、否定/退出项（`is_absent_item`）不计（F9 补：`double/triple stop(s)` 演奏技法除外） | 结论反复 | `docs/qa/b02-root-cause.md`，每例一行；validator 单测 | 文档 + 单函数 revert |
+| P0-9 B-02 归因（先于 IR 设计） | （历史 jsonl 已清理） | 对 11 例配器失败逐例归因，结论决定 §2.3 A 模式 `validate_arc_mode_a` 的门语义。**实施登记**：`validator::parse_section_instruments` 剥离英文 `energy:` 尾项、否定/退出项（`is_absent_item`）不计（F9 补：`double/triple stop(s)` 演奏技法除外） | 结论反复 | 结论已并入 `plan::validate`；validator 单测 | 单函数 revert |
 | P0-10 C-08/C-12/D-02/D-07 最小修复（自用） | `keychain.rs`、`capabilities/default.json`、`orchestrator.rs`、`docs/security-self-use.md` | **C-08** 密钥改走 `security -i`（stdin，写后读回；格式门仅 CLI 路径，F5）；**C-12** DNS rebinding 记录为接受风险（不做 pinning）；**D-02** fs scope 收窄到 `$APPDATA/**`+`$DOWNLOAD/**`+`$DOCUMENT/**`；**D-07** 日志去掉 output_head | 导出到其他目录失败 → 对话框路径运行期授权 | 手测导出；`cargo test --lib`；`docs/security-self-use.md` 四项齐 | 逐项 revert |
 
 ### P1 新规则（新架构）
@@ -257,7 +257,7 @@ pub struct ModeMeta { pub lyrics_lang: LyricLang } // Zh|En；与 §3.8 IPC outp
 
 | 编号 | 日期（UTC+8） | 修订 | 理由 |
 |---|---|---|---|
-| A-1 | 2026-10-20 | **P1-3 与 P1-4 合并为一批实施**（Host→PlanIR、Auditor→SongPlan、`plan::validate`、`plan::render_suno` 同一提交序列落地、整批回退） | P1-3 删除 envelope/文本产出口后，终稿只能由 `render_suno` 从 SongPlan 生成、硬校验只能由 `plan::validate` 执行；单独落 P1-3 会让流水线无可用终稿，而 §3.2 规定"无双轨"，不允许保留旧文本路径过渡。真模型 40 例回放与 12 例 smoke 推迟到 Mac 同步后执行（脚本与验收标准见 `scripts/mac-verify.sh` / `docs/qa/p1-3-4-acceptance.md`） |
+| A-1 | 2026-10-20 | **P1-3 与 P1-4 合并为一批实施**（Host→PlanIR、Auditor→SongPlan、`plan::validate`、`plan::render_suno` 同一提交序列落地、整批回退） | P1-3 删除 envelope/文本产出口后，终稿只能由 `render_suno` 从 SongPlan 生成、硬校验只能由 `plan::validate` 执行；单独落 P1-3 会让流水线无可用终稿，而 §3.2 规定"无双轨"，不允许保留旧文本路径过渡。真模型 40 例回放与 12 例 smoke 推迟到 Mac 同步后执行（脚本与验收标准见 `scripts/mac-verify.sh` / `docs/RELEASE.md`） |
 | A-2 | 2026-10-20 | clippy `-D warnings` 门从 P1-12 **提前**：存量告警一次清零，`scripts/gates.sh` 末步 `cargo clippy --all-targets -- -D warnings`；`too_many_arguments` 阈值经 `src-tauri/clippy.toml` 暂置 11（编排重写时收拢为上下文结构体后下调）；P1-2 结构化调用函数在接线前以 `expect(dead_code, reason)` 标注（接线后 expect 失效即红，强制删除） | P0 审计：存量告警掩盖新告警（新增告警被计数淹没） |
 | A-3 | 2026-10-20 | P0 审计补丁 F1–F9（明文 Key 读回校验、RAII run 守卫与 begin 前取消、格式门限 CLI 路径、run_id wire 锁、静态守卫防别名、`stop` 尾项）登记于 CHANGELOG Unreleased；§3.6 同步 | 审计发现 |
 
@@ -333,12 +333,12 @@ SongPlan `mode_meta.douyin`：`{ scene: 卡点|情绪|剧情|舞蹈|国风, bpm_
 | `.mimosa/hook-state` | 第三方扫描状态，已忽略 | 删除 |
 | `docs/qa/results_12round_final.jsonl` | 与 v4 同 MD5 `0ddd1ecc…`（已跟踪） | `git rm` |
 | `docs/2026-07-08 … 2026-09-14-*.md`（8 份历史计划） | 已跟踪；被新施工图取代 | **直接 `git rm`**（D10）。零引用检查：`grep -rn "2026-0[79]-[01][0-9]-" README.md CHANGELOG.md src src-tauri/src src-tauri/tests docs/qa docs/research .github` 只允许命中本施工图/REPORT；有命中先改引用再删 |
-| `public/tauri.svg` | 无引用（index.html 只引 vite.svg） | 删除；`vite.svg` 换应用图标或保留 |
+| `public/tauri.svg` / `public/vite.svg` | 无引用（模板残留） | 已删除 |
 | `src-tauri/icons/android/*`、`icons/ios/*`（35 个文件） | 桌面应用无移动端目标；`tauri.conf.json:31-37` bundle.icon 只引 32x32/128x128/128x128@2x/icon.icns/icon.ico | **直接 `git rm -r`**（D10）。零引用检查：`grep -rn "android\|ios/\|AppIcon\|ic_launcher" src-tauri/tauri.conf.json src-tauri/Cargo.toml .github` 为空；删后 `npm run tauri build -- --debug`（或 CI）图标正常。|
 | `src-tauri/icons/Square{30x30,44x44,71x71,89x89,107x107,142x142,150x150,284x284,310x310}Logo.png`、`StoreLogo.png` | Windows Store/UWP 图标；`tauri.conf.json:31-37` 未引用 | **直接 `git rm`**（D14）。零引用检查：`grep -rnE "Square[0-9]+x[0-9]+Logo|StoreLogo" src-tauri .github package.json` 仅命中文件自身（无配置引用）；删后 Windows CI 构建（NSIS）图标正常 |
 | `src/utils/speechOrder.test.ts` | 唯一不在 `src/test/` 的测试 | 移入 `src/test/` |
-| `docs/audit-2026-10-19/{REPORT,BLUEPRINT}.{html,pdf}`、`build.py` | 由 md 生成的派生物 | 保留 md，派生物不入库 |
-| 审计/调研/记忆文档未跟踪（`docs/audit-2026-10-19/`、`docs/research/`、`.workbuddy/`） | `git status` | md 入库；`.workbuddy/` 加入 `.gitignore` |
+| `docs/{REPORT,BLUEPRINT}.{html,pdf}`、`build.py` | 由 md 生成的派生物 | 保留 md，派生物不入库 |
+| 审计/调研/记忆文档（`docs/BLUEPRINT_v2.md`、`docs/research/`、`.workbuddy/`） | `git status` | md 入库；`.workbuddy/` 加入 `.gitignore` |
 | `~/Library/Application Support/com.shiyi.music/{history.json, pipeline_checkpoint_5c13cf9d-….json}` | D5 测试垃圾 | §5.1 #12 删除 |
 | 无主 `#[allow(dead_code)]` 9 处 | §5.1 #13 | 逐个判定 |
 
