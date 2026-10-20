@@ -2,13 +2,22 @@
 
 ## Unreleased
 
-- **[S2 修复] run_id 规则（C-05/C-06/D-06，RULE-RUN-ID）**：删除空 id 全局取消位（旧规则无复位点，无 run_id 时按“停止”后“测试连接”永远返回已取消）；`cancel_pipeline` 空 id 改为明确报错，`test_api` 用独立 id；`llm-chunk` 载荷增加 `run_id`，前端 `acceptStreamChunk` 只收当前 run 的流式片段（防取消/队列交错串流）；run 结束（含续跑）移除取消条目；run_id 解析单源 `resolve_run_id`；取消注册表只对活动 run 生效（`begin`/`finish`），结束后迟到的取消为 no-op、不留条目。
-- **[S3 修复] 大型矩阵测试路径与口径（C-11）**：结果目录改为工程相对 `target/large-test`（原写死 `/Users/hakayi/Desktop/...`，工程移动即失效）；测量改调生产终稿门 `collect_hard_issues`（原只调 `validate_for_mode`，漏 Style Prompt 长度门等，读数虚高）；新增离线 dry-run 测试。
-- **[S1 修复] 迁移后 localStorage 残留明文 Key（C-10）**：启动回填只在内存有变化时写出，明文 apiKey 不触发回填 → 明文永久留存。现钥匙串持有密钥（迁移成功或此前已迁移）即无条件写出脱敏副本；迁移失败则不写出（修复潜在丢 Key：角色回填触发写出会把未入钥匙串的明文哨兵化）。新增 3 项单测。
-- **[S2 修复] vitest 不可复现根因（C-01）**：根因为工程位于 iCloud 同步目录（node_modules 读取经文件提供程序，worker 冷启动超时）与 Node 版本低于依赖 engines，非并发竞态（`--maxWorkers=2` 实测仍失败）。新增 `vitest.config.ts`（显式 node 环境/forks，不设 maxWorkers）、`engines`/`.nvmrc`、`pretest` 环境守卫 `scripts/testEnvGuard.mjs`，根因记录 `docs/qa/vitest-root-cause.md`。
-- **[S2 修复] SSE 跨 chunk UTF-8 截断（C-07）**：流式行缓冲改为字节级，按 `\n` 切完整行后再解码；中文等多字节字符被网络 chunk 切开时不再变成 U+FFFD（夹具覆盖全部切点）。
-- **[S2 修复] 续跑丢产出语言（C-04）**：`resume` 手写请求字面量漏传 `output_lang`，后端缺省 `zh`，en/mix 设置在续跑被静默忽略。现三路径（generate/refine/resume）统一由 `buildPipelineRequest(kind, …)` 单源组装，`PipelineRequest.output_lang` 改为必填类型（漏传即 TS 编译失败）；新增 `buildPipelineRequest.test.ts` 7 项。
 - **[S0 修复] 测试不再删除用户真实 API Key（A-01）**：`keychain::tests::cli_round_trip` 旧实现以生产账户 `global` 做写→删往返，跑一次 `cargo test` 即删除用户 Key。现改用 `test:shiyi:{pid}:{nanos}` 隔离账户 + Drop 清理；新增 RULE-KEYCHAIN-RO 双层守护（测试构建下写/删 `global`/`role:*` 即 panic；静态扫描测试模块写/删实参）。生产行为不变。
+- **[S2 修复] 续跑丢产出语言（C-04）**：`resume` 手写请求字面量漏传 `output_lang`，后端缺省 `zh`，en/mix 设置在续跑被静默忽略。现三路径（generate/refine/resume）统一由 `buildPipelineRequest(kind, …)` 单源组装，`PipelineRequest.output_lang` 改为必填类型（漏传即 TS 编译失败）；新增 `buildPipelineRequest.test.ts` 7 项。
+- **[S2 修复] run_id 规则（C-05/C-06/D-06，RULE-RUN-ID）**：删除空 id 全局取消位（旧规则无复位点，无 run_id 时按“停止”后“测试连接”永远返回已取消）；`cancel_pipeline` 空 id 改为明确报错，`test_api` 用独立 id；`llm-chunk` 载荷增加 `run_id`，前端 `acceptStreamChunk` 只收当前 run 的流式片段（防取消/队列交错串流）；run 结束（含续跑）移除取消条目；run_id 解析单源 `resolve_run_id`；取消注册表只对活动 run 生效（`begin`/`finish`），结束后迟到的取消为 no-op、不留条目。
+- **[S2 修复] SSE 跨 chunk UTF-8 截断（C-07）**：流式行缓冲改为字节级，按 `\n` 切完整行后再解码；中文等多字节字符被网络 chunk 切开时不再变成 U+FFFD（夹具覆盖全部切点）。
+- **[S2 修复] vitest 不可复现根因（C-01）**：根因为工程位于 iCloud 同步目录（node_modules 读取经文件提供程序，worker 冷启动超时）与 Node 版本低于依赖 engines，非并发竞态（`--maxWorkers=2` 实测仍失败）。新增 `vitest.config.ts`（显式 node 环境/forks，不设 maxWorkers）、`engines`/`.nvmrc`、`pretest` 环境守卫 `scripts/testEnvGuard.mjs`，根因记录 `docs/qa/vitest-root-cause.md`。
+- **[S1 修复] 迁移后 localStorage 残留明文 Key（C-10）**：启动回填只在内存有变化时写出，明文 apiKey 不触发回填 → 明文永久留存。现钥匙串持有密钥（迁移成功或此前已迁移）即无条件写出脱敏副本；迁移失败则不写出（修复潜在丢 Key：角色回填触发写出会把未入钥匙串的明文哨兵化）。新增 3 项单测。
+- **[S3 修复] 大型矩阵测试路径与口径（C-11）**：结果目录改为工程相对 `target/large-test`（原写死 `/Users/hakayi/Desktop/...`，工程移动即失效）；测量改调生产终稿门 `collect_hard_issues`（原只调 `validate_for_mode`，漏 Style Prompt 长度门等，读数虚高）；新增离线 dry-run 测试。
+- **[S3 修复] 变更记录与 QA 数据重复（C-13/C-14）**：补齐 0.5.5 版本段与本 Unreleased 段；删除 `docs/qa/results_12round_final.jsonl`（与 `results_v4_final.jsonl` 字节相同，MD5 `0ddd1ecc…`）；新增守护单测：当前版本必须有 CHANGELOG 段、`docs/qa/*.jsonl` 不得内容重复。
+
+## 0.5.5（2026-09-14 ~ 2026-10-04）钥匙串数据安全 · 产出语言 · 审计批修复
+
+- **[S0 修复] 钥匙串 Key 数据丢失回路**（v0.5.5 / v0.5.5.1）：全局 Key 留空 = 沿用（不再 `keychain_delete`）；密钥同步防抖；退出竞态 flush；`security` CLI 重写。
+- **[功能] 产出语言**：`PipelineRequest.output_lang`（zh/mix/en）、设置面板下拉、orchestrator 讨论层/终稿层语言指令拆分。
+- **[修复] 字数/降级规则根治**：D 模式行上限 10→12、和音虚词计数豁免、suno_rules 场景过滤、Degraded 分型中文标签。
+- **[修复] 审计报告第二至二十六批**：规则单源化、轮间人工确认门（#12）、结果操作条与产出落点单源（#10/#11/#30/#31）、厂商模板与可搜索模型下拉（#27）、请求限流 UI 与 429 分类、i18n/模式域/wire-format 守护、历史结果反馈接线与插话提示（#9–#13）。
+- **[修复] 平台**：Windows 打包 beforeBuildCommand 引号、CRLF 检出下生产段提取（含 `.gitattributes`）、集成测试 `make_request` 补 `output_lang`。
 
 ## 0.5.4（2026-09-12）方案信封契约 + 回炉责任分离——大型实测驱动
 
