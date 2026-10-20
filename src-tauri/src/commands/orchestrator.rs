@@ -1632,6 +1632,7 @@ async fn run_pipeline_inner<R: Runtime>(
         // R3：每轮汇总后落检查点（失败可续跑；写失败只记 warn，不阻断流水线）
         {
             let cp = crate::commands::checkpoint::PipelineCheckpoint {
+                schema_version: crate::commands::checkpoint::CHECKPOINT_SCHEMA_VERSION,
                 mode: mode.to_str_name().to_string(),
                 user_input: request.user_input.clone(),
                 current_plan: current_plan.clone(),
@@ -1642,6 +1643,7 @@ async fn run_pipeline_inner<R: Runtime>(
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs() as i64)
                     .unwrap_or(0),
+                song_plan: None,
             };
             if let Err(e) = crate::commands::checkpoint::save(&app, &run_id, &cp) {
                 tracing::warn!(error = %e.message, "检查点落盘失败（不阻断）");
@@ -1734,6 +1736,7 @@ async fn run_pipeline_inner<R: Runtime>(
     //     （检查点存修复前方案：定稿重试只影响本次终稿产出，续跑语义不变）
     {
         let cp = crate::commands::checkpoint::PipelineCheckpoint {
+            schema_version: crate::commands::checkpoint::CHECKPOINT_SCHEMA_VERSION,
             // B-3：mode 单源 to_str_name（旧规则用 Debug 字符串变换，两处序列化口径漂移风险）
             mode: mode.to_str_name().to_string(),
             user_input: request.user_input.clone(),
@@ -1747,6 +1750,7 @@ async fn run_pipeline_inner<R: Runtime>(
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0),
+            song_plan: None,
         };
         if let Err(e) = crate::commands::checkpoint::save(&app, &run_id, &cp) {
             tracing::warn!(error = %e.message, "阶段 2 检查点落盘失败（不阻断）");

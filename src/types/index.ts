@@ -66,6 +66,15 @@ export interface ChatTurn {
   partial?: boolean;
 }
 
+/** P1-10：历史中的渲染四栏快照 */
+export interface HistoryRendered {
+  title?: string | null;
+  style: string;
+  lyrics: string;
+  exclude: string;
+  settings: string;
+}
+
 export interface HistoryEntry {
   id: string;
   mode: Mode;
@@ -80,6 +89,10 @@ export interface HistoryEntry {
   degraded?: string[];
   /** C5/ADR-3：终稿硬校验结论。旧记录没有此字段（与后端 serde 字段名同形 snake_case） */
   validation_passed?: boolean;
+  /** P1-10 / RULE-HISTORY-V2：SongPlan JSON（缺省未接线） */
+  song_plan?: unknown;
+  /** P1-10：渲染四栏 */
+  rendered?: HistoryRendered;
 }
 
 // ---------------------------------------------------------------------------

@@ -26,13 +26,17 @@ import { MODE_LABELS, errKind, errText, isCancelledError, capKey, STRUCTURED_MOD
 import { probeStructuredCaps, withProbedCap, effectiveMode } from "./utils/structuredCaps";
 import { t } from "./i18n";
 
-const HISTORY_KEY = "suno-prompt-history";
-/** 历史迁移标记（localStorage → 文件一次性迁移） */
-const HISTORY_MIGRATED_KEY = "suno-prompt-history-migrated";
+/** P1-10：历史上限（与后端 HISTORY_MAX_ENTRIES 同源约定） */
+const HISTORY_MAX_ENTRIES = 200;
 
-/** 文件持久化写回（防抖由调用方控制；失败透出由调用方展示，不阻断生成） */
+/** 文件持久化写回（串行化由调用方队列保证） */
 async function saveHistoryFile(entries: HistoryEntry[]): Promise<void> {
-  await invoke("history_save", { entries });
+  await invoke("history_save", { entries: entries.slice(0, HISTORY_MAX_ENTRIES) });
+}
+
+/** 关闭前 flush：走 history_flush，绕过防抖立即落盘 */
+async function flushHistoryFile(entries: HistoryEntry[]): Promise<void> {
+  await invoke("history_flush", { entries: entries.slice(0, HISTORY_MAX_ENTRIES) });
 }
 function newId() {
   // 低版本 WebKitGTK 可能缺失 randomUUID（低危修复）
@@ -94,11 +98,33 @@ export default function App() {
   historyRef.current = historyEntries;
   /** 写入防抖 timer（500ms 合并连续写入） */
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  /** 计划持久化（防抖写文件；失败静默，生成流程不受影响） */
+  /** C-09：串行写队列（旧 in-flight 不得覆盖新数组） */
+  const saveChainRef = useRef(Promise.resolve());
+  /** 防抖窗口内最新待写快照 */
+  const pendingSaveRef = useRef<HistoryEntry[] | null>(null);
+  /** 立即 flush（关闭/卸载）：取消防抖并以最新快照落盘 */
+  const flushHistory = useCallback(() => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    const snapshot = (pendingSaveRef.current ?? historyRef.current).slice(0, HISTORY_MAX_ENTRIES);
+    pendingSaveRef.current = null;
+    saveChainRef.current = saveChainRef.current
+      .then(() => flushHistoryFile(snapshot))
+      .catch(() => { /* flush 失败静默 */ });
+    return saveChainRef.current;
+  }, []);
+  /** 计划持久化（防抖 + 串行；失败静默，生成流程不受影响） */
   const scheduleSave = useCallback((entries: HistoryEntry[]) => {
+    pendingSaveRef.current = entries.slice(0, HISTORY_MAX_ENTRIES);
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      saveHistoryFile(entries).catch(() => { /* 持久化失败静默（与旧配额降级语义一致） */ });
+      const snapshot = (pendingSaveRef.current ?? []).slice(0, HISTORY_MAX_ENTRIES);
+      pendingSaveRef.current = null;
+      saveChainRef.current = saveChainRef.current
+        .then(() => saveHistoryFile(snapshot))
+        .catch(() => { /* 持久化失败静默（与旧配额降级语义一致） */ });
     }, 500);
   }, []);
   const chatHistoryRef = useRef<ChatMessage[]>([]);
@@ -270,38 +296,39 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
-  // 启动回填 + 一次性迁移（localStorage → 文件）
+  // P1-10：启动回填（RULE-HISTORY-V2；不再迁移 localStorage——B-03 覆盖风险已退役）
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      let migrated: HistoryEntry[] | null = null;
-      // 1. 迁移：旧 localStorage 有非空历史且未迁移过 → 先写文件
-      try {
-        if (!localStorage.getItem(HISTORY_MIGRATED_KEY)) {
-          const raw = localStorage.getItem(HISTORY_KEY);
-          if (raw) {
-            const parsed = JSON.parse(raw);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              await invoke("history_save", { entries: parsed });
-            }
-          }
-          try { localStorage.removeItem(HISTORY_KEY); } catch { /* 忽略 */ }
-          try { localStorage.setItem(HISTORY_MIGRATED_KEY, "1"); } catch { /* 忽略 */ }
-        }
-      } catch { /* 迁移失败不阻断（下次启动 localStorage 已清则跳过） */ }
-      // 2. 回填：文件 → 内存（损坏数据防御保留：非数组直接丢弃）
       try {
         const entries = await invoke<HistoryEntry[]>("history_load", {});
         if (!cancelled && Array.isArray(entries)) {
-          migrated = entries;
+          setHistoryEntries(entries.slice(0, HISTORY_MAX_ENTRIES));
         }
       } catch { /* 读取失败保持空 */ }
-      if (!cancelled && migrated) {
-        setHistoryEntries(migrated);
-      }
     })();
     return () => { cancelled = true; };
   }, []);
+
+  // P1-10 / C-09：关闭前 / 卸载 flush，避免防抖窗口丢最后一条
+  useEffect(() => {
+    const onUnload = () => { void flushHistory(); };
+    window.addEventListener("beforeunload", onUnload);
+    let unlistenClose: (() => void) | undefined;
+    void (async () => {
+      try {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        unlistenClose = await getCurrentWindow().onCloseRequested(async () => {
+          await flushHistory();
+        });
+      } catch { /* 非 Tauri / 测试环境忽略 */ }
+    })();
+    return () => {
+      window.removeEventListener("beforeunload", onUnload);
+      unlistenClose?.();
+      void flushHistory();
+    };
+  }, [flushHistory]);
 
   /** 全局测试连接：走 Rust 命令（绕过 WebView CORS，前端 fetch 跨域会被拦） */
   const handleTestApi = useCallback(async () => {
@@ -391,9 +418,9 @@ export default function App() {
 
   const saveToHistory = useCallback((input: string, output: string, conv: ChatTurn[], currentMode: Mode, usage?: { prompt_tokens: number; completion_tokens: number }) => {
     const entry: HistoryEntry = { id: newId(), mode: currentMode, input, output, conversation: conv, usage, timestamp: Date.now() };
-    const updated = [entry, ...historyRef.current];
+    const updated = [entry, ...historyRef.current].slice(0, HISTORY_MAX_ENTRIES);
     setHistoryEntries(updated); scheduleSave(updated);
-  }, []);
+  }, [scheduleSave]);
 
   const updateHistoryEntry = useCallback((id: string, output: string, conv: ChatTurn[], usage?: { prompt_tokens: number; completion_tokens: number }) => {
     const updated = historyRef.current.map(e =>

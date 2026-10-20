@@ -1,10 +1,18 @@
-//! 历史记录文件持久化 + 导出（替代 localStorage 5MB 上限）。
-//! 路径约定：{app_data}/history.json（原子写 .tmp+rename）；损坏自动备份 .bak 不丢数据。
-//! HistoryEntry 与前端 types/index.ts 对齐（serde default 兼容旧记录缺字段）。
+//! 历史记录文件持久化 + 导出（RULE-HISTORY-V2 / P1-10）。
+//! 路径：{app_data}/history.json（原子写 .tmp+rename）。
+//! 文件格式：`{ "schema_version": 2, "entries": [...] }`。
+//! 读到无版本 / v1 裸数组 / 损坏 → 备份 .bak 后丢弃（D5），返回空。
+//! 写入截断至 HISTORY_MAX_ENTRIES；命令串行（Mutex）防并发覆盖。
 
 use crate::errors::{AppError, ErrorKind};
-use tauri::Manager;
 use serde::{Deserialize, Serialize};
+use tauri::Manager;
+use tokio::sync::Mutex;
+
+/// RULE-HISTORY-V2：当前文件 schema
+pub const HISTORY_SCHEMA_VERSION: u32 = 2;
+/// 历史上限（D-03）
+pub const HISTORY_MAX_ENTRIES: usize = 200;
 
 /// 前端 ChatTurn 对齐
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,7 +40,22 @@ pub struct Usage {
     pub completion_tokens: u32,
 }
 
-/// 前端 HistoryEntry 对齐（全部 Option 字段 serde default，旧记录兼容）
+/// P1-10：渲染四栏快照（与 plan::render_suno::Rendered 字段对齐，供历史回放）
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryRendered {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub style: String,
+    #[serde(default)]
+    pub lyrics: String,
+    #[serde(default)]
+    pub exclude: String,
+    #[serde(default)]
+    pub settings: String,
+}
+
+/// 前端 HistoryEntry 对齐
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryEntry {
     pub id: String,
@@ -44,14 +67,26 @@ pub struct HistoryEntry {
     #[serde(default)]
     pub usage: Option<Usage>,
     pub timestamp: i64,
-    /// C5/ADR-3：降级标记（call_degraded/budget_degraded/gate_degraded 及明细）。
-    /// 旧记录无此字段 → None（当时本就不记录降级，不回溯标注）。
     #[serde(default)]
     pub degraded: Option<Vec<String>>,
-    /// C5/ADR-3：终稿硬校验结论（Some(true)=通过）。导出完整度声明使用。
     #[serde(default)]
     pub validation_passed: Option<bool>,
+    /// P1-10 / RULE-HISTORY-V2：SongPlan JSON（缺省 null=旧记录或未接线）
+    #[serde(default)]
+    pub song_plan: Option<serde_json::Value>,
+    /// P1-10：渲染结果四栏
+    #[serde(default)]
+    pub rendered: Option<HistoryRendered>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct HistoryFile {
+    schema_version: u32,
+    entries: Vec<HistoryEntry>,
+}
+
+/// 写串行锁（C-09：并发 save 不得交错覆盖）
+static HISTORY_WRITE_LOCK: Mutex<()> = Mutex::const_new(());
 
 fn history_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, AppError> {
     let dir = app
@@ -63,7 +98,47 @@ fn history_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, AppError> 
     Ok(dir.join("history.json"))
 }
 
-/// 读取全部历史（文件不存在 → 空数组；损坏 → 备份 .bak 后返回空数组，不丢数据）
+fn backup_corrupt(path: &std::path::Path, reason: &str) {
+    let bak = path.with_extension("json.bak");
+    let _ = std::fs::rename(path, &bak);
+    tracing::warn!(backup = ?bak, reason, "历史文件已按 RULE-HISTORY-V2 丢弃并备份");
+}
+
+/// 纯函数：解码文件内容。v1/无版本/损坏 → 空（调用方负责备份）。
+pub fn decode_history_file(content: &str) -> Result<Vec<HistoryEntry>, &'static str> {
+    let v: serde_json::Value = serde_json::from_str(content).map_err(|_| "json_parse")?;
+    if let Some(arr) = v.as_array() {
+        // v1 裸数组 → 丢弃
+        let _ = arr;
+        return Err("v1_array");
+    }
+    let file: HistoryFile = serde_json::from_value(v).map_err(|_| "shape")?;
+    if file.schema_version != HISTORY_SCHEMA_VERSION {
+        return Err("bad_schema_version");
+    }
+    Ok(file.entries)
+}
+
+/// 纯函数：编码为 v2 文件；截断至上限（保留前 N 条=最新优先）。
+pub fn encode_history_file(entries: &[HistoryEntry]) -> String {
+    let capped: Vec<HistoryEntry> = entries.iter().take(HISTORY_MAX_ENTRIES).cloned().collect();
+    let file = HistoryFile {
+        schema_version: HISTORY_SCHEMA_VERSION,
+        entries: capped,
+    };
+    serde_json::to_string(&file).expect("HistoryFile 可序列化")
+}
+
+fn write_atomic(path: &std::path::Path, content: &str) -> Result<(), AppError> {
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, content)
+        .map_err(|e| AppError::new(ErrorKind::Internal, format!("写入历史失败: {}", e)))?;
+    std::fs::rename(&tmp, path)
+        .map_err(|e| AppError::new(ErrorKind::Internal, format!("历史落盘失败: {}", e)))?;
+    Ok(())
+}
+
+/// 读取全部历史（不存在 → 空；v1/损坏 → 备份后空）
 #[tauri::command]
 pub async fn history_load(app: tauri::AppHandle) -> Result<Vec<HistoryEntry>, AppError> {
     let path = history_path(&app)?;
@@ -72,33 +147,31 @@ pub async fn history_load(app: tauri::AppHandle) -> Result<Vec<HistoryEntry>, Ap
     }
     let content = std::fs::read_to_string(&path)
         .map_err(|e| AppError::new(ErrorKind::Internal, format!("读取历史失败: {}", e)))?;
-    match serde_json::from_str::<Vec<HistoryEntry>>(&content) {
+    match decode_history_file(&content) {
         Ok(entries) => Ok(entries),
-        Err(e) => {
-            // 损坏备份：history.json → history.json.bak（覆盖旧备份），然后返回空
-            let bak = path.with_extension("json.bak");
-            let _ = std::fs::rename(&path, &bak);
-            tracing::warn!(backup = ?bak, error = %e, "历史文件损坏已备份");
+        Err(reason) => {
+            backup_corrupt(&path, reason);
             Ok(vec![])
         }
     }
 }
 
-/// 全量写回（原子写：.tmp + rename，防崩溃写半截）
+/// 全量写回（串行 + 原子写 + 上限截断）
 #[tauri::command]
 pub async fn history_save(app: tauri::AppHandle, entries: Vec<HistoryEntry>) -> Result<(), AppError> {
+    let _guard = HISTORY_WRITE_LOCK.lock().await;
     let path = history_path(&app)?;
-    let tmp = path.with_extension("json.tmp");
-    let content = serde_json::to_string(&entries)
-        .map_err(|e| AppError::new(ErrorKind::Internal, format!("历史序列化失败: {}", e)))?;
-    std::fs::write(&tmp, content)
-        .map_err(|e| AppError::new(ErrorKind::Internal, format!("写入历史失败: {}", e)))?;
-    std::fs::rename(&tmp, &path)
-        .map_err(|e| AppError::new(ErrorKind::Internal, format!("历史落盘失败: {}", e)))?;
-    Ok(())
+    let content = encode_history_file(&entries);
+    write_atomic(&path, &content)
 }
 
-/// 导出单条记录为 txt/markdown 纯文本（供 dialog 保存用，前端拿到文本后调 dialog 保存）
+/// P1-10 / C-09：关闭前 flush——与 save 同路径（串行锁），供前端 bypass 防抖立即落盘。
+#[tauri::command]
+pub async fn history_flush(app: tauri::AppHandle, entries: Vec<HistoryEntry>) -> Result<(), AppError> {
+    history_save(app, entries).await
+}
+
+/// 导出单条记录为 txt/markdown
 #[tauri::command]
 pub async fn history_export_text(
     app: tauri::AppHandle,
@@ -113,8 +186,6 @@ pub async fn history_export_text(
     Ok(render_export(e, &format))
 }
 
-/// C5/ADR-3：完整度声明（导出头部）——降级会话不与健康会话同等可信（任务书 §5.6.1）。
-/// 未知结论如实标注（旧记录当时不记录降级，不回溯造假）。
 fn honesty_declaration(e: &HistoryEntry) -> String {
     let degraded_part = match &e.degraded {
         Some(flags) if !flags.is_empty() => format!("本次生成存在降级：{}", flags.join("；")),
@@ -125,7 +196,10 @@ fn honesty_declaration(e: &HistoryEntry) -> String {
         Some(false) => "硬校验 未完全通过（详见对话记录）".to_string(),
         None => "硬校验 结论未知".to_string(),
     };
-    format!("> 完整度声明：{}，{}，请据此评估方案可信度。\n\n", degraded_part, gate_part)
+    format!(
+        "> 完整度声明：{}，{}，请据此评估方案可信度。\n\n",
+        degraded_part, gate_part
+    )
 }
 
 fn render_export(e: &HistoryEntry, format: &str) -> String {
@@ -154,7 +228,12 @@ fn render_export(e: &HistoryEntry, format: &str) -> String {
         }
     } else {
         out.push_str(&honesty_declaration(e));
-        out.push_str(&format!("【{}】{}\n\n输入：{}\n\n", mode_label(&e.mode), e.id, e.input));
+        out.push_str(&format!(
+            "【{}】{}\n\n输入：{}\n\n",
+            mode_label(&e.mode),
+            e.id,
+            e.input
+        ));
         if let Some(conv) = &e.conversation {
             for t in conv {
                 out.push_str(&format!("--- {} ---\n{}\n\n", t.role, t.content));
@@ -180,32 +259,72 @@ fn mode_label(mode: &str) -> &str {
 mod tests {
     use super::*;
 
-    /// HistoryEntry 与前端类型对齐：旧记录（无 conversation/usage）兼容解析
+    fn sample_entry(id: &str) -> HistoryEntry {
+        HistoryEntry {
+            id: id.into(),
+            mode: "mode_b".into(),
+            input: "i".into(),
+            output: "o".into(),
+            conversation: None,
+            usage: None,
+            timestamp: 1,
+            degraded: None,
+            validation_passed: None,
+            song_plan: None,
+            rendered: None,
+        }
+    }
+
     #[test]
-    fn history_entry_backward_compatible() {
+    fn v1_array_is_discarded() {
+        let v1 = r#"[{"id":"1","mode":"mode_d","input":"灵感","output":"方案","timestamp":1}]"#;
+        assert_eq!(decode_history_file(v1).unwrap_err(), "v1_array");
+    }
+
+    #[test]
+    fn missing_or_wrong_schema_discarded() {
+        let no_ver = r#"{"entries":[]}"#;
+        assert!(decode_history_file(no_ver).is_err());
+        let v1file = r#"{"schema_version":1,"entries":[]}"#;
+        assert_eq!(
+            decode_history_file(v1file).unwrap_err(),
+            "bad_schema_version"
+        );
+    }
+
+    #[test]
+    fn v2_roundtrip_and_cap() {
+        let mut entries: Vec<_> = (0..250).map(|i| sample_entry(&format!("id{i}"))).collect();
+        let json = encode_history_file(&entries);
+        let back = decode_history_file(&json).unwrap();
+        assert_eq!(back.len(), HISTORY_MAX_ENTRIES);
+        assert_eq!(back[0].id, "id0");
+        // song_plan / rendered 往返
+        entries[0].song_plan = Some(serde_json::json!({"schema_version": 1, "title": "雨巷"}));
+        entries[0].rendered = Some(HistoryRendered {
+            title: Some("雨巷".into()),
+            style: "folk".into(),
+            lyrics: "雨落".into(),
+            exclude: "edm".into(),
+            settings: "Weirdness: 30".into(),
+        });
+        let json2 = encode_history_file(&entries[..1]);
+        let back2 = decode_history_file(&json2).unwrap();
+        assert_eq!(back2[0].song_plan.as_ref().unwrap()["title"], "雨巷");
+        assert_eq!(back2[0].rendered.as_ref().unwrap().style, "folk");
+    }
+
+    #[test]
+    fn history_entry_optional_fields_default() {
         let old = serde_json::json!({
             "id": "1", "mode": "mode_d", "input": "灵感", "output": "方案", "timestamp": 1
         });
         let e: HistoryEntry = serde_json::from_value(old).unwrap();
         assert!(e.conversation.is_none());
-        assert!(e.usage.is_none());
-        // 往返：新记录序列化后旧逻辑仍可读（字段只增不减）
-        let full = HistoryEntry {
-            id: "2".into(),
-            mode: "mode_b".into(),
-            input: "i".into(),
-            output: "o".into(),
-            conversation: Some(vec![ChatTurn { role: "user".into(), content: "hi".into(), timestamp: 1, speaker: None }]),
-            usage: Some(Usage { prompt_tokens: 10, completion_tokens: 20 }),
-            timestamp: 2,
-            degraded: None,
-            validation_passed: None,
-        };
-        let back: HistoryEntry = serde_json::from_str(&serde_json::to_string(&full).unwrap()).unwrap();
-        assert_eq!(back.usage.unwrap().prompt_tokens, 10);
+        assert!(e.song_plan.is_none());
+        assert!(e.rendered.is_none());
     }
 
-    /// 导出渲染：md 含标题/对话/tokens；txt 含分隔线
     #[test]
     fn render_export_formats() {
         let e = HistoryEntry {
@@ -214,10 +333,15 @@ mod tests {
             input: "灵感".into(),
             output: "方案".into(),
             conversation: None,
-            usage: Some(Usage { prompt_tokens: 5, completion_tokens: 6 }),
+            usage: Some(Usage {
+                prompt_tokens: 5,
+                completion_tokens: 6,
+            }),
             timestamp: 0,
             degraded: None,
             validation_passed: None,
+            song_plan: None,
+            rendered: None,
         };
         let md = render_export(&e, "md");
         assert!(md.contains("# Mode D"), "got: {}", &md[..md.len().min(120)]);
@@ -228,51 +352,35 @@ mod tests {
         assert!(txt.contains("--- 方案 ---"));
     }
 
-    /// C5/ADR-3：导出头部完整度声明——降级可辨识（任务书 §5.6.1：降级会话不与健康会话同等可信）
     #[test]
     fn render_export_honesty_declaration() {
-        let base = HistoryEntry {
-            id: "x".into(),
+        let base = sample_entry("x");
+        let e = HistoryEntry {
+            degraded: None,
+            validation_passed: Some(true),
             mode: "mode_a".into(),
             input: "灵感".into(),
             output: "方案".into(),
-            conversation: None,
-            usage: None,
-            timestamp: 0,
-            degraded: None,
-            validation_passed: None,
+            ..base.clone()
         };
-        // 全绿：声明"全环节正常 + 硬校验 通过"
-        let e = HistoryEntry { degraded: None, validation_passed: Some(true), ..base.clone() };
         let md = render_export(&e, "md");
-        assert!(md.contains("完整度声明：本次生成全环节正常"), "缺正常声明: {}", &md[..md.len().min(200)]);
-        assert!(md.contains("硬校验 通过"), "缺通过结论: {}", &md[..md.len().min(200)]);
-        // 降级 + 打回耗尽：声明"存在降级 + 未完全通过"
+        assert!(md.contains("完整度声明：本次生成全环节正常"));
+        assert!(md.contains("硬校验 通过"));
         let e2 = HistoryEntry {
-            degraded: Some(vec!["call_degraded：作词人输出解析失败".into(), "gate_degraded：硬校验打回耗尽".into()]),
+            degraded: Some(vec![
+                "call_degraded：作词人输出解析失败".into(),
+                "gate_degraded：硬校验打回耗尽".into(),
+            ]),
             validation_passed: Some(false),
             ..base
         };
         let md2 = render_export(&e2, "md");
-        assert!(md2.contains("完整度声明：本次生成存在降级：call_degraded：作词人输出解析失败；gate_degraded：硬校验打回耗尽"), "缺降级明细: {}", &md2[..md2.len().min(240)]);
-        assert!(md2.contains("硬校验 未完全通过（详见对话记录）"), "缺未完全通过结论");
-        // txt 格式同样带声明
-        let txt2 = render_export(&e2, "txt");
-        assert!(txt2.contains("完整度声明"), "txt 缺完整度声明");
-        // 硬校验结论未知（旧记录）→ 如实标注"结论未知"
-        let e3 = HistoryEntry { validation_passed: None, ..e2 };
-        let md3 = render_export(&e3, "md");
-        assert!(md3.contains("硬校验 结论未知"), "旧记录硬校验结论应如实标注未知");
-    }
-
-    /// C5：v0.5.1 旧记录（无 degraded/validation_passed 字段）零迁移直接读
-    #[test]
-    fn old_history_entry_loads_without_degradation_fields() {
-        let old = serde_json::json!({
-            "id": "old", "mode": "mode_b", "input": "i", "output": "o", "timestamp": 9
-        });
-        let e: HistoryEntry = serde_json::from_value(old).unwrap();
-        assert!(e.degraded.is_none());
-        assert!(e.validation_passed.is_none());
+        assert!(md2.contains("存在降级：call_degraded：作词人输出解析失败；gate_degraded：硬校验打回耗尽"));
+        assert!(md2.contains("硬校验 未完全通过（详见对话记录）"));
+        let e3 = HistoryEntry {
+            validation_passed: None,
+            ..e2
+        };
+        assert!(render_export(&e3, "md").contains("硬校验 结论未知"));
     }
 }

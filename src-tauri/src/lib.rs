@@ -23,6 +23,9 @@ pub fn run() {
                 // 知识库覆盖预热 + prompt 覆盖目录记录（失败回退嵌入版，不阻断启动）
                 crate::knowledge::warm_knowledge(&dir);
                 crate::commands::prompts::set_prompt_override_dir(dir);
+                // P1-10：清扫过期/非 v2 检查点
+                let handle = app.handle().clone();
+                crate::commands::checkpoint::purge_expired(&handle);
                 tracing::info!(
                     kb_source = crate::knowledge::knowledge_source(),
                     "知识库来源就绪"
@@ -44,6 +47,7 @@ pub fn run() {
             commands::keychain::keychain_delete,
             commands::history::history_load,
             commands::history::history_save,
+            commands::history::history_flush,
             commands::history::history_export_text,
             commands::logdir::open_log_dir,
             commands::logdir::open_config_dir,
