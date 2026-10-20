@@ -179,6 +179,49 @@ export const degradedFlagLabel = (flag: string): string => {
 
 /** 组装角色级 API 覆盖：过滤全空/全空格条目 + 非法角色 key（无覆盖的角色的不传给后端）
  * export 供单测（纯函数，无 Tauri 依赖） */
+/** 请求组装种类：生成 / 优化 / 断点续跑 */
+export type RequestKind = "generate" | "refine" | "resume";
+
+/** C-04 请求组装单源（BLUEPRINT_v2 P0-2）：run/refine/resume 三条路径共用，纯函数可测。
+ *  旧规则两处手写字面量（startRun 的 run/refine 一处 + resume 一处），resume 漏传 output_lang → 后端 serde 缺省 "zh"，用户 en/mix 设置在续跑被静默忽略。
+ *  路径差异只在此处显式分支：
+ *  - refine：上一版方案注入 user_input（composeRefineInput 单源）；fast 增量透传 refine_targets（full 不传=全量）
+ *  - resume：直接进终稿无讨论轮 → round_gate 恒 false；不传 refine_targets
+ *  - generate/refine：round_gate 随用户设置（缺省/旧数据 → false，后端不擅自暂停） */
+export function buildPipelineRequest(
+  kind: RequestKind,
+  opts: PipelineRunOptions &
+    Partial<Pick<PipelineRefineOptions, "lastOutput" | "lastOutputPartial" | "refineMode" | "refineTargets">>,
+  runId: string,
+): PipelineRequest {
+  const isRefine = kind === "refine";
+  const userInput = isRefine && opts.lastOutput
+    ? composeRefineInput(opts.userInput, opts.lastOutput, opts.lastOutputPartial === true)
+    : opts.userInput;
+  const refineTargets = isRefine && opts.refineMode === "fast" ? opts.refineTargets : undefined;
+  return {
+    mode: opts.mode,
+    user_input: userInput,
+    model: opts.settings.model,
+    api_key: opts.settings.apiKey,
+    base_url: opts.settings.baseUrl,
+    extra: opts.extra,
+    // 原歌词独立字段直传（旧 extra 字符串拼接协议退役，后端回退兼容旧请求）
+    original_lyrics: opts.originalLyrics,
+    // 旧 localStorage 可能缺字段（合并默认值后恒为 boolean，兜底 || false）
+    thinking: opts.settings.thinking ?? false,
+    role_overrides: buildRoleOverrides(opts.settings),
+    refine_targets: refineTargets,
+    // F-1：跨入后端的 generation 过同一清洗函数（sanitizeStored 单源）
+    generation: sanitizeStored(opts.settings).generation,
+    // 任务归属 id（后端 envelope/取消/插话/确认门定向；resume 复用原 runId 以对上检查点）
+    run_id: runId,
+    round_gate: kind === "resume" ? false : (opts.settings.roundGate ?? false),
+    // 产出语言：三路径一致透传（缺省/旧数据 → "zh"）
+    output_lang: opts.settings.outputLang ?? "zh",
+  };
+}
+
 export const buildRoleOverrides = (settings: AppSettings): PipelineRequest["role_overrides"] => {
   const overrides = settings.roleOverrides ?? {};
   const entries = Object.entries(overrides).filter(([k, v]) =>
@@ -494,7 +537,7 @@ export function usePipeline() {
   /** 流水线运行核心：状态初始化 + 事件监听 + request 组装 + invoke + 清理（run/refine 共用，低危#2 重构） */
   const startRun = useCallback(
     async (
-      opts: PipelineRunOptions & { lastOutput?: string },
+      opts: Parameters<typeof buildPipelineRequest>[1],
       token: number,
       command: "pipeline_generate" | "pipeline_refine",
       feedback?: string,
@@ -530,41 +573,11 @@ export function usePipeline() {
       }
 
       const isRefine = command === "pipeline_refine";
-      // refine 时上一版方案注入 user_input（主持人阶段0可见上一版+反馈，优化有对照）
-      // fast 增量时透传 refine_targets（前端预估命中则传，缺省后端自动路由；full 不传=全量）
-      const refineTargets = isRefine && (opts as PipelineRefineOptions).refineMode === "fast"
-        ? (opts as PipelineRefineOptions).refineTargets
-        : undefined;
-      const request: PipelineRequest = {
-        mode: opts.mode,
-        user_input: isRefine && opts.lastOutput
-          // #10：拼接单源在 utils/partialDraft（标记 + 半成品告知 + 上一版正文一处成型）
-          ? composeRefineInput(
-              opts.userInput,
-              opts.lastOutput,
-              (opts as PipelineRefineOptions).lastOutputPartial === true,
-            )
-          : opts.userInput,
-        model: opts.settings.model,
-        api_key: opts.settings.apiKey,
-        base_url: opts.settings.baseUrl,
-        extra: opts.extra,
-        // 原歌词独立字段直传（旧 extra 字符串拼接协议退役，后端回退兼容旧请求）
-        original_lyrics: opts.originalLyrics,
-        // 旧 localStorage 可能缺字段（合并默认值后恒为 boolean，兜底 || false）
-        thinking: opts.settings.thinking ?? false,
-        role_overrides: buildRoleOverrides(opts.settings),
-        refine_targets: refineTargets,
-        // 生成参数（缺省后端用默认）——F-1 根治：跨入后端前过同一清洗函数，
-        // 运行期输入的越界值（如 max_tokens 32000）在此收敛，后端 validate 不再整请求拒绝
-        generation: sanitizeStored(opts.settings).generation,
-        // 任务归属 id（后端 envelope/取消/插话/确认门定向）
-        run_id: runId,
-        // #12 轮间确认门：用户设置显式透传（缺省/旧数据 → false，后端不擅自暂停）
-        round_gate: opts.settings.roundGate ?? false,
-        // 产出语言开关：用户设置显式透传（缺省/旧数据 → "zh"，后端现状行为零漂移）
-        output_lang: opts.settings.outputLang ?? "zh",
-      };
+      const request = buildPipelineRequest(
+        isRefine ? "refine" : "generate",
+        opts,
+        runId,
+      );
 
       try {
         const args = isRefine && feedback !== undefined ? { request, feedback } : { request };
@@ -662,25 +675,7 @@ export function usePipeline() {
         setState((prev) => ({ ...prev, active: false, phase: "done", error: errText(e) }));
         throw e;
       }
-      const request: PipelineRequest = {
-        mode: opts.mode,
-        user_input: opts.userInput,
-        model: opts.settings.model,
-        api_key: opts.settings.apiKey,
-        base_url: opts.settings.baseUrl,
-        extra: opts.extra,
-        original_lyrics: opts.originalLyrics,
-        thinking: opts.settings.thinking ?? false,
-        role_overrides: buildRoleOverrides(opts.settings),
-        refine_targets: undefined,
-        // F-1 根治：跨入后端的 generation 过同一清洗函数（内存态运行期输入的越界值在此收敛，
-        // 后端 validate 不再整请求拒绝）——读写请求三个边界共用 sanitizeStored 单源
-        generation: sanitizeStored(opts.settings).generation,
-        run_id: runId,
-        // #12 轮间确认门：续跑直接进终稿（无讨论轮），确认门不适用——显式关闭，
-        // 不随设置开启（否则后端虽不触发，语义上也该钉死"此路径无门"）
-        round_gate: false,
-      };
+      const request = buildPipelineRequest("resume", opts, runId);
       try {
         const text = await invoke<string>("pipeline_resume", { request, runId });
         finishRun();

@@ -28,8 +28,11 @@ export interface AppSettings {
   roundGate?: boolean;
   /** 产出语言三态（"zh" 全中文 / "mix" 中文歌词+英文 Style / "en" 全英文）：
    *  界面语言与专家讨论始终为中文。缺省 "zh"（旧数据无此字段 → 现状行为零漂移）。 */
-  outputLang?: "zh" | "mix" | "en";
+  outputLang?: OutputLang;
 }
+
+/** 产出语言值域（单源；请求与设置共用）。BLUEPRINT_v2 §3.8 将收敛为 zh/en（另批执行）。 */
+export type OutputLang = "zh" | "mix" | "en";
 
 /** 主题模式 */
 export type ThemeMode = "system" | "light" | "dark";
@@ -225,6 +228,7 @@ export interface PipelineRequest {
   round_gate?: boolean;
   /** 产出语言（"zh" 全中文 / "mix" 中文歌词+英文 Style / "en" 全英文）：
    *  en 时流水线产出物（方案/歌词/最终提示词包）以英文输出；mix 仅 STYLE 层英文、歌词保持原语言。
-   *  缺省/旧后端 = "zh"（现状行为，零漂移）；未知值后端保守按中文。 */
-  output_lang?: string;
+   *  C-04：**必填**——请求统一由 usePipeline.buildPipelineRequest 组装（run/refine/resume 单源），
+   *  任何路径漏传即 TS 编译失败（旧 resume 漏传 → 后端缺省 zh，en/mix 设置在续跑被静默忽略）。 */
+  output_lang: OutputLang;
 }
