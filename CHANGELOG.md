@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **[S2 修复] run_id 规则（C-05/C-06/D-06，RULE-RUN-ID）**：删除空 id 全局取消位（旧规则无复位点，无 run_id 时按“停止”后“测试连接”永远返回已取消）；`cancel_pipeline` 空 id 改为明确报错，`test_api` 用独立 id；`llm-chunk` 载荷增加 `run_id`，前端 `acceptStreamChunk` 只收当前 run 的流式片段（防取消/队列交错串流）；run 结束（含续跑）移除取消条目；run_id 解析单源 `resolve_run_id`；取消注册表只对活动 run 生效（`begin`/`finish`），结束后迟到的取消为 no-op、不留条目。
+- **[S3 修复] 大型矩阵测试路径与口径（C-11）**：结果目录改为工程相对 `target/large-test`（原写死 `/Users/hakayi/Desktop/...`，工程移动即失效）；测量改调生产终稿门 `collect_hard_issues`（原只调 `validate_for_mode`，漏 Style Prompt 长度门等，读数虚高）；新增离线 dry-run 测试。
 - **[S1 修复] 迁移后 localStorage 残留明文 Key（C-10）**：启动回填只在内存有变化时写出，明文 apiKey 不触发回填 → 明文永久留存。现钥匙串持有密钥（迁移成功或此前已迁移）即无条件写出脱敏副本；迁移失败则不写出（修复潜在丢 Key：角色回填触发写出会把未入钥匙串的明文哨兵化）。新增 3 项单测。
 - **[S2 修复] vitest 不可复现根因（C-01）**：根因为工程位于 iCloud 同步目录（node_modules 读取经文件提供程序，worker 冷启动超时）与 Node 版本低于依赖 engines，非并发竞态（`--maxWorkers=2` 实测仍失败）。新增 `vitest.config.ts`（显式 node 环境/forks，不设 maxWorkers）、`engines`/`.nvmrc`、`pretest` 环境守卫 `scripts/testEnvGuard.mjs`，根因记录 `docs/qa/vitest-root-cause.md`。
 - **[S2 修复] SSE 跨 chunk UTF-8 截断（C-07）**：流式行缓冲改为字节级，按 `\n` 切完整行后再解码；中文等多字节字符被网络 chunk 切开时不再变成 U+FFFD（夹具覆盖全部切点）。

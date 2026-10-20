@@ -1957,7 +1957,10 @@ fn extract_previous_plan(user_input: &str) -> Option<String> {
 /// 过短/BPM 校验不再被 "Style Prompt**: " 标签前缀虚增长度；"风格:" 前缀兼容已下沉至该实现。
 /// BPM 只信任显式标注（knowledge::plan_bpm_value，无 BPM 字样返回 None），
 /// 不再从行内任意数字猜值（"80年代" 等年代词误报源已移除）。
-fn collect_hard_issues(mode: &Mode, final_text: &str, extra: Option<&str>) -> Vec<String> {
+/// C-11（P0-7）：`pub` 供 tests/large_scale_matrix 以生产终稿门口径测量（集成测试是外部 crate，
+/// `pub(crate)` 不可见）；非稳定 API。
+#[doc(hidden)]
+pub fn collect_hard_issues(mode: &Mode, final_text: &str, extra: Option<&str>) -> Vec<String> {
     let mut issues = Vec::new();
     let v = validator::validate_for_mode(mode.to_str_name(), final_text, extra);
     issues.extend(v.issues);

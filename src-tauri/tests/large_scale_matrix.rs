@@ -14,7 +14,6 @@ use std::time::{Duration, Instant};
 use tauri::Listener;
 
 use suno_prompt_generator_lib::commands::orchestrator;
-use suno_prompt_generator_lib::commands::validator;
 use suno_prompt_generator_lib::models::{Mode, PipelineRequest};
 
 struct TestConfig {
@@ -162,9 +161,9 @@ async fn large_scale_matrix() {
         eprintln!("缺少 SHIYI_TEST_* 环境变量，大型实测跳过");
         return;
     };
-    let dir = "/Users/hakayi/Desktop/shiyi-music/target/large-test";
-    std::fs::create_dir_all(dir).expect("create dir");
-    let results_path = format!("{}/results.jsonl", dir);
+    let dir = results_dir();
+    std::fs::create_dir_all(&dir).expect("create dir");
+    let results_path = dir.join("results.jsonl").to_string_lossy().into_owned();
     let cases = matrix();
     // LSM_ONLY：调试过滤器——只跑 prompt_id 含该子串的用例（如 LSM_ONLY=P1）
     // LSM_CASES：精确用例选择——逗号分隔 "mode:prompt_id"（如 "d:P1,a:P5,c:C6"）
@@ -233,8 +232,8 @@ async fn large_scale_matrix() {
         };
         let (validation_passed, issues) = match &output {
             Some(text) => {
-                let v = validator::validate_for_mode(case.mode.to_str_name(), text, case.original_lyrics);
-                (Some(v.passed), v.issues)
+                let (passed, issues) = measure(&case, text);
+                (Some(passed), issues)
             }
             None => (None, Vec::new()),
         };
@@ -247,6 +246,39 @@ async fn large_scale_matrix() {
         append_result(&results_path, &rec);
     }
     println!("\nLARGE-SCALE-MATRIX-COMPLETE");
+}
+
+/// C-11（P0-7）：结果目录相对工程（`<repo>/target/large-test`），不再写死某台机器的绝对路径。
+fn results_dir() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("target").join("large-test")
+}
+
+/// C-11（P0-7）：测量口径 = 生产终稿门 `collect_hard_issues`（validate_for_mode + Style Prompt
+/// 长度门 + BPM 等）。旧口径只调 validate_for_mode，比生产宽松，矩阵读数虚高。
+fn measure(case: &Case, text: &str) -> (bool, Vec<String>) {
+    let issues = orchestrator::collect_hard_issues(&case.mode, text, case.original_lyrics);
+    (issues.is_empty(), issues)
+}
+
+/// 离线 dry-run：路径相对工程、测量与生产终稿门同源（无网络，常规 cargo test 运行）
+#[test]
+fn offline_dry_run_paths_and_measurement() {
+    let dir = results_dir();
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    assert!(dir.starts_with(&repo), "结果目录必须位于工程内: {}", dir.display());
+    assert!(!dir.to_string_lossy().contains("/Users/"), "禁止写死绝对路径");
+    let src = include_str!("large_scale_matrix.rs");
+    let hardcoded = ["/Users/", "hakayi"].concat();
+    assert_eq!(src.matches(hardcoded.as_str()).count(), 0, "源码不得出现机器绝对路径");
+    let validate_call = ["validator::", "validate_for_mode("].concat();
+    assert_eq!(src.matches(validate_call.as_str()).count(), 0, "测量必须走 collect_hard_issues");
+    // 冻结矩阵每例都能离线测量（空终稿必有硬问题，证明走的是真门而非恒通过）
+    let cases = matrix();
+    assert!(!cases.is_empty());
+    for c in &cases {
+        let (passed, issues) = measure(c, "");
+        assert!(!passed && !issues.is_empty(), "{} {} 空终稿应被硬门拒绝", match_mode(&c.mode), c.prompt_id);
+    }
 }
 
 fn json_line(case: &Case, seq: usize, output: &Option<String>, err: Option<&str>,
@@ -262,8 +294,6 @@ fn json_line(case: &Case, seq: usize, output: &Option<String>, err: Option<&str>
     }
     match (output, err) {
         (Some(text), _) => {
-            let v = validator::validate_for_mode(case.mode.to_str_name(), text, case.original_lyrics);
-            let _ = v; // validation 已在上层算好，这里只落盘文本
             s.push_str(&format!(",\"ok\":true,\"output\":{}", json_escape(text)));
             s.push_str(&format!(",\"validation_passed\":{}", validation_passed.unwrap_or(false)));
             s.push_str(&format!(",\"issues\":{}", json_array(issues)));
