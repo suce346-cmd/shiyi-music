@@ -257,7 +257,7 @@ impl Table {
         out.push_str("| ");
         out.push_str(&self.headers.join(" | "));
         out.push_str(" |\n");
-        out.push_str("|");
+        out.push('|');
         for _ in &self.headers {
             out.push_str("---|");
         }
@@ -552,6 +552,7 @@ impl KnowledgeBase {
     ///   （`rules::keyword_tokens`）拆出的 token 都短于 `rules::KEYWORD_MIN_CHARS`
     ///   → `orchestrator::matching_keywords` 全部丢弃，该行永久休眠（旧行为：无日志无测试）
     /// - 乐器表：`energy_min/energy_max` 缺失/非数值/min>max → `render_instruments_by_energy` 永不命中
+    ///
     /// 语义：**可达 = 行具备被注入的必要条件**（是否真被命中取决于当前方案文本，属按需检索设计）。
     pub fn reachability_violations(&self) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
@@ -889,7 +890,7 @@ impl KnowledgeBase {
             })
             .collect();
         // 稳定排序：分数高的在前（同分保持表顺序）
-        matched_idx.sort_by(|a, b| b.1.cmp(&a.1));
+        matched_idx.sort_by_key(|x| std::cmp::Reverse(x.1));
         let matched: Vec<Vec<String>> = matched_idx
             .iter()
             .map(|(ri, _)| rows_all.get(*ri).cloned().unwrap_or_default())
@@ -946,7 +947,7 @@ impl KnowledgeBase {
         out.push_str("| ");
         out.push_str(&headers.join(" | "));
         out.push_str(" |\n");
-        out.push_str("|");
+        out.push('|');
         for _ in &headers {
             out.push_str("---|");
         }
@@ -1011,7 +1012,7 @@ impl KnowledgeBase {
                         let mut score = 10 - dist.min(10); // 能量接近分 0-10
                         // 风格匹配：方案文本命中 style_tags 词（空格/顿号分词）
                         if let Some(si) = style_idx {
-                            for tag in row.get(si).map(|s| s.as_str()).unwrap_or("").split(|ch| ch == ' ' || ch == '、') {
+                            for tag in row.get(si).map(|s| s.as_str()).unwrap_or("").split([' ', '、']) {
                                 if !tag.is_empty() && plan.contains(tag) {
                                     score += 3;
                                 }
@@ -1032,7 +1033,7 @@ impl KnowledgeBase {
             })
             .collect();
         // 稳定排序：分数高的在前（同分保持表顺序）
-        matched_idx.sort_by(|a, b| b.1.cmp(&a.1));
+        matched_idx.sort_by_key(|x| std::cmp::Reverse(x.1));
         let matched: Vec<Vec<String>> = matched_idx
             .iter()
             .map(|(ri, _)| rows_all.get(*ri).cloned().unwrap_or_default())
@@ -1061,7 +1062,7 @@ impl KnowledgeBase {
         out.push_str("| ");
         out.push_str(&headers.join(" | "));
         out.push_str(" |\n");
-        out.push_str("|");
+        out.push('|');
         for _ in &headers {
             out.push_str("---|");
         }
@@ -1120,7 +1121,7 @@ impl KnowledgeBase {
         out.push_str("| ");
         out.push_str(&headers.join(" | "));
         out.push_str(" |\n");
-        out.push_str("|");
+        out.push('|');
         for _ in &headers {
             out.push_str("---|");
         }

@@ -96,6 +96,6 @@ fn mode_d_hard_rules() {
 /// validate_for_mode 分发口径（a/b 走 production，c 需原词，d 走 douyin，未知打回）
 #[test]
 fn validate_for_mode_dispatch() {
-    assert!(validate_for_mode("mode_x", "x", None).passed == false);
-    assert!(validate_for_mode("mode_c", "新词", None).passed == false, "C 无原词应打回");
+    assert!(!validate_for_mode("mode_x", "x", None).passed);
+    assert!(!validate_for_mode("mode_c", "新词", None).passed, "C 无原词应打回");
 }

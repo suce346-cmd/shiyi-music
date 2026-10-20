@@ -372,7 +372,7 @@ mod tests {
     fn interactive_set_command_passes_special_chars_verbatim() {
         for k in ["sk-a#b", "sk;rm", "sk$HOME", "sk&x|y", "sk*?!", "sk%~`", "sk<>=@", "sk,:/+", "#leading", "trail;"] {
             let cmd = interactive_set_command("test:shiyi:1", k).unwrap();
-            let toks: Vec<&str> = cmd.trim_end().split_whitespace().collect();
+            let toks: Vec<&str> = cmd.split_whitespace().collect();
             assert_eq!(toks.last().copied(), Some(k), "密钥必须是最后一个完整 token: {cmd:?}");
             assert_eq!(toks.len(), 9, "不得多出/丢失 token: {cmd:?}");
         }

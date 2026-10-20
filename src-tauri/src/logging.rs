@@ -56,11 +56,10 @@ pub fn cleanup_old_logs(log_dir: &std::path::Path, now_secs: u64) -> usize {
             parts[1].parse::<i64>(),
             parts[2].parse::<i64>(),
         ) else { continue };
-        if today_days - days_from_civil(y, m, d) > KEEP_DAYS {
-            if std::fs::remove_file(&p).is_ok() {
+        if today_days - days_from_civil(y, m, d) > KEEP_DAYS
+            && std::fs::remove_file(&p).is_ok() {
                 removed += 1;
             }
-        }
     }
     removed
 }

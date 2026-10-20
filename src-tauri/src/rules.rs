@@ -123,6 +123,7 @@ pub const DOUYIN_ENERGY_ABRUPT_MAX: u32 = 10;
 /// （改一处漏一处，措辞会静默分叉）。现两处均经占位符引用：
 /// - `${ARC_DENSITY_TABLE}`：原样（行首 `· `，无缩进）；
 /// - `${ARC_DENSITY_TABLE_INDENTED}`：每行前置 4 空格（供 prompts.rs 的缩进代码块）。
+///
 /// 行内 `3-4件`/`6-7件` 是**规划示例**而非阈值常量（`handwritten_rule_number_hits` 的
 /// 区间右端豁免据此放行），与 `MIN_INSTRUMENT_WEAK` 下限的关系由"极简段豁免"条款约束。
 const ARC_DENSITY_TABLE: &str = "· Intro：标准叙事型=稀疏；全程高能型=即满；高开低走型=满配；平铺氛围型=均匀中低；起伏戏剧型=视起点定\n· Verse：标准叙事型=低密度；全程高能型=持续高压；高开低走型=开始减；平铺氛围型=均匀中低；起伏戏剧型=视起伏定\n· Pre-Chorus：标准叙事型=推；全程高能型=用 Drop 区分；高开低走型=继续减；平铺氛围型=均匀中低；起伏戏剧型=视起伏定\n· Chorus：标准叙事型=打开；全程高能型=持续高压；高开低走型=最弱；平铺氛围型=均匀中低；起伏戏剧型=视起伏定\n· Bridge：标准叙事型=剥离；全程高能型=不用 Build Up；高开低走型=—；平铺氛围型=均匀中低；起伏戏剧型=视起伏定\n· Final Chorus：标准叙事型=最大；全程高能型=最大；高开低走型=—；平铺氛围型=均匀中低；起伏戏剧型=最强或最弱";
@@ -2238,8 +2239,9 @@ mod tests {
             for (name, _) in discover_prose_definitions(&production_segment(&src)) {
                 if PROSE_SOURCE_FILES.contains(&rel.as_str()) {
                     covered_files.push(rel.clone());
-                } else if PROSE_CARRIERS.iter().any(|c| c.name == name.as_str()) {
-                } else if PROSE_CARRIER_EXEMPT.iter().any(|(n, _)| *n == name.as_str()) {
+                } else if PROSE_CARRIERS.iter().any(|c| c.name == name.as_str())
+                    || PROSE_CARRIER_EXEMPT.iter().any(|(n, _)| *n == name.as_str())
+                {
                 } else {
                     uncovered.push(format!("{}::{}", rel, name));
                 }
@@ -2905,7 +2907,7 @@ mod envelope_tests {
     fn envelope_defect_flags_missing_sections() {
         // 模型漏 PARAMS 节的实测形态——缺陷清单必须点名，逼主持人补齐
         let plan = "<<<LYRICS>>>\n[Intro]\n[pad, 能量:2]\n凌晨\n<<<STYLE>>>\nStyle Prompt: x";
-        let defect = envelope_defect_mode(&plan, "mode_a").expect("缺 PARAMS 节应报缺陷");
+        let defect = envelope_defect_mode(plan, "mode_a").expect("缺 PARAMS 节应报缺陷");
         assert!(defect.contains("PARAMS"), "应点名缺 PARAMS 节: {}", defect);
         assert!(!defect.contains("说明行超过"), "无超长说明行不应报");
     }

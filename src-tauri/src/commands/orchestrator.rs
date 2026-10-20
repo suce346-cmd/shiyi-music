@@ -221,7 +221,7 @@ fn normalize_target(t: &str) -> String {
 
 /// 解析审改 JSON（不可信输出显式降级，不再假同意）。
 /// - JSON 解析失败 / agree 字段缺失 → degraded=true（意见作废，仅作警示记录，见 humanize_review）
-/// ——content 为空的修订丢弃；非法 target 归一为 other。
+///   ——content 为空的修订丢弃；非法 target 归一为 other。
 fn parse_review(raw: &str) -> ReviewResult {
     let cleaned = strip_json_fence(raw);
     let Ok(v) = serde_json::from_str::<Value>(&cleaned) else {
@@ -475,6 +475,7 @@ fn fold_log(log: &[(String, String)]) -> Vec<(String, String)> {
 /// - mode / role：**审改注入上下文**（#29）——思维资产行的条件标签（抖音→mode_d、
 ///   A/B/C→mode_a/b/c、制作→producer）据此成为**真限定**；阶段标签取自
 ///   `rules::CRAFT_STAGE_CONSUMER_REVIEWER` 单源登记（调用点不得自造标签集合）
+///
 /// 条数上限见 INJECT_MAX_* 常量（集中定义，测试锁定）。
 fn inject_knowledge(
     kb: &KnowledgeBase,
@@ -684,7 +685,7 @@ async fn execute_review<R: Runtime>(
     let user = build_role_review_user_prompt(current_plan, round_peers, history_log, next_tasks, req);
 
     let (base_url, api_key, model) = resolve_api(req, role);
-    let _ = emit(PipelineEvent::StepStart { role });
+    emit(PipelineEvent::StepStart { role });
     let messages = vec![
         json!({"role":"system","content":system}),
         json!({"role":"user","content":user}),
@@ -696,7 +697,7 @@ async fn execute_review<R: Runtime>(
         req.thinking,
         budget,
         &gen,
-        &run_id,
+        run_id,
         llm::FINAL_STAGE_RESERVE,
         Some(&backoff),
     )
@@ -716,7 +717,7 @@ async fn execute_review<R: Runtime>(
             req.thinking,
             budget,
             &gen,
-            &run_id,
+            run_id,
             llm::FINAL_STAGE_RESERVE,
             Some(&backoff),
         )
@@ -730,12 +731,12 @@ async fn execute_review<R: Runtime>(
     }
     // C5/ADR-3：call_degraded 降级源——输出解析失败（重试后仍不可信），意见作废仅作警示
     if result.degraded {
-        let _ = emit(PipelineEvent::Degraded {
+        emit(PipelineEvent::Degraded {
             flag: "call_degraded".into(),
             detail: format!("{} 输出解析失败，意见作废（已降级警示）", role.name()),
         });
     }
-    let _ = emit(PipelineEvent::StepDone {
+    emit(PipelineEvent::StepDone {
         role,
         summary: humanize_review(role, &result),
     });
@@ -843,7 +844,7 @@ async fn execute_audit_review<R: Runtime>(
     let user = build_audit_review_user_prompt(current_plan, round_changes, revisions_log, next_tasks, req);
 
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Auditor);
-    let _ = emit(PipelineEvent::StepStart { role: PipelineRole::Auditor });
+    emit(PipelineEvent::StepStart { role: PipelineRole::Auditor });
     let messages = vec![
         json!({"role":"system","content":system}),
         json!({"role":"user","content":user}),
@@ -855,7 +856,7 @@ async fn execute_audit_review<R: Runtime>(
         req.thinking,
         budget,
         &gen,
-        &run_id,
+        run_id,
         llm::FINAL_STAGE_RESERVE,
         Some(&backoff),
     )
@@ -875,7 +876,7 @@ async fn execute_audit_review<R: Runtime>(
             req.thinking,
             budget,
             &gen,
-            &run_id,
+            run_id,
             llm::FINAL_STAGE_RESERVE,
             Some(&backoff),
         )
@@ -887,7 +888,7 @@ async fn execute_audit_review<R: Runtime>(
             result = result2;
         }
     }
-    let _ = emit(PipelineEvent::StepDone {
+    emit(PipelineEvent::StepDone {
         role: PipelineRole::Auditor,
         summary: humanize_review(PipelineRole::Auditor, &result),
     });
@@ -1009,7 +1010,7 @@ async fn run_host_initial<R: Runtime>(
     };
     // #27-c 退避播报钩子（整流重发循环共用）
     let backoff = backoff_hook(app.clone(), run_id.to_string());
-    let _ = emit(PipelineEvent::HostStart { stage: HostStage::Initial });
+    emit(PipelineEvent::HostStart { stage: HostStage::Initial });
     // #23：阶段0 思维资产注入需要知识库（阶段0 行不再只靠 primer 手写句）；
     // 相关性排序基准 = 用户输入（初稿阶段还没有方案文本）
     let kb = load_knowledge()?;
@@ -1060,7 +1061,7 @@ async fn run_host_initial<R: Runtime>(
             req.thinking,
             budget,
             &gen,
-            &run_id,
+            run_id,
             llm::FINAL_STAGE_RESERVE,
             Some(&backoff),
         )
@@ -1082,7 +1083,7 @@ async fn run_host_initial<R: Runtime>(
         tracing::error!("方案初稿输出被截断");
         return Err("方案初稿输出被截断（达到输出上限），请简化输入后重试".into());
     }
-    let _ = emit(PipelineEvent::HostDone { stage: HostStage::Initial });
+    emit(PipelineEvent::HostDone { stage: HostStage::Initial });
     emit_usage(app, PipelineRole::Host, &resp, run_id);
     // D-Envelope：信封门——不合契约带纠错重写一次（独立额度，不占校验员打回）；
     // 说明行超长同门处理（写入点前置，链路最左修最便宜）
@@ -1111,7 +1112,7 @@ async fn enforce_envelope<R: Runtime>(
     if !crate::rules::plan_envelope_enabled() {
         return Ok(plan);
     }
-    let defect = crate::rules::envelope_defect_mode(&plan, &req.mode.to_str_name());
+    let defect = crate::rules::envelope_defect_mode(&plan, req.mode.to_str_name());
     let Some(defect_msg) = defect else {
         return Ok(plan);
     };
@@ -1149,7 +1150,7 @@ async fn enforce_envelope<R: Runtime>(
     )
     .await?;
     emit_usage(app, PipelineRole::Host, &resp, run_id);
-    if crate::rules::envelope_defect_mode(&resp.raw, &req.mode.to_str_name()).is_none() {
+    if crate::rules::envelope_defect_mode(&resp.raw, req.mode.to_str_name()).is_none() {
         return Ok(resp.raw);
     }
     emit_pipeline_event(app, run_id, PipelineEvent::Degraded {
@@ -1252,7 +1253,7 @@ async fn run_host_summarize<R: Runtime>(
     // 旧规则唯独汇总阶段不带，主持人整合修订时无比对基准，属盲改。措辞与阶段 2 同口径。
     let user = build_summarize_user_prompt(current_plan, round_changes, req.original_lyrics_text());
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Host);
-    let _ = emit(PipelineEvent::HostStart { stage: HostStage::Summarize });
+    emit(PipelineEvent::HostStart { stage: HostStage::Summarize });
     // D-Envelope + R2：汇总阶段 system 与阶段 0 同源单源——primer + 阶段0 思维资产 + 校验清单
     // + 信封契约全部注入（旧实现只有 host 人设 + 信封，无 primer/清单 → 整合时无数字口径，回炉必再违规）。
     // #23：阶段0 思维资产相关性排序基准 = 当前方案（汇总期手里有方案文本）
@@ -1271,7 +1272,7 @@ async fn run_host_summarize<R: Runtime>(
         req.thinking,
         budget,
         &gen,
-        &run_id,
+        run_id,
         llm::FINAL_STAGE_RESERVE,
         Some(&backoff),
     )
@@ -1280,7 +1281,7 @@ async fn run_host_summarize<R: Runtime>(
     if llm::is_truncated(&resp.finish_reason) {
         tracing::warn!("主持人汇总输出触及 max_tokens 上限，按现状继续");
     }
-    let _ = emit(PipelineEvent::HostDone { stage: HostStage::Summarize });
+    emit(PipelineEvent::HostDone { stage: HostStage::Summarize });
     emit_usage(app, PipelineRole::Host, &resp, run_id);
     let (plan, tasks) = split_tasks(&resp.raw);
     // D-Envelope：整合后的方案过信封门（格式+说明行长度，独立额度）
@@ -1442,7 +1443,7 @@ async fn call_auditor_format<R: Runtime>(
     user: String,
 ) -> Result<(String, bool), AppError> {
     let emit = |event: PipelineEvent| emit_pipeline_event(ctx.app, ctx.run_id, event);
-    let _ = emit(PipelineEvent::AuditStart);
+    emit(PipelineEvent::AuditStart);
     let req = ctx.request;
     let (base_url, api_key, model) = resolve_api(req, PipelineRole::Auditor);
     // #27-c 退避播报钩子（终稿格式输出——限流时用户能看到"还要等多久"）
@@ -1770,6 +1771,7 @@ async fn handle_loop_markers<R: Runtime>(
 /// - Auditor 通道（≤2）：转写类 issue（保真/格式要素缺失/截断）——定点重写或全文重输
 /// - Host 通道（≤2）：方案内容类 issue（配器/字数/Hook/骤停/行宽/行数/Style 长度）——
 ///   主持人整合修复 → 以新方案重新转写（校验员额度随新方案重置）
+///
 /// 修复旧缺陷：真违规（配器丢失等）此前与保真误报共挤 2 次额度，全部打回耗尽降级。
 async fn fidelity_retry_loop<R: Runtime>(
     ctx: &FinalStageCtx<'_, R>,
@@ -2220,7 +2222,7 @@ async fn run_pipeline_inner<R: Runtime>(
             } else {
                 next_tasks.push_str(&format!("\n{}", note));
             }
-            let _ = emit(PipelineEvent::StepDone {
+            emit(PipelineEvent::StepDone {
                 role: PipelineRole::Host,
                 summary: format!("收到用户插话，已纳入本轮讨论：{}", preview),
             });
@@ -2266,7 +2268,7 @@ async fn run_pipeline_inner<R: Runtime>(
         .await?;
         if auditor_result.degraded {
             // C5/ADR-3：call_degraded——校验员讨论轮输出不可信
-            let _ = emit(PipelineEvent::Degraded {
+            emit(PipelineEvent::Degraded {
                 flag: "call_degraded".into(),
                 detail: "校验员 输出解析失败，意见作废（已降级警示）".into(),
             });
@@ -2296,7 +2298,7 @@ async fn run_pipeline_inner<R: Runtime>(
         let (new_plan, tasks) = run_host_summarize(&app, &current_plan, &round_changes, &request, &budget, &run_id).await?;
         current_plan = new_plan;
         next_tasks = tasks;
-        let _ = emit(PipelineEvent::DiscussionRound {
+        emit(PipelineEvent::DiscussionRound {
             round,
             roles: round_changes.iter().map(|(r, _, _)| *r).collect(),
             reason: round_changes
@@ -2333,12 +2335,12 @@ async fn run_pipeline_inner<R: Runtime>(
         //    取消优先：等待循环轮询取消位，用户在暂停中点"停止"立即终止。
         if gate_enabled && round < MAX_DISCUSSION_ROUNDS {
             let timeout_secs = ROUND_GATE_MAX_WAIT.as_secs();
-            let _ = emit(PipelineEvent::RoundGatePending {
+            emit(PipelineEvent::RoundGatePending {
                 round,
                 next_round: round + 1,
                 timeout_secs,
             });
-            let _ = emit(PipelineEvent::StepDone {
+            emit(PipelineEvent::StepDone {
                 role: PipelineRole::Host,
                 summary: format!(
                     "第 {} 轮已完成并汇总（已存检查点），等待你确认是否继续第 {} 轮",
@@ -2348,7 +2350,7 @@ async fn run_pipeline_inner<R: Runtime>(
             });
             checkpoint()?;
             let decision = gate::wait(&run_id, ROUND_GATE_MAX_WAIT).await?;
-            let _ = emit(PipelineEvent::RoundGateResolved {
+            emit(PipelineEvent::RoundGateResolved {
                 round,
                 decision: decision.as_str().to_string(),
             });
@@ -2359,7 +2361,7 @@ async fn run_pipeline_inner<R: Runtime>(
                     break;
                 }
                 gate::GateDecision::Timeout => {
-                    let _ = emit(PipelineEvent::Degraded {
+                    emit(PipelineEvent::Degraded {
                         flag: "pause_gate_degraded".into(),
                         detail: format!(
                             "第 {} 轮确认门等待超时（{} 秒无人确认），已自动继续下一轮",
@@ -2368,7 +2370,7 @@ async fn run_pipeline_inner<R: Runtime>(
                     });
                 }
                 gate::GateDecision::Continue => {
-                    let _ = emit(PipelineEvent::StepDone {
+                    emit(PipelineEvent::StepDone {
                         role: PipelineRole::Host,
                         summary: format!("已确认继续第 {} 轮讨论", round + 1),
                     });
@@ -2385,7 +2387,7 @@ async fn run_pipeline_inner<R: Runtime>(
         "讨论收敛"
     );
     if let Some(r) = stop_at_user_gate {
-        let _ = emit(PipelineEvent::Degraded {
+        emit(PipelineEvent::Degraded {
             flag: "pause_gate_degraded".into(),
             detail: format!(
                 "用户在第 {} 轮确认门选择结束讨论，提前进入终稿（非全体共识产出）",
@@ -2396,13 +2398,13 @@ async fn run_pipeline_inner<R: Runtime>(
         for note in interject::drain(&run_id) {
             let preview: String = note.chars().take(60).collect();
             revisions_log.push(("用户插话（讨论已结束·未进入讨论轮）".to_string(), note.clone()));
-            let _ = emit(PipelineEvent::StepDone {
+            emit(PipelineEvent::StepDone {
                 role: PipelineRole::Host,
                 summary: format!("讨论已结束，此条意见未进入讨论轮（不会影响本次终稿）：{}", preview),
             });
         }
     } else if !converged {
-        let _ = emit(PipelineEvent::Degraded {
+        emit(PipelineEvent::Degraded {
             flag: "budget_degraded".into(),
             detail: format!("讨论轮次上限（{} 轮）强制收敛，非全体共识产出", MAX_DISCUSSION_ROUNDS),
         });
@@ -3461,15 +3463,15 @@ mod tests {
             "aliases 列 token 未进入候选集（分词/多列取数失效）"
         );
         // ④ 长度门生效（按单源常量取边界值）
-        assert!(KEYWORD_MIN_CHARS >= 2, "长度门 <2 会让单字候选误命中（如'深夜'命中'夜'）");
+        const _: () = assert!(KEYWORD_MIN_CHARS >= 2, "长度门 <2 会让单字候选误命中");
         let below = "夜".repeat(KEYWORD_MIN_CHARS - 1);
         assert!(
-            matching_keywords(&format!("深夜的{}景", below), &[below.clone()]).is_empty(),
+            matching_keywords(&format!("深夜的{}景", below), std::slice::from_ref(&below)).is_empty(),
             "短于 KEYWORD_MIN_CHARS 的候选必须被丢弃"
         );
         let at_gate = "孤独".repeat(KEYWORD_MIN_CHARS / 2 + 1);
         assert_eq!(
-            matching_keywords(&format!("这里提到{}", at_gate), &[at_gate.clone()]),
+            matching_keywords(&format!("这里提到{}", at_gate), std::slice::from_ref(&at_gate)),
             vec![at_gate.clone()],
             "达到长度门的候选必须命中"
         );
@@ -3907,7 +3909,7 @@ mod tests {
             user_input: "雨天".into(),
             model: "global-model".into(),
             // 测试占位符非真实凭据——动态构造，避免静态扫描把占位值当硬编码密钥（CWE-798 误报）
-            api_key: format!("global-{}", "key").into(),
+            api_key: format!("global-{}", "key"),
             base_url: "https://global.example.com/v1".into(),
             extra: None,
             original_lyrics: None,

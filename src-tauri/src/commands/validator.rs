@@ -439,7 +439,7 @@ fn check_audio_influence(text: &str) -> Option<String> {
         .take_while(|c| c.is_ascii_digit() || *c == '.')
         .collect();
     match num.parse::<f64>() {
-        Ok(v) if v == 0.0 => None,
+        Ok(0.0) => None,
         Ok(v) => Some(format!("Audio Influence 须为 0（无参考音频，当前 {}）", v)),
         Err(_) => Some("参数行 Audio Influence 无法解析（应为 `Audio Influence=0`）".to_string()),
     }

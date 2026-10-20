@@ -245,6 +245,7 @@ const THINKING_MAX_TOKENS: u32 = MAX_TOKENS_CAP;
 /// - OpenAI o 系 / gpt-5：reasoning_effort 等级（o 系专用，gpt-4o 传了会 400，故只匹配 o 系/gpt-5）
 /// - Anthropic 系（OpenAI 兼容网关）：thinking + budget_tokens
 /// - 未知模型：None = 不带任何参数（安全默认，避免不支持的网关 400 报错）
+///
 /// 未来换模型只需在此加一行。
 pub(crate) fn thinking_params(model: &str) -> Option<Value> {
     let m = model.to_lowercase();
@@ -427,7 +428,7 @@ pub(crate) async fn call_llm_silent(
     if thinking {
         apply_thinking(&mut body, model, max_tokens, true);
     }
-    match send_and_extract(&client, &url, &api_key, &body, budget, run_id, reserve, notify).await {
+    match send_and_extract(&client, &url, api_key, &body, budget, run_id, reserve, notify).await {
         Ok(resp) => Ok(resp),
         Err(e) if thinking && e.message.contains("missing content") => {
             // 降级：去掉思考参数重试一次（同一 prompt 无思考直接输出，必有正文）
@@ -439,7 +440,7 @@ pub(crate) async fn call_llm_silent(
                 "temperature": temperature,
                 "max_tokens": max_tokens,
             });
-            send_and_extract(&client, &url, &api_key, &fallback, budget, run_id, reserve, notify).await
+            send_and_extract(&client, &url, api_key, &fallback, budget, run_id, reserve, notify).await
         }
         Err(e) => Err(e),
     }
@@ -447,6 +448,7 @@ pub(crate) async fn call_llm_silent(
 
 /// P1-2 结构化调用的请求体（纯函数，离线可测）。
 /// `none` 档不应走到这里（调用方先拒）；json_object 档在最前插入 schema system 消息。
+#[cfg_attr(not(test), expect(dead_code, reason = "P1-3/P1-4 编排接线前仅离线测试调用；接线后 expect 失效即红，届时删除本属性"))]
 pub(crate) fn structured_body(
     model: &str,
     messages: &[Value],
@@ -476,6 +478,7 @@ pub(crate) fn structured_body(
 }
 
 /// `none` 档的固定报错（用户可见；不发请求、不自由文本兜底）。
+#[cfg_attr(not(test), expect(dead_code, reason = "P1-3/P1-4 编排接线前仅离线测试调用；接线后 expect 失效即红，届时删除本属性"))]
 pub(crate) fn structured_unsupported_error(model: &str) -> AppError {
     AppError::new(
         ErrorKind::Validation,
@@ -487,6 +490,7 @@ pub(crate) fn structured_unsupported_error(model: &str) -> AppError {
 }
 
 /// 模型正文 → JSON → 本地 schema 校验 → 类型化。失败 = Parse，detail 含 JSON 路径。
+#[cfg_attr(not(test), expect(dead_code, reason = "P1-3/P1-4 编排接线前仅离线测试调用；接线后 expect 失效即红，届时删除本属性"))]
 pub(crate) fn parse_structured<T: serde::de::DeserializeOwned>(raw: &str, schema: &Value) -> Result<(T, Value), AppError> {
     let v: Value = serde_json::from_str(raw.trim()).map_err(|e| {
         AppError::new(ErrorKind::Parse, format!("结构化输出不是合法 JSON: {}", e))
@@ -501,6 +505,7 @@ pub(crate) fn parse_structured<T: serde::de::DeserializeOwned>(raw: &str, schema
 }
 
 /// 结构化调用参数（端点 + 生成参数 + 档位/schema）；预算、消息与退避钩子单独传。
+#[cfg_attr(not(test), expect(dead_code, reason = "P1-3/P1-4 编排接线前仅离线测试调用；接线后 expect 失效即红，届时删除本属性"))]
 pub(crate) struct StructuredCall<'a> {
     pub base_url: &'a str,
     pub api_key: &'a str,
@@ -520,6 +525,7 @@ pub(crate) struct StructuredCall<'a> {
 ///   解析/校验失败不重发、不发"修复提示"，原样以 Parse 报出。
 /// - 非流式：结构化阶段不出 token 流，进度由调用方发 `PhaseProgress` 事件。
 /// - 思考参数不注入（部分网关 thinking 与 response_format 互斥）。
+#[cfg_attr(not(test), expect(dead_code, reason = "P1-3/P1-4 编排接线前仅离线测试调用；接线后 expect 失效即红，届时删除本属性"))]
 pub(crate) async fn call_llm_structured<T: serde::de::DeserializeOwned>(
     c: &StructuredCall<'_>,
     messages: Vec<Value>,

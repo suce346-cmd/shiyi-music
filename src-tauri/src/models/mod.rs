@@ -557,7 +557,7 @@ mod tests {
         let emotion = map.get(&PipelineRole::Emotion).unwrap();
         assert_eq!(emotion.base_url.as_deref(), Some("https://small.example.com/v1"));
         assert_eq!(emotion.model, None);
-        assert!(map.get(&PipelineRole::Host).is_none());
+        assert!(!map.contains_key(&PipelineRole::Host));
     }
 
     #[test]

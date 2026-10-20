@@ -1,0 +1,5 @@
+# clippy -D warnings 门（BLUEPRINT_v2 §5 修订）配置。
+# too_many_arguments：流水线调用链（llm/orchestrator/knowledge 注入）按"预算/run_id/退避钩子"显式传参，
+# 收拢为上下文结构体随 P1-3/P1-4 编排重写一并完成（StructuredCall 为首例）；在此之前阈值放到现存最大值 11，
+# 新增函数超过 11 个参数即红。
+too-many-arguments-threshold = 11
