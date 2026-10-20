@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **[S2 修复] 结构化能力探测误判**：400 类响应仅当 body/code 明示与 `response_format`/`json_schema`/`json_object` 相关时才降档或记 `none`；缺模型/欠费等不再污染能力缓存。探测 `max_tokens` 提至 64。
+- **[S2 修复] schema strictify 误删字段名**：只剥 schema 元键 `description`/`format`，不再误删 `properties` 里同名的字段定义。
+- **[文档] 审计交付入库（P1-J 余）**：`docs/audit-2026-10-19/`（README/REPORT/BLUEPRINT_v2）与 `docs/research/`；BLUEPRINT 对齐 F1 读回校验、C-12=DNS、P0-3 验证列=`runIdWire`、§3.7 英文硬门在 validate（不写 schema description）、`LyricLang` 唯一定义点、§2.1 Interlude+minimal+lyrics_lang、P1-1 位置列去掉 validate/render。
+- **[工程] gates.sh 调用 pretest 同源 `testEnvGuard.mjs`**；suno_profile 来源改为 research 文档（待探针），不再自引用蓝图。
+
 - **[S0 修复] 测试不再删除用户真实 API Key（A-01）**：`keychain::tests::cli_round_trip` 旧实现以生产账户 `global` 做写→删往返，跑一次 `cargo test` 即删除用户 Key。现改用 `test:shiyi:{pid}:{nanos}` 隔离账户 + Drop 清理；新增 RULE-KEYCHAIN-RO 双层守护（测试构建下写/删 `global`/`role:*` 即 panic；静态扫描测试模块写/删实参）。生产行为不变。
 - **[S2 修复] 续跑丢产出语言（C-04）**：`resume` 手写请求字面量漏传 `output_lang`，后端缺省 `zh`，en/mix 设置在续跑被静默忽略。现三路径（generate/refine/resume）统一由 `buildPipelineRequest(kind, …)` 单源组装，`PipelineRequest.output_lang` 改为必填类型（漏传即 TS 编译失败）；新增 `buildPipelineRequest.test.ts` 7 项。
 - **[S2 修复] run_id 规则（C-05/C-06/D-06，RULE-RUN-ID）**：删除空 id 全局取消位（旧规则无复位点，无 run_id 时按“停止”后“测试连接”永远返回已取消）；`cancel_pipeline` 空 id 改为明确报错，`test_api` 用独立 id；`llm-chunk` 载荷增加 `run_id`，前端 `acceptStreamChunk` 只收当前 run 的流式片段（防取消/队列交错串流）；run 结束（含续跑）移除取消条目；run_id 解析单源 `resolve_run_id`；取消注册表只对活动 run 生效（`begin`/`finish`），结束后迟到的取消为 no-op、不留条目。

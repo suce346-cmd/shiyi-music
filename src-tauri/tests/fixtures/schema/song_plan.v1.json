@@ -73,7 +73,7 @@
       ],
       "type": "object"
     },
-    "LyricsLang": {
+    "LyricLang": {
       "enum": [
         "zh",
         "en"
@@ -84,7 +84,7 @@
       "additionalProperties": false,
       "properties": {
         "lyrics_lang": {
-          "$ref": "#/$defs/LyricsLang"
+          "$ref": "#/$defs/LyricLang"
         }
       },
       "required": [

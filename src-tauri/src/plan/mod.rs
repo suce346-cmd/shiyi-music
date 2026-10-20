@@ -5,7 +5,8 @@
 //! 参照 ElevenLabs composition plan 的“全局/段落 × 正向/负向”四象限，只渲染到 Suno。
 //!
 //! 字段约束（国产模型结构化输出稳定性，P1-1 风险项）：
-//! - 枚举化（`SectionKind`、`VocalGender`、`LyricsLang`），不让模型自由写类别；
+//! - 枚举化（`SectionKind`、`VocalGender`、`LyricLang`），不让模型自由写类别；
+//! - `LyricLang` 为歌词语言**唯一定义点**（§3.8 IPC `output_lang` 将 `pub use` 本类型，禁止另立 `LyricsLang`）；
 //! - 无嵌套可选对象以外的多态；全部字段在 schema 中 required（Option → 可为 null），
 //!   `additionalProperties:false`——与 OpenAI `json_schema strict` 兼容（schema.rs 统一后处理）。
 
@@ -123,7 +124,7 @@ pub struct SunoSettings {
 /// 歌词与 notes 语言（D13：zh/en 两值；Style 恒英文与此无关）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum LyricsLang {
+pub enum LyricLang {
     Zh,
     En,
 }
@@ -132,7 +133,7 @@ pub enum LyricsLang {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ModeMeta {
-    pub lyrics_lang: LyricsLang,
+    pub lyrics_lang: LyricLang,
 }
 
 /// Host 阶段产物（schema `plan_ir.v1`）：与 SongPlan 同形——讨论轮对它做结构化 patch（P1-3），
@@ -193,7 +194,7 @@ pub(crate) mod fixtures {
                 vocal_gender: Some(VocalGender::Female),
                 audio_influence: None,
             },
-            mode_meta: ModeMeta { lyrics_lang: LyricsLang::Zh },
+            mode_meta: ModeMeta { lyrics_lang: LyricLang::Zh },
             notes: None,
         }
     }

@@ -13,6 +13,9 @@
 //!   记为 pending（TTL `PENDING_TTL`），`begin` 消费后该 run 立即处于取消态；
 //!   已结束 run 的迟到取消（TTL 内记得 finished）仍为 no-op。`request_cancel` 返回
 //!   `CancelOutcome`，`cancel_pipeline` 据此告诉前端是否生效。
+//! - **F2 孤儿 future**：`with_active_run` 的 future 被丢弃 / 超时 abort 时，`ActiveRun` Drop
+//!   仍 `finish`（活动表不泄漏）；协作式取消点是否已被轮询到不在此保证。
+//! - **F3 30s 边界**：pending/finished 超过 `PENDING_TTL` 即剪除；超时后同 id 迟到停止为 Noop。
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
