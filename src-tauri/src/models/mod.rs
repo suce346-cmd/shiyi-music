@@ -778,6 +778,9 @@ impl PipelineRequest {
 /// 四层：真实解析 → 仅 http/https → 拒绝 userinfo（user[:pass]@host 变形）→
 /// host 解析出全部 IP 逐一拒绝环回/内网/链路本地/组播/未指定/广播/CGNAT/文档段/唯一本地。
 /// 域名走阻塞 DNS（桌面端一次性校验可接受）；解析失败视为不可验证，按拒绝处理（fail closed）。
+/// 已知并接受的残余风险（P0-10，自用决策 D1，见 docs/security-self-use.md）：DNS 重绑定——
+/// 校验时解析与 reqwest 实际连接时解析是两次查询，恶意域名可在两次之间改指内网。
+/// 地址由用户本人在设置中填写（非外部输入），自用场景接受；对外分发前须改为“解析一次 + 按 IP 连接”。
 pub fn validate_url(raw: &str) -> Result<(), String> {
     let url = reqwest::Url::parse(raw.trim()).map_err(|e| format!("URL 无法解析（{}）", e))?;
     match url.scheme() {

@@ -39,3 +39,31 @@ fn qa_jsonl_no_duplicate_content() {
         }
     }
 }
+
+/// P0-10：前端写文件权限收窄到 $APPDATA/$DOWNLOAD/$DOCUMENT；保存对话框所选路径由
+/// tauri-plugin-dialog 运行期加入 fs scope（导出到任意目录仍可用），不再需要全盘 `**`
+#[test]
+fn fs_write_scope_is_narrowed() {
+    let cap = std::fs::read_to_string(repo().join("src-tauri/capabilities/default.json")).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&cap).unwrap();
+    let perms = v["permissions"].as_array().unwrap();
+    for p in perms {
+        if let Some(allow) = p.get("allow").and_then(|a| a.as_array()) {
+            for a in allow {
+                let path = a["path"].as_str().unwrap_or("");
+                assert!(
+                    ["$APPDATA/", "$DOWNLOAD/", "$DOCUMENT/"].iter().any(|pre| path.starts_with(pre)),
+                    "fs scope 超出允许目录: {path}"
+                );
+            }
+        }
+    }
+}
+
+/// P0-10：日志不落模型输出正文（信封门旧日志记录方案前 300 字）
+#[test]
+fn logs_do_not_record_model_output_head() {
+    let src = std::fs::read_to_string(repo().join("src-tauri/src/commands/orchestrator.rs")).unwrap();
+    let needle = ["output", "_head"].concat();
+    assert_eq!(src.matches(needle.as_str()).count(), 0);
+}

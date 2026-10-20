@@ -111,21 +111,72 @@ fn cli_get(account: &str) -> Result<Option<String>, AppError> {
     )
 }
 
+/// C-08/D-02（P0-10）：密钥不进 argv。旧实现 `add-generic-password ... -w <secret>` 把明文放在命令行参数，
+/// 写入期间任何本机进程 `ps -ef` 可见。新实现走 `security -i`（交互模式，命令从 stdin 读），
+/// 明文只经管道传给系统签名进程。
+///
+/// 交互模式按空白切词：为不依赖其引号语义，密钥限定为无空白/引号/反斜杠/控制字符的可打印 ASCII
+/// （主流厂商 Key 均满足；含空白多为粘贴错误），否则明确报错而非静默截断。
+/// 纯函数，跨平台单测。
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn interactive_set_command(account: &str, secret: &str) -> Result<String, AppError> {
+    let ok_token = |v: &str| {
+        !v.is_empty()
+            && v.chars().all(|c| c.is_ascii_graphic() && c != '"' && c != '\'' && c != '\\')
+    };
+    if !ok_token(secret) {
+        return Err(AppError::new(
+            ErrorKind::Validation,
+            "API Key 含空白、引号、反斜杠或非 ASCII 字符，请检查是否粘贴错误",
+        ));
+    }
+    if !ok_token(account) {
+        return Err(AppError::new(ErrorKind::Validation, format!("非法的钥匙串账户: {}", account)));
+    }
+    // -U 更新已存在条目；-A 允许任意应用读取（adhoc 签名友好）
+    Ok(format!("add-generic-password -U -A -s {} -a {} -w {}\n", SERVICE, account, secret))
+}
+
 #[cfg(target_os = "macos")]
 fn cli_set(account: &str, secret: &str) -> Result<(), AppError> {
+    use std::io::Write;
+    use std::process::Stdio;
     guard_test_write(account);
-    // -U 更新已存在条目；-A 允许任意应用读取（adhoc 签名友好）
-    let out = Command::new("/usr/bin/security")
-        .args(["add-generic-password", "-U", "-A", "-s", SERVICE, "-a", account, "-w", secret])
-        .output()
+    let line = interactive_set_command(account, secret)?;
+    let mut child = Command::new("/usr/bin/security")
+        .arg("-i")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| AppError::new(ErrorKind::Internal, format!("security CLI 写入失败: {}", e)))?;
-    if out.status.success() {
-        tracing::info!(account = %account, "钥匙串写入成功");
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        tracing::warn!(account = %account, code = out.status.code(), "钥匙串写入失败");
-        Err(AppError::new(ErrorKind::Internal, format!("钥匙串写入失败: {}", stderr)))
+    {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| AppError::new(ErrorKind::Internal, "security CLI stdin 不可用"))?;
+        stdin
+            .write_all(line.as_bytes())
+            .map_err(|e| AppError::new(ErrorKind::Internal, format!("security CLI 写入失败: {}", e)))?;
+        // drop(stdin) → EOF，交互模式退出
+    }
+    let out = child
+        .wait_with_output()
+        .map_err(|e| AppError::new(ErrorKind::Internal, format!("security CLI 写入失败: {}", e)))?;
+    // 交互模式的退出码不保证反映内部命令成败 → 写后读回校验（不一致即报错，不伪装成功）
+    match cli_get(account) {
+        Ok(Some(pw)) if pw == secret => {
+            tracing::info!(account = %account, "钥匙串写入成功");
+            Ok(())
+        }
+        _ => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            tracing::warn!(account = %account, code = out.status.code(), "钥匙串写入失败（读回不一致）");
+            Err(AppError::new(
+                ErrorKind::Internal,
+                format!("钥匙串写入失败（读回校验不一致）: {}", stderr.trim()),
+            ))
+        }
     }
 }
 
@@ -258,6 +309,27 @@ mod tests {
     }
 
     /// O-5：account 白名单——global/已知角色放行，未知角色与任意串拒绝
+    /// C-08/D-02：密钥只走 stdin 命令行（不进 argv）；非法字符明确拒绝
+    #[test]
+    fn interactive_set_command_shape_and_rejects() {
+        let k = ["sk", "abc123", "XYZ_9.-"].join("-");
+        let cmd = interactive_set_command("test:shiyi:1", &k).unwrap();
+        assert_eq!(cmd, format!("add-generic-password -U -A -s shiyi-music -a test:shiyi:1 -w {}\n", k));
+        for bad in ["", "sk 1", "sk\t1", "sk\"1", "sk'1", "sk\\1", "sk\n1", "密钥"] {
+            assert!(interactive_set_command("test:shiyi:1", bad).is_err(), "应拒绝 {:?}", bad);
+        }
+    }
+
+    /// 守护：写入路径不得把密钥放进 argv（源码扫描 add-generic-password 只出现在 stdin 命令构造里）
+    #[test]
+    fn cli_set_never_passes_secret_in_argv() {
+        let src = include_str!("keychain.rs");
+        let body_start = src.find(concat!("fn cli", "_set(")).unwrap();
+        let body = &src[body_start..src[body_start..].find("\n}\n").unwrap() + body_start];
+        assert!(!body.contains(concat!("\"add-", "generic-password\"")), "cli_set 不得以 argv 传参调用 add-generic-password");
+        assert!(body.contains(".arg(\"-i\")"));
+    }
+
     #[test]
     fn account_allowlist() {
         assert!(validate_account("global").is_ok());

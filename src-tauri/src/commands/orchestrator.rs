@@ -1115,11 +1115,11 @@ async fn enforce_envelope<R: Runtime>(
     let Some(defect_msg) = defect else {
         return Ok(plan);
     };
-    // 诊断：记录不合规输出首部（定位模型格式偏差形态——信封合规率优化的证据源）
+    // 诊断：只记缺陷类型与长度（P0-10：日志不落模型输出正文——用户创作内容不进日志文件）
     tracing::warn!(
         run_id = %run_id,
         defect = %defect_msg,
-        output_head = %plan.chars().take(300).collect::<String>(),
+        output_chars = plan.chars().count(),
         "信封门：主持人输出不符合契约，进入纠错重写"
     );
     let corrective = format!(

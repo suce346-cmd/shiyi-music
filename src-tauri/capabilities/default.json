@@ -2,13 +2,25 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "fs:default",
     {
       "identifier": "fs:allow-write-text-file",
-      "allow": [{ "path": "**" }]
+      "allow": [
+        {
+          "path": "$APPDATA/**"
+        },
+        {
+          "path": "$DOWNLOAD/**"
+        },
+        {
+          "path": "$DOCUMENT/**"
+        }
+      ]
     },
     "dialog:default",
     "opener:default"
