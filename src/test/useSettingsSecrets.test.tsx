@@ -180,3 +180,42 @@ describe("C-10 迁移后无条件脱敏落盘", () => {
     expect(localStorage.getItem(STORAGE_KEY)).toContain("ak-plain-legacy");
   });
 });
+
+/** P0-10 残留：Key 被后端拒绝（格式门）→ 设置界面就地显示错误；随后保存成功 → 错误清除 */
+describe("钥匙串同步失败对用户可见", () => {
+  it("keychain_set 拒绝 → secretErrors 记录后端 message；再次成功 → 清除", async () => {
+    let reject = true;
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "keychain_set" && reject) {
+        throw { kind: "validation", message: "API Key 含空白、引号、反斜杠或非 ASCII 字符，请检查是否粘贴错误" };
+      }
+      if (cmd === "keychain_get") return null;
+      return null;
+    });
+    const h = await renderReady();
+    await act(async () => {
+      await h.result.current.updateSettings({ apiKey: "sk bad key" });
+      await vi.advanceTimersByTimeAsync(900);
+    });
+    expect(h.result.current.secretErrors.global).toContain("API Key 含空白");
+    reject = false;
+    await act(async () => {
+      await h.result.current.updateSettings({ apiKey: "sk-good-key" });
+      await vi.advanceTimersByTimeAsync(900);
+    });
+    expect(h.result.current.secretErrors.global).toBeUndefined();
+  });
+
+  it("角色级 Key 失败按 role:{id} 记录", async () => {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "keychain_set") throw { kind: "validation", message: "bad" };
+      return null;
+    });
+    const h = await renderReady();
+    await act(async () => {
+      await h.result.current.updateSettings({ roleOverrides: { emotion: { api_key: "x y" } } });
+      await vi.advanceTimersByTimeAsync(900);
+    });
+    expect(h.result.current.secretErrors["role:emotion"]).toBe("bad");
+  });
+});

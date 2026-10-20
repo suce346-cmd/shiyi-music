@@ -244,11 +244,25 @@ export function useSettingsWithSecrets() {
   /** 防抖窗口内每个 account 的最终待写值（null=删除）。timer fire 或 flush 后移除。 */
   const pendingSecrets = useRef<Record<string, string | null>>({});
   /** 立即执行单个 account 的同步（timer fire 与 flush 共用同一出口，避免双写分叉） */
+  /** P0-10 残留：同步失败（如 Key 格式被后端拒绝）按 account 记录，设置界面就地显示；成功即清除。
+   * 旧规则只 console.error——用户看到输入框有值，重启后 Key 消失，无任何提示。 */
+  const [secretErrors, setSecretErrors] = useState<Record<string, string>>({});
   const invokeSync = useCallback((account: string, secret: string | null) => {
     const op = secret
       ? invoke("keychain_set", { account, secret })
       : invoke("keychain_delete", { account });
-    op.catch((e) => console.error(`[keychain] ${account} 同步失败:`, e));
+    op.then(
+      () => setSecretErrors((prev) => {
+        if (!(account in prev)) return prev;
+        const next = { ...prev };
+        delete next[account];
+        return next;
+      }),
+      (e) => {
+        console.error(`[keychain] ${account} 同步失败:`, e);
+        setSecretErrors((prev) => ({ ...prev, [account]: secretErrorMessage(e) }));
+      },
+    );
   }, []);
   /** 防抖窗口内退出/卸载时 pending 同步会随 timer 一起死——最终值丢失（与"中间态写入"同族缺口）。
    * flush：把所有 pending 的最终值立即落盘（卸载 cleanup 调用）。 */
@@ -300,5 +314,13 @@ export function useSettingsWithSecrets() {
       }
     } catch { /* 忽略 */ }
   }, [base, scheduleSync]);
-  return { ...base, updateSettings };
+  return { ...base, updateSettings, secretErrors };
+}
+
+/** 后端 AppError 序列化为 {kind, message}；其他形态兜底转字符串 */
+export function secretErrorMessage(e: unknown): string {
+  if (e && typeof e === "object" && "message" in e && typeof (e as { message: unknown }).message === "string") {
+    return (e as { message: string }).message;
+  }
+  return String(e);
 }

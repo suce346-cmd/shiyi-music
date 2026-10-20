@@ -111,6 +111,23 @@ fn cli_get(account: &str) -> Result<Option<String>, AppError> {
     )
 }
 
+/// 密钥格式门（全平台同一口径，`keychain_set` 入口调用；macOS stdin 写入路径的前提）：
+/// 无空白/引号/反斜杠/控制字符的可打印 ASCII。拒绝信息经 AppError 回到前端设置界面显示。
+pub(crate) fn validate_secret_format(secret: &str) -> Result<(), AppError> {
+    if is_safe_token(secret) {
+        Ok(())
+    } else {
+        Err(AppError::new(
+            ErrorKind::Validation,
+            "API Key 含空白、引号、反斜杠或非 ASCII 字符，请检查是否粘贴错误",
+        ))
+    }
+}
+
+fn is_safe_token(v: &str) -> bool {
+    !v.is_empty() && v.chars().all(|c| c.is_ascii_graphic() && c != '"' && c != '\'' && c != '\\')
+}
+
 /// C-08/D-02（P0-10）：密钥不进 argv。旧实现 `add-generic-password ... -w <secret>` 把明文放在命令行参数，
 /// 写入期间任何本机进程 `ps -ef` 可见。新实现走 `security -i`（交互模式，命令从 stdin 读），
 /// 明文只经管道传给系统签名进程。
@@ -120,17 +137,8 @@ fn cli_get(account: &str) -> Result<Option<String>, AppError> {
 /// 纯函数，跨平台单测。
 #[cfg(any(target_os = "macos", test))]
 pub(crate) fn interactive_set_command(account: &str, secret: &str) -> Result<String, AppError> {
-    let ok_token = |v: &str| {
-        !v.is_empty()
-            && v.chars().all(|c| c.is_ascii_graphic() && c != '"' && c != '\'' && c != '\\')
-    };
-    if !ok_token(secret) {
-        return Err(AppError::new(
-            ErrorKind::Validation,
-            "API Key 含空白、引号、反斜杠或非 ASCII 字符，请检查是否粘贴错误",
-        ));
-    }
-    if !ok_token(account) {
+    validate_secret_format(secret)?;
+    if !is_safe_token(account) {
         return Err(AppError::new(ErrorKind::Validation, format!("非法的钥匙串账户: {}", account)));
     }
     // -U 更新已存在条目；-A 允许任意应用读取（adhoc 签名友好）
@@ -242,14 +250,20 @@ fn lib_delete(account: &str) -> Result<(), AppError> {
 
 // ── 统一入口（前端调用的 Tauri 命令）────────────────────────────────
 
-/// 写入密钥（前端 updateSettings 同步调用）
-#[tauri::command]
-pub async fn keychain_set(account: String, secret: String) -> Result<(), AppError> {
-    validate_account(&account)?;
+/// 写入前置校验（纯函数，不触碰钥匙串）：账户白名单 + 非空 + 格式门。
+fn precheck_set(account: &str, secret: &str) -> Result<(), AppError> {
+    validate_account(account)?;
     // O-5：空 secret 拒绝——清空应走 keychain_delete，写空值会在钥匙串留下空条目
     if secret.is_empty() {
         return Err(AppError::new(ErrorKind::Validation, "密钥为空，清空配置请使用删除"));
     }
+    validate_secret_format(secret)
+}
+
+/// 写入密钥（前端 updateSettings 同步调用）
+#[tauri::command]
+pub async fn keychain_set(account: String, secret: String) -> Result<(), AppError> {
+    precheck_set(&account, &secret)?;
     #[cfg(target_os = "macos")]
     { cli_set(&account, &secret) }
     #[cfg(not(target_os = "macos"))]
@@ -328,6 +342,14 @@ mod tests {
         let body = &src[body_start..src[body_start..].find("\n}\n").unwrap() + body_start];
         assert!(!body.contains(concat!("\"add-", "generic-password\"")), "cli_set 不得以 argv 传参调用 add-generic-password");
         assert!(body.contains(".arg(\"-i\")"));
+    }
+
+    /// 全平台入口同口径：keychain_set 前置校验对非法 Key 返回 Validation（纯函数，不触碰钥匙串）
+    #[test]
+    fn precheck_rejects_bad_secret_before_write() {
+        let e = precheck_set("global", "sk bad key").unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Validation);
+        assert!(e.message.contains("API Key"));
     }
 
     #[test]

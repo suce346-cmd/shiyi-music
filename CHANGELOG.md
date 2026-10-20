@@ -10,7 +10,7 @@
 - **[S1 修复] 迁移后 localStorage 残留明文 Key（C-10）**：启动回填只在内存有变化时写出，明文 apiKey 不触发回填 → 明文永久留存。现钥匙串持有密钥（迁移成功或此前已迁移）即无条件写出脱敏副本；迁移失败则不写出（修复潜在丢 Key：角色回填触发写出会把未入钥匙串的明文哨兵化）。新增 3 项单测。
 - **[S3 修复] 大型矩阵测试路径与口径（C-11）**：结果目录改为工程相对 `target/large-test`（原写死 `/Users/hakayi/Desktop/...`，工程移动即失效）；测量改调生产终稿门 `collect_hard_issues`（原只调 `validate_for_mode`，漏 Style Prompt 长度门等，读数虚高）；新增离线 dry-run 测试。
 - **[S2 修复] B-02 配器门归因 + 计数口径（P0-9）**：11 例配器失败逐例归因（`docs/qa/b02-root-cause.md`）：0 例纯真违规，主因为极简段无出口（9/11）与计数口径（8/11）。修复 `parse_section_instruments`：英文 `energy:` 尾项与能量解析同口径（原整行计为乐器，误报“配器过多 8 件”）、否定/退出项（`no drums`、`bass drops out`）不计。门阈值调整随 P1-4 SongPlan 门一次落地。
-- **[S2 修复] 自用安全基线（C-08/C-12/D-02/D-07，P0-10）**：钥匙串写入改走 `security -i` stdin（密钥不再出现在进程参数，写后读回校验）；前端写文件权限从全盘 `**` 收窄到 `$APPDATA`/`$DOWNLOAD`/`$DOCUMENT`（保存对话框路径运行期自动授权）；信封门日志不再记录模型输出正文；DNS 重绑定等残余风险记录于 `docs/security-self-use.md`。
+- **[S2 修复] 自用安全基线（C-08/C-12/D-02/D-07，P0-10）**：钥匙串写入改走 `security -i` stdin（密钥不再出现在进程参数，写后读回校验）；前端写文件权限从全盘 `**` 收窄到 `$APPDATA`/`$DOWNLOAD`/`$DOCUMENT`（保存对话框路径运行期自动授权）；信封门日志不再记录模型输出正文；DNS 重绑定等残余风险记录于 `docs/security-self-use.md`。Key 格式不合规（空白/引号/反斜杠/非 ASCII）时写入前拒绝，设置界面在对应输入框下显示“Key 未保存到钥匙串”及原因（原先只打控制台，重启后 Key 静默丢失）。
 - **[S3 修复] 变更记录与 QA 数据重复（C-13/C-14）**：补齐 0.5.5 版本段与本 Unreleased 段；删除 `docs/qa/results_12round_final.jsonl`（与 `results_v4_final.jsonl` 字节相同，MD5 `0ddd1ecc…`）；新增守护单测：当前版本必须有 CHANGELOG 段、`docs/qa/*.jsonl` 不得内容重复。
 
 ## 0.5.5（2026-09-14 ~ 2026-10-04）钥匙串数据安全 · 产出语言 · 审计批修复

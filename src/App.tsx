@@ -9,6 +9,7 @@ import RoundGateBar from "./components/RoundGateBar";
 import HistoryPanel from "./components/HistoryPanel";
 import RoundtablePanel from "./components/RoundtablePanel";
 import { useSettingsWithSecrets } from "./hooks/useSettings";
+import { SecretSyncError } from "./components/SecretSyncError";
 import { usePipeline, ROLE_NAMES, ROLE_EMOJIS, MODE_EXPERTS } from "./hooks/usePipeline";
 import { orderRoundSpeech, assembleFinalTurns } from "./utils/speechOrder";
 import { freezePartial, toChatMessages } from "./utils/partialDraft";
@@ -110,7 +111,7 @@ export default function App() {
   const [testResult, setTestResult] = useState<"ok" | "fail" | null>(null);
   const [showRoleApi, setShowRoleApi] = useState(false); // 默认收起（一页化：长度是主要痛点；头部"展开▼"保持可发现性）
   const [expandedRole, setExpandedRole] = useState<PipelineRoleKey | null>(null);
-  const { settings, updateSettings, showSettings, setShowSettings, secretsReady } = useSettingsWithSecrets();
+  const { settings, updateSettings, showSettings, setShowSettings, secretsReady, secretErrors } = useSettingsWithSecrets();
   const pipeline = usePipeline();
   /** 生成队列（提交分流 + 顺序执行；后端零改动，纯前端调度） */
   const queue = useQueue();
@@ -790,6 +791,7 @@ export default function App() {
                          text-text-1 placeholder:text-text-muted/30 focus:outline-none
                          focus:border-brand-500/40 focus:ring-1 focus:ring-brand-500/20
                          transition-all duration-150 disabled:opacity-50" placeholder={secretsReady ? "sk-...（清空后留空 = 沿用已保存的 Key）" : "密钥加载中…"} />
+            <SecretSyncError message={secretErrors.global} locale={settings.language} />
           </div>
           {/* #27-a 厂商模板卡片：点击 = 写入该厂商 baseUrl + 默认模型（不动 API Key） */}
           <ProviderTemplates baseUrl={settings.baseUrl} locale={settings.language}
@@ -985,6 +987,7 @@ export default function App() {
                           onChange={e => updateRoleOverride(role, "api_key", e.target.value)}
                           placeholder="API Key（留空继承全局）"
                           className="w-full bg-surface-0 border border-border/60 rounded-lg px-2.5 py-1.5 text-[11px] text-text-1 placeholder:text-text-muted/30 focus:outline-none focus:border-brand-500/40 transition-all duration-150" />
+                        <SecretSyncError message={secretErrors[`role:${role}`]} locale={settings.language} />
                         <input value={settings.roleOverrides?.[role]?.base_url ?? ""}
                           onChange={e => updateRoleOverride(role, "base_url", e.target.value)}
                           placeholder="API 地址（留空继承全局）"
