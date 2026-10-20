@@ -13,6 +13,10 @@ pub const PLAN_IR_SCHEMA_NAME: &str = "plan_ir";
 /// - 去掉 strict 子集不支持的 `format`（如 uint8）；数值区间保留 minimum/maximum 供本地校验；
 /// - 去掉 `description`：Rust 文档注释含内部引用（§/P1-x/文件名），对模型是噪声且增加 token；
 ///   字段语义由 P1-3 提示词单独说明（schema 只管形状与取值域）。
+/// OpenAI strict 兼容后处理。
+/// - 只剥**schema 元键** `description`/`format`（与 `type`/`properties` 同级的那些）。
+/// - **绝不**把 `properties` 映射本身当 schema 递归剥键——否则名为 `description`/`format`
+///   的字段定义会被删掉（模型再也填不了这两个字段名）。
 fn strictify(v: &mut Value) {
     match v {
         Value::Object(map) => {
@@ -25,7 +29,16 @@ fn strictify(v: &mut Value) {
                 map.insert("required".into(), Value::Array(keys));
                 map.insert("additionalProperties".into(), Value::Bool(false));
             }
-            for (_, child) in map.iter_mut() {
+            // properties 映射：只递归其**值**（子 schema），不把映射自身当 schema
+            if let Some(Value::Object(props)) = map.get_mut("properties") {
+                for child in props.values_mut() {
+                    strictify(child);
+                }
+            }
+            for (k, child) in map.iter_mut() {
+                if k == "properties" {
+                    continue;
+                }
                 strictify(child);
             }
         }
@@ -187,5 +200,32 @@ mod tests {
         v["extra"] = serde_json::json!(true);
         let errs = parse_song_plan(&v).unwrap_err();
         assert!(errs.len() >= 2, "{errs:?}");
+    }
+
+    #[test]
+    fn strictify_keeps_properties_named_description_or_format() {
+        let mut v = serde_json::json!({
+            "type": "object",
+            "description": "schema meta — must strip",
+            "format": "meta-format",
+            "properties": {
+                "description": { "type": "string", "description": "field meta — strip" },
+                "format": { "type": "string", "format": "uri" },
+                "title": { "type": "string" }
+            }
+        });
+        strictify(&mut v);
+        let props = v["properties"].as_object().unwrap();
+        assert!(props.contains_key("description"), "字段名 description 不得被剥");
+        assert!(props.contains_key("format"), "字段名 format 不得被剥");
+        assert!(props.contains_key("title"));
+        assert!(v.get("description").is_none(), "元键 description 应剥");
+        assert!(v.get("format").is_none(), "元键 format 应剥");
+        assert!(props["description"].get("description").is_none());
+        assert!(props["format"].get("format").is_none());
+        let req: Vec<&str> = v["required"].as_array().unwrap().iter().map(|x| x.as_str().unwrap()).collect();
+        for k in ["description", "format", "title"] {
+            assert!(req.contains(&k), "{k}");
+        }
     }
 }

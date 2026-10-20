@@ -4,6 +4,8 @@
 # 环境：Node ≥ .nvmrc；cargo 1.99（~/.cargo/bin）；CARGO_TARGET_DIR 可选。
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# 与 npm test 同源：Node 版本 / iCloud 路径守卫（docs/qa/vitest-root-cause.md）
+node scripts/testEnvGuard.mjs
 npx tsc --noEmit && echo TSC_OK
 npx vitest run
 npx vite build >/dev/null && echo BUILD_OK
