@@ -776,7 +776,7 @@ Weirdness: ${DOUYIN_V2_WEIRD_RANGE} | Style Influence: ${DOUYIN_V2_STYLE_RANGE} 
 
 ## D 模式 V2 硬规则（P1-7，写入 mode_meta.douyin；场景由请求盖写勿自选）
 
-- 产出约 45–75 秒短歌 + 指定可剪 15 秒片段（clip.start_section/end_section/seconds=15）
+- 产出约 ${DOUYIN_V2_DURATION_RANGE} 秒短歌 + 指定可剪 15 秒片段（clip.start_section/end_section/seconds=15）
 - 首段 Hook/Chorus 冷开，或 Intro.target_seconds≤${DOUYIN_V2_INTRO_MAX} 且下一段即 Hook
 - Hook 落地 ≤${DOUYIN_V2_HOOK_LAND}s；核心 hook_line ${DOUYIN_V2_HOOK_LINES} 句、合计 ≤${DOUYIN_V2_HOOK_CHARS} 字，主句全曲重复 ≥${DOUYIN_V2_HOOK_REPEAT}
 - Verse 可省，若有 ≤${DOUYIN_V2_VERSE_MAX} 行；每行 ≤${DOUYIN_V2_LINE_MAX} 字

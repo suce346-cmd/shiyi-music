@@ -229,7 +229,7 @@ pub fn style_analyst() -> Role {
                 &[],
             ),
             ("lyric_craft", &[], &[]),
-            // 第六批（#19）：追加 suno_rules 抖音传播子集（Hook 次数/前8秒Hook/Verse 行数/行字数/骤停/重复/BPM）
+            // 第六批（#19）：追加 suno_rules 抖音传播子集（Hook 次数/前10秒Hook/Verse 行数/行字数/骤停/重复/BPM）
             ("suno_rules", &[], crate::rules::SUNO_RULES_FOR_STYLE_ANALYST),
         ],
         craft_refs: crate::rules::CRAFT_REFS_STYLE_ANALYST,

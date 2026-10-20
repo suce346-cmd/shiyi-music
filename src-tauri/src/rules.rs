@@ -409,7 +409,7 @@ pub const CRAFT_REFS_LYRICIST: &[&str] = &[
 pub const CRAFT_REFS_REVISER: &[&str] = &["LC-02", "LC-04", "LC-15", "LC-16", "LC-26"];
 /// 🎤 制作人：主题不可改/民族元素表达理由/减法留白/概念先行/制约清单
 pub const CRAFT_REFS_PRODUCER: &[&str] = &["CC-01", "CC-12", "CC-17", "CC-22", "CC-24"];
-/// 🔥 流行风格分析师：前8秒Hook/画面/道具刻度/对话体
+/// 🔥 流行风格分析师：前10秒Hook/画面/道具刻度/对话体
 pub const CRAFT_REFS_STYLE_ANALYST: &[&str] = &["LC-01", "LC-10", "LC-23"];
 
 /// 思维资产表单源登记（注入门走 `knowledge::craft_inject_gate` 的表）——新增/改名只改本行。
@@ -732,7 +732,7 @@ pub const SUNO_RULES_FOR_PRODUCER: &[&str] = &[
     "bpm_match",
     "era_words",
 ];
-/// 🔥 流行风格分析师：抖音传播类（Hook 次数/前8秒Hook/Verse 行数/行字数/骤停/重复标记/BPM 区间）
+/// 🔥 流行风格分析师：抖音传播类（Hook 次数/前10秒Hook/Verse 行数/行字数/骤停/重复标记/BPM 区间）
 pub const SUNO_RULES_FOR_STYLE_ANALYST: &[&str] = &[
     "hook_min_count",
     "verse_max_lines",
@@ -846,7 +846,7 @@ pub fn host_primer(mode: &str) -> Option<&'static str> {
 const PRIMER_AB: &str = "【阶段0地基·A/B】受众：先一句话定对象阅历与时机（写给谁听、何时听），不到不写。物件：先建时空物件清单（≥5件具体物，禁抽象词开局），再定意象家族（一首歌一个系统）与声学映射（每个意象写出乐器/音色对应）。约束：声调服从旋律走向（硬门），韵脚密度为软优化；Verse2须新增信息；借体覆盖：每个抽象词配具体物象，禁裸奔。旋律骨架：先定弧线10选1与能量标尺（${ENERGY_BAND_1}静止/${ENERGY_BAND_2}铺垫/${ENERGY_BAND_3}推进/${ENERGY_BAND_4}爆发/${ENERGY_BAND_5}用尽全力），弱强差≥${MIN_ENERGY_GAP}级，配器差≥${MIN_INSTRUMENT_GAP}件，全曲≤${INSTRUMENT_MAX}件。";
 // C：对齐铁律 + 节奏保留 + 借体。
 const PRIMER_C: &str = "【阶段0地基·C】对齐铁律：逐行等字数（差一字即失败）、行数与原歌词一致、段落结构与原歌词一致（禁新增段）。节奏保留：词组切分与原歌词一致（3+4、2+2+3等），呼吸点位置一致，韵脚位置与模式保留。借体：新意象转译原意象叙事功能（非替换），意象家族统一，抽象词每个有借体，套话具体化。";
-// D：前8秒Hook/画面 + 道具刻度 + 骤停提醒 + 字数提醒。
+// D：前10秒Hook/画面 + 道具刻度 + 骤停提醒 + 字数提醒。
 const PRIMER_D: &str = "【阶段0地基·D】前${DOUYIN_V2_HOOK_LAND}秒：开场${DOUYIN_V2_HOOK_LAND}秒内建钩子或强画面，直接进内容不慢铺垫。道具刻度：核心情感绑有世俗重量的具体物（物作刻度），金句短、魔性、可独立传播，Hook≥${HOOK_MIN}次。约束：Verse≤${VERSE_MAX_LINES}行，每行≤${DOUYIN_V2_LINE_MAX}字，说明行≤${DESC_LINE_MAX}字符（含方括号整行计），BPM≥${DOUYIN_V2_BPM_MIN}。收尾：结尾骤停一刀切（不渐弱），动态标签用对，骤停后无乐器残留。";
 
 /// 进 LLM 上下文的告知载体（`&'static str`，上游 prompt 与下游打回指令都算）注册表——
@@ -1441,7 +1441,7 @@ mod tests {
     fn interpolate_expands_nested_placeholders() {
         let table = interpolate("${DOUYIN_V2_DYNAMIC_TABLE}");
         assert!(
-            table.contains("前2秒"),
+            table.contains("前3秒"),
             "容器内的标量占位符必须展开：{}",
             table
         );
@@ -2108,9 +2108,9 @@ mod tests {
     fn prose_carrier_guard_catches_handwritten_restore() {
         // 模拟"回退到旧写法"：抖音区间 + Hook/Verse 阈值全部手写（上限已改 12，手写 12 同样须被网住）
         let legacy =
-            "Hook≥3次；单段Verse≤4行；每行≤12字；BPM≥80；参数抖音12-20/85-95；说明行≤200字符。";
+            "Hook≥2次；单段Verse≤4行；每行≤12字；BPM≥80；参数抖音12-20/85-95；说明行≤200字符。";
         let hits = handwritten_rule_number_hits(legacy);
-        for want in ["≤200", "12-20", "85-95", "3次", "4行", "12字", "BPM≥80"] {
+        for want in ["≤200", "12-20", "85-95", "2次", "4行", "12字", "BPM≥80"] {
             assert!(
                 hits.iter().any(|h| h == want),
                 "红灯先行：旧写法 {} 未被网住（命中 {:?}）",

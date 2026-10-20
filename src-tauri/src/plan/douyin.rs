@@ -13,16 +13,16 @@ use crate::plan::validate::Issue;
 // ---------------------------------------------------------------------------
 
 /// Intro 上限秒（冷开例外：无 Intro 或 ≤ 本值后紧接 Hook）
-pub const DOUYIN_V2_INTRO_MAX_SEC: u16 = 2;
+pub const DOUYIN_V2_INTRO_MAX_SEC: u16 = 3;
 /// Hook 落地时间上限（秒）
-pub const DOUYIN_V2_HOOK_LAND_SEC: u16 = 8;
+pub const DOUYIN_V2_HOOK_LAND_SEC: u16 = 10;
 /// 核心 Hook 句数区间
 pub const DOUYIN_V2_HOOK_LINES_MIN: usize = 2;
 pub const DOUYIN_V2_HOOK_LINES_MAX: usize = 3;
 /// 核心 Hook 合计字数上限（去空白）
 pub const DOUYIN_V2_HOOK_CHARS_MAX: usize = 20;
 /// Hook 全曲最少重复次数（按规范化正文计）
-pub const DOUYIN_V2_HOOK_REPEAT_MIN: usize = 3;
+pub const DOUYIN_V2_HOOK_REPEAT_MIN: usize = 2;
 /// 主歌上限行数（可省）
 pub const DOUYIN_V2_VERSE_MAX_LINES: usize = 4;
 /// 每行字数上限
@@ -33,9 +33,9 @@ pub const DOUYIN_V2_CLIP_SECONDS: u16 = 15;
 pub const DOUYIN_V2_EXCLUDE: &[&str] = &["long intro", "slow build", "fade out"];
 /// 抖音 BPM 下限 = 全场景 BPM 带最低值（emotion 80；由 `bpm_min_is_scene_floor` 锁定）
 pub const DOUYIN_V2_BPM_MIN: u32 = 80;
-/// 成曲建议时长（§6.2：约 45–75 秒短歌）——`${DOUYIN_V2_DURATION_RANGE}`
-pub const DOUYIN_V2_DURATION_SEC_MIN: u32 = 45;
-pub const DOUYIN_V2_DURATION_SEC_MAX: u32 = 75;
+/// 成曲建议时长（§6.2：用户裁定 60–90 秒）——`${DOUYIN_V2_DURATION_RANGE}`
+pub const DOUYIN_V2_DURATION_SEC_MIN: u32 = 60;
+pub const DOUYIN_V2_DURATION_SEC_MAX: u32 = 90;
 /// Hook 循环遍数上限（下限 = `DOUYIN_V2_HOOK_REPEAT_MIN`）——`${DOUYIN_V2_HOOK_LOOP_RANGE}`
 pub const DOUYIN_V2_HOOK_LOOP_MAX: usize = 4;
 /// 情绪弧线禁用句式（人设与 mode_d prompt 同源）
@@ -347,7 +347,7 @@ pub fn validate_douyin_v2(p: &SongPlan, out: &mut Vec<Issue>) {
         )),
     }
 
-    // 结构：首段 Chorus/Hook 或 Intro≤2s 紧接 Hook
+    // 结构：首段 Chorus/Hook 或 Intro≤DOUYIN_V2_INTRO_MAX_SEC 紧接 Hook
     if let Some(first) = p.sections.first() {
         if is_chorus_or_hook(first) {
             // 冷开 OK
@@ -379,7 +379,7 @@ pub fn validate_douyin_v2(p: &SongPlan, out: &mut Vec<Issue>) {
         out.push(Issue::hard("douyin_empty", "/sections", "D 模式至少一段"));
     }
 
-    // Hook 落地 ≤8s：累加首段至首个 Hook 的 target_seconds
+    // Hook 落地 ≤DOUYIN_V2_HOOK_LAND_SEC：累加首段至首个 Hook 的 target_seconds
     if let Some(hi) = p.sections.iter().position(is_chorus_or_hook) {
         let land: u16 = p.sections[..hi]
             .iter()
@@ -394,7 +394,7 @@ pub fn validate_douyin_v2(p: &SongPlan, out: &mut Vec<Issue>) {
         }
     }
 
-    // 核心 Hook：hook_line 2–3 句、≤20 字；全曲重复 ≥3
+    // 核心 Hook：hook_line 2–3 句、≤20 字；全曲重复 ≥DOUYIN_V2_HOOK_REPEAT_MIN
     let hook_lines: Vec<&str> = meta
         .hook_line
         .lines()
@@ -619,6 +619,38 @@ mod tests {
         let r = suggest_scenes("完全无关的输入 xyz");
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].0, DouyinScene::Daily);
+    }
+
+    #[test]
+    fn user_decision_values_locked() {
+        // 用户裁定 2026-10-20：成曲 60–90s、Intro≤3s、Hook 10s 内落地、Hook≥2、BPM 下限 80
+        assert_eq!((DOUYIN_V2_DURATION_SEC_MIN, DOUYIN_V2_DURATION_SEC_MAX), (60, 90));
+        assert_eq!(DOUYIN_V2_INTRO_MAX_SEC, 3);
+        assert_eq!(DOUYIN_V2_HOOK_LAND_SEC, 10);
+        assert_eq!(DOUYIN_V2_HOOK_REPEAT_MIN, 2);
+        assert_eq!(DOUYIN_V2_BPM_MIN, 80);
+        assert_eq!(crate::rules::HOOK_MIN_COUNT, 2);
+        assert_eq!((crate::rules::HOOK_REPEAT_MIN, crate::rules::HOOK_REPEAT_MAX), (2, 4));
+    }
+
+    #[test]
+    fn intro_and_hook_land_boundaries() {
+        let codes = |intro: u16| {
+            let mut p = d_plan();
+            let mut s = p.sections[0].clone();
+            s.kind = SectionKind::Intro;
+            s.label = "Intro".into();
+            s.lines.clear();
+            s.target_seconds = Some(intro);
+            p.sections.insert(0, s);
+            let mut v = Vec::new();
+            validate_douyin_v2(&p, &mut v);
+            v.iter().map(|i| i.code).collect::<Vec<_>>()
+        };
+        assert!(!codes(3).contains(&"douyin_intro_max"), "Intro 3s 应过");
+        assert!(codes(4).contains(&"douyin_intro_max"), "Intro 4s 应拦");
+        assert!(!codes(10).contains(&"douyin_hook_land"), "Hook 10s 落地应过");
+        assert!(codes(11).contains(&"douyin_hook_land"), "Hook 11s 落地应拦");
     }
 
     #[test]

@@ -33,7 +33,7 @@ style_arc_d_buildup,douyin,80,90,,抖音叙事型回落·渐进爆发：Style �
 style_arc_d_u,douyin,70,82,,抖音叙事型回落·U 型：Style 引导度 70-82，Weirdness 25-35；叙事型例外专用（同 A/B style_arc_u）
 style_arc_d_singlepeak,douyin,75,85,,抖音叙事型回落·单峰：Style 引导度 75-85，Weirdness 20-30；叙事型例外专用（同 A/B style_arc_singlepeak）
 style_arc_d_loop,douyin,78,85,,抖音叙事型回落·回环：Style 引导度 78-85，Weirdness 20-28；叙事型例外专用（同 A/B style_arc_loop）
-hook_first,douyin,1,,,冷开或 Intro≤2 秒后紧接 Hook，Hook 须在前 8 秒落地：抖音完播率生死线
+hook_first,douyin,1,,,冷开或 Intro≤3 秒后紧接 Hook，Hook 须在前 10 秒落地：抖音完播率生死线
 stop_mark,douyin,1,,次,结尾骤停标记（骤停/all instruments cut）：抖音结尾留白制造循环播放冲动
 desc_line_max,all,0,200,字符,说明行整行（含方括号）不超过 200 字符：上限宽松但必须保乐器+行为动词，不得为缩短删乐器；超限会被 plan::validate 硬校验拦下
 no_full_band,all,0,,,禁 full band/all instruments 笼统写法：Suno 无法理解必须具体列乐器

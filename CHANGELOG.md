@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **[用户裁定] 抖音 V2 数值覆盖**：成曲 60–90 秒、Intro 硬门 ≤3 秒、Hook 10 秒内落地、Hook ≥2（强化 2–4）、BPM≥80 不变；`validate_douyin_v2`、清单/primer、`suno_rules.csv` hook_first、mode_d 快照同步；`user_decision_values_locked` + 边界测试（Intro 3 过/4 拦、Hook 10 过/11 拦），变异 4/4 红。上一条的 45–75/2/8/≥3 已被本条取代。
+
 - **[§2.3/§3.8] validate_lang**：后端按请求 `output_lang` 盖写 `mode_meta.lyrics_lang`；`plan::validate` 新增歌词语言硬门（en 行含中文 / zh 全曲无中文 → `lyrics_lang_mismatch`）；不读 Style（§3.7 独立）。变异 3/3 红。
 - **[§5.1#7] 旧 D 模式常量全量迁 V2**：`DOUYIN_*`（非 V2）定义与 `${DOUYIN_*}` 占位符全部删除，单源 `plan::douyin::DOUYIN_V2_*`；按 §6.2 改值：成曲 60–90→45–75 秒、Intro 7→2 秒、前 3 秒钩子→Hook 8 秒落地、BPM 下限 90→80（=场景带最低）、Hook ≥2→≥3（`HOOK_MIN_COUNT`/`HOOK_REPEAT_*`/`VERSE_MAX_LINES` 改为 V2 别名）；`suno_rules.csv` hook_first/bpm_match 同步；mode_d 快照重生成；守护 `no_legacy_douyin_v1_names`、`bpm_min_is_scene_floor`。
 

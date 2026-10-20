@@ -271,6 +271,8 @@ pub struct ModeMeta { pub lyrics_lang: LyricLang } // Zh|En；与 §3.8 IPC outp
 - 证据强度：E3（媒体/厂商/第三方），无平台官方数据；规则做成单源常量便于调整。
 
 ### 6.2 新 D 模式（替换现有 60–90s / Intro 7s / 行≤12 体系）
+
+> **用户裁定（2026-10-20 21:35 Asia/Shanghai，覆盖下表默认值；单源 `plan::douyin::DOUYIN_V2_*`）**：成曲 **60–90 秒**；Intro 硬门 **≤3 秒**；Hook **10 秒内**落地；Hook 全曲重复 **≥2**（强化区间 2–4）；BPM 下限 80 不变。下文 45–75s / 2s / 8s / ≥3 仅为调研原始默认，以本裁定为准。
 产出：**一首可完整生成的短歌（约 45–75 秒）+ 指定"可剪 15 秒片段"**。
 
 SongPlan `mode_meta.douyin`：`{ scene: 卡点|情绪|剧情|舞蹈|国风, bpm_band, clip: {start_section, end_section, seconds:15}, hook_line, loop_tail: bool }`
