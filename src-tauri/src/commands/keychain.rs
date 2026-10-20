@@ -40,6 +40,38 @@ fn validate_account(account: &str) -> Result<(), AppError> {
     ))
 }
 
+// ── RULE-KEYCHAIN-RO（BLUEPRINT_v2 §3.1 / A-01）──────────────────────
+//
+// 定义点：本节（唯一）。作用域：`#[cfg(test)]` 构建下的全部写/删入口（macOS CLI + keyring 库）。
+// 规则：测试可**只读**用户真实条目，**永不写/覆盖/删除**受保护账户（`global` 与 `role:*`）；
+// 测试需要写钥匙串时只用 `test:shiyi:{pid}:{nanos}` 隔离账户并以 Drop guard 清理。
+// 根因：旧 `cli_round_trip` 直接拿 "global" 做写→删往返，`cargo test` 即删用户真实 Key（审计实测
+// exit 0 → 44，测试仍报 ok）。双层守护：①运行期——测试构建下对受保护账户写/删即 panic；
+// ②静态——`keychain_tests_never_write_protected` 扫描本文件测试模块的写/删调用实参。
+// 生产构建（非 test）行为零变化。
+
+/// 受保护账户（用户真实凭据命名空间）：`global` 与 `role:` 前缀。
+pub(crate) const PROTECTED_ACCOUNT_EXACT: &str = "global";
+pub(crate) const PROTECTED_ACCOUNT_PREFIX: &str = "role:";
+/// 测试隔离账户前缀（不在白名单内，只能由本模块私有 cli_*/lib_* 直接使用）。
+#[cfg(all(test, target_os = "macos"))]
+pub(crate) const TEST_ACCOUNT_PREFIX: &str = "test:shiyi:";
+
+pub(crate) fn is_protected_account(account: &str) -> bool {
+    account == PROTECTED_ACCOUNT_EXACT || account.starts_with(PROTECTED_ACCOUNT_PREFIX)
+}
+
+/// 写/删入口的测试期守卫：测试构建中触碰受保护账户立即 panic（生产构建为空操作）。
+#[inline]
+fn guard_test_write(account: &str) {
+    if cfg!(test) && is_protected_account(account) {
+        panic!(
+            "RULE-KEYCHAIN-RO：测试禁止写/删受保护钥匙串账户 `{}`（请使用 `test:shiyi:` 隔离账户）",
+            account
+        );
+    }
+}
+
 // ── security CLI 路径（macOS 专属）──────────────────────────────────
 
 /// security CLI 退出码分类（仅 find-generic-password 读取路径）：
@@ -81,6 +113,7 @@ fn cli_get(account: &str) -> Result<Option<String>, AppError> {
 
 #[cfg(target_os = "macos")]
 fn cli_set(account: &str, secret: &str) -> Result<(), AppError> {
+    guard_test_write(account);
     // -U 更新已存在条目；-A 允许任意应用读取（adhoc 签名友好）
     let out = Command::new("/usr/bin/security")
         .args(["add-generic-password", "-U", "-A", "-s", SERVICE, "-a", account, "-w", secret])
@@ -98,6 +131,7 @@ fn cli_set(account: &str, secret: &str) -> Result<(), AppError> {
 
 #[cfg(target_os = "macos")]
 fn cli_delete(account: &str) -> Result<(), AppError> {
+    guard_test_write(account);
     let out = Command::new("/usr/bin/security")
         .args(["delete-generic-password", "-s", SERVICE, "-a", account])
         .output();
@@ -138,6 +172,7 @@ fn lib_get(account: &str) -> Result<Option<String>, AppError> {
 
 #[cfg(not(target_os = "macos"))]
 fn lib_set(account: &str, secret: &str) -> Result<(), AppError> {
+    guard_test_write(account);
     let e = lib_entry(account)?;
     e.set_password(secret)
         .map_err(|e| AppError::new(ErrorKind::Internal, format!("钥匙串写入失败: {}", e)))
@@ -145,6 +180,7 @@ fn lib_set(account: &str, secret: &str) -> Result<(), AppError> {
 
 #[cfg(not(target_os = "macos"))]
 fn lib_delete(account: &str) -> Result<(), AppError> {
+    guard_test_write(account);
     let e = lib_entry(account)?;
     match e.delete_credential() {
         Ok(()) => Ok(()),
@@ -234,23 +270,92 @@ mod tests {
         assert!(validate_account("role:").is_err());
     }
 
-    /// macOS CLI 路径往返测试（写入 → 读取 → 删除 → 确认空）
+    /// 测试隔离账户：`test:shiyi:{pid}:{nanos}`；Drop 时删除（不论断言成败）。
+    #[cfg(target_os = "macos")]
+    struct IsolatedAccount(String);
+    #[cfg(target_os = "macos")]
+    impl IsolatedAccount {
+        fn new() -> Self {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let acct = format!("{}{}:{}", TEST_ACCOUNT_PREFIX, std::process::id(), nanos);
+            assert!(!is_protected_account(&acct), "隔离账户不得落入受保护命名空间");
+            IsolatedAccount(acct)
+        }
+    }
+    #[cfg(target_os = "macos")]
+    impl Drop for IsolatedAccount {
+        fn drop(&mut self) {
+            let _ = cli_delete(&self.0);
+        }
+    }
+
+    /// macOS CLI 路径往返测试（写入 → 读取 → 删除 → 确认空）——只在隔离账户上进行，
+    /// 永不触碰 `global`（A-01 根治；旧实现以 "global" 往返，跑测试即删用户真实 Key）。
     #[cfg(target_os = "macos")]
     #[test]
     fn cli_round_trip() {
-        let test_acct = "global";
+        let acct = IsolatedAccount::new();
         let test_secret = "test-key-12345";
-        // 清理旧残留
-        let _ = cli_delete(test_acct);
-        // 写入
-        cli_set(test_acct, test_secret).expect("写入失败");
-        // 读取验证
-        let got = cli_get(test_acct).expect("读取失败");
+        cli_set(&acct.0, test_secret).expect("写入失败");
+        let got = cli_get(&acct.0).expect("读取失败");
         assert_eq!(got.as_deref(), Some(test_secret), "读回值应与写入一致");
-        // 删除
-        cli_delete(test_acct).expect("删除失败");
-        // 确认已删
-        let after = cli_get(test_acct).expect("删除后读取应返回 None");
+        cli_delete(&acct.0).expect("删除失败");
+        let after = cli_get(&acct.0).expect("删除后读取应返回 None");
         assert!(after.is_none(), "删除后应为 None");
+    }
+
+    /// 只读真实条目是允许的（D6）：读取 `global` 不得改变其存在性/内容。
+    /// 只做 get 两次比对，不写不删；条目缺失（None）同样通过。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn cli_get_global_is_read_only() {
+        let before = cli_get(PROTECTED_ACCOUNT_EXACT);
+        let after = cli_get(PROTECTED_ACCOUNT_EXACT);
+        match (before, after) {
+            (Ok(a), Ok(b)) => assert_eq!(a, b, "两次只读结果应一致"),
+            // 钥匙串交互被禁（CI/无 GUI 会话）等真实错误：只读路径不做断言，不得因此改写条目
+            _ => {}
+        }
+    }
+
+    /// 运行期守卫：受保护账户写/删在测试构建中 panic（跨平台，不触达任何钥匙串）。
+    #[test]
+    fn guard_panics_on_protected_accounts() {
+        for acct in ["global", "role:host", "role:anything"] {
+            let r = std::panic::catch_unwind(|| guard_test_write(acct));
+            assert!(r.is_err(), "`{}` 写/删应被测试期守卫拦截", acct);
+        }
+        for acct in ["test:shiyi:1:2", "globalx", "xrole:host"] {
+            let r = std::panic::catch_unwind(|| guard_test_write(acct));
+            assert!(r.is_ok(), "`{}` 非受保护账户不应被拦截", acct);
+        }
+    }
+
+    /// 静态守护：本文件测试模块中，写/删调用的实参不得是受保护账户字面量。
+    /// 防回归：有人把隔离账户改回 "global"/"role:..." 字面量即红（运行期守卫之外的第二层）。
+    #[test]
+    fn keychain_tests_never_write_protected() {
+        let src = include_str!("keychain.rs");
+        let marker = concat!("#[cfg(test)]", "\n", "mod tests");
+        let idx = src.find(marker).expect("应能定位测试模块");
+        let tests_src = &src[idx..];
+        let writers: Vec<String> = ["cli_set", "cli_delete", "lib_set", "lib_delete", "keychain_set", "keychain_delete"]
+            .iter()
+            .map(|f| format!("{}(", f))
+            .collect();
+        let q = '"';
+        let banned = [format!("{q}global{q}"), format!("{q}role:")];
+        let mut hits = Vec::new();
+        for (n, line) in tests_src.lines().enumerate() {
+            if writers.iter().any(|w| line.contains(w.as_str()))
+                && (banned.iter().any(|b| line.contains(b.as_str())) || line.contains("PROTECTED_ACCOUNT"))
+            {
+                hits.push(format!("tests+{}: {}", n + 1, line.trim()));
+            }
+        }
+        assert!(hits.is_empty(), "测试模块写/删了受保护账户：{:?}", hits);
     }
 }

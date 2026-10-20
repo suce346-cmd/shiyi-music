@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **[S0 修复] 测试不再删除用户真实 API Key（A-01）**：`keychain::tests::cli_round_trip` 旧实现以生产账户 `global` 做写→删往返，跑一次 `cargo test` 即删除用户 Key。现改用 `test:shiyi:{pid}:{nanos}` 隔离账户 + Drop 清理；新增 RULE-KEYCHAIN-RO 双层守护（测试构建下写/删 `global`/`role:*` 即 panic；静态扫描测试模块写/删实参）。生产行为不变。
+
 ## 0.5.4（2026-09-12）方案信封契约 + 回炉责任分离——大型实测驱动
 
 40 例大型实测（四模式×10 冻结提示词，全链路事件捕获）定位根因后落地的结构修复：

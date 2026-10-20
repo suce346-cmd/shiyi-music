@@ -11,6 +11,8 @@ npm install
 npm run tauri dev
 ```
 
+> 测试与钥匙串：`cargo test` 只会**读取**你的真实 Key（`global` / `role:*`），永不写入、覆盖或删除；需要写钥匙串的测试只用 `test:shiyi:` 隔离账户并自动清理（RULE-KEYCHAIN-RO）。
+
 ## 构建
 
 ```bash
