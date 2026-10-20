@@ -472,7 +472,7 @@ const LYRIC_VOCABLES: [&str; 9] = ["ooh", "oh", "yeah", "ah", "la", "hey", "woah
 
 /// 通用歌词行计数：按空白分词 → 每 token 剥标点 → 剔除和音虚词（纯 ASCII 字母且
 /// 小写 ∈ LYRIC_VOCABLES）→ 汇总字数。分词在剥标点之前，保证 "(ooh~)" 整体识别为虚词。
-fn count_line_chars_excluding_vocables(s: &str, is_punct: fn(char) -> bool) -> usize {
+pub(crate) fn count_line_chars_excluding_vocables(s: &str, is_punct: fn(char) -> bool) -> usize {
     s.split_whitespace()
         .filter_map(|t| {
             let stripped: String = t.chars().filter(|c| !is_punct(*c) && !c.is_whitespace()).collect();
@@ -1432,15 +1432,16 @@ TRANSCRIPTION_ISSUE: 收敛方案含 ``` 围栏与参数行格式错误，需主
         assert!(r.issues.iter().any(|i| i.contains("最弱段配器")), "issues: {:?}", r.issues);
     }
 
-    /// Q2：最强段 4 件必须被揪出（差值够、上限够也不行）
+    /// Q2：最强段低于 MIN_INSTRUMENT_STRONG 必须被揪出（差值够、上限够也不行）
     #[test]
     fn production_strong_floor_fails() {
+        // Verse 3 件、Chorus 3 件 → 最强 3 < STRONG(4)
         let text = r#"**Style Prompt**: dark indie folk
 [Verse 1]
-[acoustic guitar fingerpicked, cello soft pads, intimate room]
+[acoustic guitar fingerpicked, cello soft pads, soft pad, intimate room]
 歌词行
 [Chorus]
-[acoustic guitar strummed, cello bowing, warm piano, light drums, wide hall]
+[acoustic guitar strummed, cello bowing, warm piano, wide hall]
 歌词行
 能量轨迹：Verse 1 能量 3，Chorus 能量 8"#;
         let r = validate_production("mode_a", text);

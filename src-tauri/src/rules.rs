@@ -23,8 +23,16 @@ pub const MIN_INSTRUMENT_GAP: usize = 2;
 pub const INSTRUMENT_MAX: usize = 7;
 /// 最弱段至少件数（L-3 用户决策 2026-09-06：单段下限统一按 3——旧值 2 与"单段 3-7 件"打架）
 pub const MIN_INSTRUMENT_WEAK: usize = 3;
-/// 最强段至少件数
-pub const MIN_INSTRUMENT_STRONG: usize = 5;
+/// 最强段至少件数（b02-root-cause.md 结论 4：摇滚三/四件套最强 4 件合理；P1-4 IR 门用此值。文本门仍读同一常量。）
+pub const MIN_INSTRUMENT_STRONG: usize = 4;
+/// 声明极简段下限（b02 结论 2：仅 intro/outro/bridge/interlude 且 energy ≤ MINIMAL_ENERGY_MAX）
+pub const MIN_INSTRUMENT_MINIMAL: usize = 1;
+/// 核心段（Verse/Pre-Chorus 等非 Chorus 类、未声明极简）下限（b02 结论 3）——IR 门用；文本门仍用 MIN_INSTRUMENT_WEAK=3 直至 P1-4 切门
+pub const MIN_INSTRUMENT_CORE: usize = 2;
+/// Chorus 类段（chorus/hook/post_chorus/drop）下限（b02 结论 3）
+pub const MIN_INSTRUMENT_CHORUS: usize = 3;
+/// 可声明极简段的能量上限
+pub const MINIMAL_ENERGY_MAX: u32 = 2;
 /// D 模式 Hook 最少次数
 pub const HOOK_MIN_COUNT: usize = 2;
 /// D 模式单段 Verse 上限行数
@@ -739,12 +747,9 @@ pub const PROSE_CARRIERS: &[ProseCarrier] = &[
     ProseCarrier { name: "CHECKLIST_B", text: CHECKLIST_B, csv_locked: &[] },
     ProseCarrier { name: "CHECKLIST_C", text: CHECKLIST_C, csv_locked: &[] },
     ProseCarrier { name: "CHECKLIST_D", text: CHECKLIST_D, csv_locked: &[] },
-    // ≥5件具体物：数值权威在 lyric_craft::LC-01（CSV），无常量可派生，由专锁跨载体同源
-    ProseCarrier {
-        name: "PRIMER_AB",
-        text: PRIMER_AB,
-        csv_locked: &[("≥5件具体物", "primer_ab_stage0_threshold_matches_lyric_craft_row")],
-    },
+    // ≥5件具体物：数值权威在 lyric_craft::LC-01（CSV）；内容由 primer_ab_stage0_threshold_matches_lyric_craft_row 锁定。
+    // 不再挂 csv_locked：旧 STRONG=5 时「≥5件」被误判为配器下限命中才需要豁免；STRONG 调为 4 后已无派生命中，挂豁免即孤儿。
+    ProseCarrier { name: "PRIMER_AB", text: PRIMER_AB, csv_locked: &[] },
     ProseCarrier { name: "PRIMER_C", text: PRIMER_C, csv_locked: &[] },
     ProseCarrier { name: "PRIMER_D", text: PRIMER_D, csv_locked: &[] },
     // 第二十三批：三张表从"prompts.rs 与 roles.rs 各手抄一份"收敛为本文件单源，
@@ -827,6 +832,10 @@ fn placeholder_pairs() -> Vec<(&'static str, String)> {
         ("${MIN_INSTRUMENT_GAP}", MIN_INSTRUMENT_GAP.to_string()),
         ("${MIN_INSTRUMENT_WEAK}", MIN_INSTRUMENT_WEAK.to_string()),
         ("${MIN_INSTRUMENT_STRONG}", MIN_INSTRUMENT_STRONG.to_string()),
+        ("${MIN_INSTRUMENT_MINIMAL}", MIN_INSTRUMENT_MINIMAL.to_string()),
+        ("${MIN_INSTRUMENT_CORE}", MIN_INSTRUMENT_CORE.to_string()),
+        ("${MIN_INSTRUMENT_CHORUS}", MIN_INSTRUMENT_CHORUS.to_string()),
+        ("${MINIMAL_ENERGY_MAX}", MINIMAL_ENERGY_MAX.to_string()),
         ("${INSTRUMENT_MAX}", INSTRUMENT_MAX.to_string()),
         ("${INSTRUMENT_RANGE}", format!("{}-{}", MIN_INSTRUMENT_WEAK, INSTRUMENT_MAX)),
         // 第二十三批：角色格式规则口径单源。插值为迭代不动点（见 `interpolate`），
@@ -1554,7 +1563,7 @@ mod tests {
     }
 
     /// 载体守护网自检（红灯先行）：把 `CHECKLIST_D` 的占位符还原成手写字面量必须被网住，
-    /// 且 `PRIMER_AB` 的 CSV 同源豁免必须恰好覆盖「≥5件」而不掩盖其他数字。
+    /// 且 `PRIMER_AB` 原文在 STRONG≠5 后不得再有手写规则数字命中。
     #[test]
     fn prose_carrier_guard_catches_handwritten_restore() {
         // 模拟"回退到旧写法"：抖音区间 + Hook/Verse 阈值全部手写（上限已改 12，手写 12 同样须被网住）
@@ -1569,9 +1578,10 @@ mod tests {
             "CHECKLIST_D 原文仍含手写阈值: {:?}",
             handwritten_rule_number_hits(CHECKLIST_D)
         );
-        // PRIMER_AB 的豁免精确性：命中集合应为 {5件}，且被登记覆盖
+        // PRIMER_AB：物件清单「≥5件」权威在 CSV（primer_ab_stage0… 锁内容）；STRONG 已调为 4，
+        // 不再误命中配器下限，故原文不得再有手写规则数字命中。
         let ab_hits = handwritten_rule_number_hits(PRIMER_AB);
-        assert_eq!(ab_hits, vec!["5件".to_string()], "PRIMER_AB 命中集合变化，需同步 csv_locked 登记: {:?}", ab_hits);
+        assert!(ab_hits.is_empty(), "PRIMER_AB 不得含手写规则数字: {:?}", ab_hits);
     }
 
     /// 判定 `name` 在源码中存在**真实调用点**（排除 `fn name(` 定义与注释行）。
@@ -2842,9 +2852,12 @@ pub fn envelope_defect_mode(plan: &str, mode: &str) -> Option<String> {
         .collect();
     if !over.is_empty() {
         defects.push(format!(
-            "说明行超过 {} 字符上限 {} 行，必须压缩到限内（保乐器+行为动词，删修饰词/重复空间描述；不得删乐器——配器 3-7 件与最强段 ≥5 件照常校验）：\n- {}",
+            "说明行超过 {} 字符上限 {} 行，必须压缩到限内（保乐器+行为动词，删修饰词/重复空间描述；不得删乐器——配器 {}-{} 件与最强段 ≥{} 件照常校验）：\n- {}",
             DESC_LINE_MAX_CHARS,
             over.len(),
+            MIN_INSTRUMENT_WEAK,
+            INSTRUMENT_MAX,
+            MIN_INSTRUMENT_STRONG,
             over.join("\n- ")
         ));
     }

@@ -10,8 +10,10 @@
 //! - 无嵌套可选对象以外的多态；全部字段在 schema 中 required（Option → 可为 null），
 //!   `additionalProperties:false`——与 OpenAI `json_schema strict` 兼容（schema.rs 统一后处理）。
 
+pub mod render_suno;
 pub mod schema;
 pub mod suno_profile;
+pub mod validate;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

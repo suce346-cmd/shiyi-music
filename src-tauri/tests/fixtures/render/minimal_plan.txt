@@ -1,0 +1,14 @@
+Title: 雨巷
+
+Style: chinese folk ballad, 72 BPM, 4/4, vocal_breathy_close, guzheng, cello, sparse intro to full final chorus, mix_warm_intimate
+
+Exclude: edm drops
+
+Settings: Weirdness=30 | Style Influence=70 | Variety=0 | Vocal Gender=Female
+
+Lyrics:
+[Intro | rain ambience, guzheng, energy 1, instrumental]
+
+[Chorus | full, soaring, guzheng, cello, dizi, pipa, energy 8, drums drop out]
+雨落长街
+灯火未眠
