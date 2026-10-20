@@ -132,7 +132,11 @@ export function useSettings() {
         // 1. 迁移：localStorage 明文 → 钥匙串（仅未迁移过且存在明文时）
         // U-2：仅全部写入成功才置迁移标记（旧规则失败也置——明文永远留在 localStorage，
         // "下次启动再试"永不发生）；失败保留明文等下次启动重试
-        if (!localStorage.getItem(MIGRATED_KEY)) {
+        // C-10（P0-6）：钥匙串已持有密钥（迁移成功或此前已迁移）→ 回填结束无条件写出脱敏副本，
+        // 清掉 localStorage 残留明文（旧规则只在 changed 时写：明文 apiKey 不触发回填 → 明文永久留存）。
+        // 迁移失败 → 不写（写出会把明文哨兵化，而钥匙串没有副本 = 密钥丢失；U-2 保留明文待重试）。
+        let keysSafeInKeychain = !!localStorage.getItem(MIGRATED_KEY);
+        if (!keysSafeInKeychain) {
           let migrated = true;
           try {
             const raw = localStorage.getItem(STORAGE_KEY);
@@ -148,6 +152,7 @@ export function useSettings() {
             migrated = false;
           }
           if (migrated) {
+            keysSafeInKeychain = true;
             try { localStorage.setItem(MIGRATED_KEY, "1"); } catch { /* 忽略 */ }
           }
         }
@@ -178,10 +183,8 @@ export function useSettings() {
             }
           }
           if (!cancelled) {
-            if (changed) {
-              setSettings(next);
-              persistNonSecrets(next);
-            }
+            if (changed) setSettings(next);
+            if (keysSafeInKeychain) persistNonSecrets(next);
             setSecretsReady(true);
           }
         } catch (e) {

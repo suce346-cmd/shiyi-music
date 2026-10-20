@@ -127,3 +127,56 @@ describe("U-2 迁移标记行为锁", () => {
     ).toBe(true);
   });
 });
+
+/** C-10（P0-6）：迁移后 localStorage 不得残留明文——changed=false（回填无变化）也必须写出脱敏副本 */
+describe("C-10 迁移后无条件脱敏落盘", () => {
+  const noBackfill = async (cmd: string) => {
+    if (cmd === "keychain_get") return null; // 回填不改内存：changed=false
+    return null;
+  };
+
+  it("迁移成功：明文被哨兵化，钥匙串持有原值", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ apiKey: "ak-plain-legacy", roleOverrides: { emotion: { model: "m", api_key: "ak-role-plain" } } }),
+    );
+    // 真实语义：keychain_set 后 keychain_get 可读回（有状态 mock）
+    const kc = new Map<string, string>();
+    invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "keychain_set") kc.set(String(args?.account), String(args?.secret));
+      if (cmd === "keychain_get") return kc.get(String(args?.account)) ?? null;
+      return null;
+    });
+    await renderReady();
+    const raw = localStorage.getItem(STORAGE_KEY) ?? "";
+    expect(raw).not.toContain("ak-plain-legacy");
+    expect(raw).not.toContain("ak-role-plain");
+    expect(JSON.parse(raw).apiKey).toBe("__keychain__");
+    expect(localStorage.getItem(MIGRATED_KEY)).toBe("1");
+    expect(kc.get("global")).toBe("ak-plain-legacy");
+    expect(kc.get("role:emotion")).toBe("ak-role-plain");
+  });
+
+  it("此前已迁移但仍有残留明文（旧版本遗留）：启动即清", async () => {
+    localStorage.setItem(MIGRATED_KEY, "1");
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ apiKey: "ak-plain-legacy" }));
+    invokeMock.mockImplementation(noBackfill);
+    await renderReady();
+    expect(localStorage.getItem(STORAGE_KEY)).not.toContain("ak-plain-legacy");
+    expect(calls("keychain_set")).toHaveLength(0); // 已迁移不重复写钥匙串
+  });
+
+  it("迁移失败 + 角色回填 changed=true：仍不写出（防明文被哨兵化而钥匙串无副本）", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ apiKey: "ak-plain-legacy", roleOverrides: { emotion: { model: "m", api_key: "__keychain__" } } }),
+    );
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "keychain_set") throw new Error("keychain locked");
+      return null; // role 哨兵读回 null → changed=true
+    });
+    await renderReady();
+    expect(localStorage.getItem(MIGRATED_KEY)).toBeNull();
+    expect(localStorage.getItem(STORAGE_KEY)).toContain("ak-plain-legacy");
+  });
+});
