@@ -88,12 +88,37 @@ pub fn extract_style_prompt(text: &str) -> Option<String> {
     Some(first.to_string())
 }
 
+/// 否定/退出项判定（P0-9）：`no X`、`without X`、`X drops out`、`X stop(s)` 不是在场乐器。
+fn is_absent_item(part: &str) -> bool {
+    let l = part.trim().to_lowercase();
+    l.starts_with("no ")
+        || l.starts_with("without ")
+        || l.ends_with(" stop")
+        || l.ends_with(" stops")
+        || l.ends_with(" drops out")
+        || l.ends_with(" drop out")
+}
+
 /// 从说明行解析乐器数量（从尾部连续去掉空间/人声/力度尾项）
 /// 说明行格式：[乐器1+行为, 乐器2+行为, ..., 空间/力度, 人声状态]
+/// P0-9（B-02 归因，docs/qa/b02-root-cause.md）：
+/// - 能量尾项须与 energy::extract_energy_values 同口径（能量/energy 两种标记）——旧词表只认“能量”，
+///   英文 `energy:6` 尾项不被剥离 → 整行全计为乐器（v3 #19 “配器过多 8 件”实为 5 件）；
+/// - 否定/退出项（`no drums`、`without bass`、`bass drops out`、`drums stop`）不是在场乐器，任意位置剔除
+///   （v3 #17 Bridge “3 件”实为 1 件）。
+///
+/// 环境声/拟音（rain、hum、tape hiss）文本无法可靠区分，留待 SongPlan 结构化字段（P1-4）。
 fn parse_section_instruments(line: &str) -> usize {
-    let parts: Vec<&str> = line.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+    let parts: Vec<&str> = line
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty() && !is_absent_item(s))
+        .collect();
     let non_instrument_keywords = [
-        "voice", "vocal", "人声", "声", "room", "空间", "hall", "大厅", "能量",
+        "voice", "vocal", "人声", "声", "room", "空间", "hall", "大厅", "能量", "energy",
         "力度", "no voice", "无", "氛围", "atmosphere", "reverb", "混响", "极简段",
     ];
     let mut count = parts.len();
@@ -1736,6 +1761,22 @@ TRANSCRIPTION_ISSUE: 收敛方案含 ``` 围栏与参数行格式错误，需主
         assert_eq!(parse_section_instruments("intimate room, reverb, voice"), 0);
         // 正常混合 → 非乐器词在尾部被剥掉
         assert_eq!(parse_section_instruments("cello, piano, warm hall, voice soft"), 2);
+    }
+
+    /// P0-9 B-02 归因回归（v3 实测原句）：英文 energy 尾项与能量解析同口径；否定/退出项不计
+    #[test]
+    fn section_instrument_count_b02_attribution_fixes() {
+        // v3 #19 Final Chorus：旧口径 8（energy:6 未剥离 → 全行计数），真实 5
+        let l19 = "[acoustic guitar strummed hard, cello dark bowing, old piano full chords, light brushed drums, bass warm long notes, wide hall, voice open full cracking, energy:6]";
+        assert_eq!(parse_section_instruments(l19), 5);
+        // v3 #17 Bridge：旧口径 3（no drums / no cello 计为乐器），真实 1
+        let l17 = "[solo felt piano single notes, no drums, no cello, small room, voice whisper broken, 能量:2]";
+        assert_eq!(parse_section_instruments(l17), 1);
+        // v3 #18 Bridge：bass drops out / drums stop 不在场
+        let l18 = "[clean electric guitar sparse picking, soft piano single notes, bass drops out, drums stop, voice cracked, 能量:3]";
+        assert_eq!(parse_section_instruments(l18), 2);
+        // 中文能量尾项口径不变
+        assert_eq!(parse_section_instruments("[古筝, 大提琴, 小空间, 能量:1]"), 2);
     }
 
     /// mode_c 带 extra 走正常校验路径

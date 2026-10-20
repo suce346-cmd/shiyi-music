@@ -9,6 +9,7 @@
 - **[S2 修复] vitest 不可复现根因（C-01）**：根因为工程位于 iCloud 同步目录（node_modules 读取经文件提供程序，worker 冷启动超时）与 Node 版本低于依赖 engines，非并发竞态（`--maxWorkers=2` 实测仍失败）。新增 `vitest.config.ts`（显式 node 环境/forks，不设 maxWorkers）、`engines`/`.nvmrc`、`pretest` 环境守卫 `scripts/testEnvGuard.mjs`，根因记录 `docs/qa/vitest-root-cause.md`。
 - **[S1 修复] 迁移后 localStorage 残留明文 Key（C-10）**：启动回填只在内存有变化时写出，明文 apiKey 不触发回填 → 明文永久留存。现钥匙串持有密钥（迁移成功或此前已迁移）即无条件写出脱敏副本；迁移失败则不写出（修复潜在丢 Key：角色回填触发写出会把未入钥匙串的明文哨兵化）。新增 3 项单测。
 - **[S3 修复] 大型矩阵测试路径与口径（C-11）**：结果目录改为工程相对 `target/large-test`（原写死 `/Users/hakayi/Desktop/...`，工程移动即失效）；测量改调生产终稿门 `collect_hard_issues`（原只调 `validate_for_mode`，漏 Style Prompt 长度门等，读数虚高）；新增离线 dry-run 测试。
+- **[S2 修复] B-02 配器门归因 + 计数口径（P0-9）**：11 例配器失败逐例归因（`docs/qa/b02-root-cause.md`）：0 例纯真违规，主因为极简段无出口（9/11）与计数口径（8/11）。修复 `parse_section_instruments`：英文 `energy:` 尾项与能量解析同口径（原整行计为乐器，误报“配器过多 8 件”）、否定/退出项（`no drums`、`bass drops out`）不计。门阈值调整随 P1-4 SongPlan 门一次落地。
 - **[S3 修复] 变更记录与 QA 数据重复（C-13/C-14）**：补齐 0.5.5 版本段与本 Unreleased 段；删除 `docs/qa/results_12round_final.jsonl`（与 `results_v4_final.jsonl` 字节相同，MD5 `0ddd1ecc…`）；新增守护单测：当前版本必须有 CHANGELOG 段、`docs/qa/*.jsonl` 不得内容重复。
 
 ## 0.5.5（2026-09-14 ~ 2026-10-04）钥匙串数据安全 · 产出语言 · 审计批修复
