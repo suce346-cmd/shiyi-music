@@ -549,16 +549,46 @@ fn load_embedded_internal() -> Result<KnowledgeBase, String> {
     Ok(kb)
 }
 
-/// 场景列与模式匹配单源（用户拍板 2026-09-19）：suno_rules 的 scenario 列
-/// （"all"/"抖音"/"中文"）决定规则行注入哪个模式——根治 D 模式作词人同时被喂
-/// "≤12 字"（抖音）与"6-13 字"（普通模式）的矛盾输入（全链路核查 发现 1）。
-/// "all" 恒注入；"抖音" 仅 mode_d；"中文"（普通模式）仅 mode_a/b/c；
-/// 未知场景保守注入（宁可多给知识，不静默丢失；调用方打日志）。
+/// RULE-SCENARIO-VOCAB（BLUEPRINT_v2 §3.4，C-02）：suno_rules.scenario 列的**全部**合法取值。
+/// 旧实现只认「抖音/中文」，其余 16 种值（创作/叙事/high/高开低走…）一律"保守注入所有模式"，
+/// 致 D 实拿 38/40 行。现词表闭合：未知值 = 数据错误（守护测试即红、启动日志 error、运行期不注入）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scenario {
+    /// 全模式
+    All,
+    /// 仅抖音（mode_d）
+    Douyin,
+    /// 仅普通模式（mode_a/b/c）
+    Normal,
+}
+
+impl Scenario {
+    /// 登记表（CSV 取值 ↔ 枚举，单源）
+    pub const VOCAB: [(&'static str, Scenario); 3] =
+        [("all", Scenario::All), ("douyin", Scenario::Douyin), ("normal", Scenario::Normal)];
+
+    pub fn parse(v: &str) -> Option<Scenario> {
+        Self::VOCAB.iter().find(|(k, _)| *k == v.trim()).map(|(_, s)| *s)
+    }
+
+    pub fn allows(self, mode: &str) -> bool {
+        match self {
+            Scenario::All => true,
+            Scenario::Douyin => mode == "mode_d",
+            Scenario::Normal => mode != "mode_d",
+        }
+    }
+}
+
+/// 场景列与模式匹配单源：D 只拿 douyin|all，A/B/C 只拿 normal|all。
+/// 未知值 fail-closed（不注入 + error 日志）——不再"保守注入"。
 pub fn scenario_allows_mode(scenario: &str, mode: &str) -> bool {
-    match scenario {
-        "抖音" => mode == "mode_d",
-        "中文" => mode != "mode_d",
-        _ => true,
+    match Scenario::parse(scenario) {
+        Some(s) => s.allows(mode),
+        None => {
+            tracing::error!(scenario = %scenario, "suno_rules 未登记的 scenario 值（RULE-SCENARIO-VOCAB），该行不注入");
+            false
+        }
     }
 }
 
@@ -709,7 +739,46 @@ impl KnowledgeBase {
 
     /// 可达性违规的运行期告警（每 (表, 违规集合) 每进程一次）。
     /// 编译期守护测试覆盖不到用户**覆盖目录**里的新增死行，故运行期必须呐喊而不是静默。
+    /// suno_rules 规则名子集按场景过滤（审改角色子集路径与全量路径同一场景门）。
+    /// 子集项按 `rule` 列包含匹配（与 render_filtered_any 同口径）：只要有一条命中行被本模式允许即保留。
+    pub fn suno_rule_subset_for_mode<'a>(&self, subset: &[&'a str], mode: &str) -> Vec<&'a str> {
+        let Ok(t) = self.table("suno_rules") else { return subset.to_vec() };
+        let (Some(ri), Some(si)) = (t.header_index("rule"), t.header_index("scenario")) else { return subset.to_vec() };
+        subset
+            .iter()
+            .copied()
+            .filter(|k| {
+                t.rows.iter().any(|r| {
+                    r.get(ri).is_some_and(|v| v.contains(k)) && scenario_allows_mode(r.get(si).map(|s| s.as_str()).unwrap_or(""), mode)
+                })
+            })
+            .collect()
+    }
+
+    /// RULE-SCENARIO-VOCAB 数据检查：所有带 scenario 列的表中未登记的取值（`表:行号:值`）。
+    pub fn scenario_violations(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut names: Vec<&String> = self.tables.keys().collect();
+        names.sort();
+        for name in names {
+            let t = &self.tables[name];
+            if let Some(idx) = t.header_index("scenario") {
+                for (i, r) in t.rows.iter().enumerate() {
+                    let v = r.get(idx).map(|s| s.as_str()).unwrap_or("");
+                    if Scenario::parse(v).is_none() {
+                        out.push(format!("{}:{}:{}", name, i + 2, v));
+                    }
+                }
+            }
+        }
+        out
+    }
+
     pub fn warn_reachability_violations(&self) {
+        let sv = self.scenario_violations();
+        if !sv.is_empty() {
+            tracing::error!(violations = %sv.join("；"), "知识库 scenario 取值未登记（RULE-SCENARIO-VOCAB），这些行不会注入任何模式");
+        }
         let violations = self.reachability_violations();
         if violations.is_empty() {
             return;
@@ -1148,9 +1217,8 @@ impl KnowledgeBase {
     }
 
     /// 渲染整张表（cols：列投影，None=全列；mode：Some=按 scenario 列过滤规则行）。
-    /// 产出语言三态配套（全链路核查 发现 1 根治）：mode_d 只注入场景="抖音"的行，
-    /// mode_a/b/c 只注入场景="中文"（普通模式）的行——矛盾规则不再同时进 prompt。
-    /// 无 scenario 列的表不受影响；未知场景保守注入。
+    /// 场景过滤单源 = `scenario_allows_mode`（RULE-SCENARIO-VOCAB）：mode_d 只注入 douyin|all，
+    /// mode_a/b/c 只注入 normal|all；未知值不注入。无 scenario 列的表不受影响。
     pub fn render_table(
         &self,
         name: &str,
@@ -1617,13 +1685,13 @@ mod tests {
     }
 
     /// 产出语言三态配套（全链路核查 发现 1 根治）：suno_rules 场景过滤——
-    /// mode_d 只吃"抖音"行（line_max_chars ≤12），mode_b 只吃"中文"行（line_chars 6-13），
+    /// mode_d 只吃 douyin 行（line_max_chars ≤12），mode_b 只吃 normal 行（line_chars 6-13），
     /// 矛盾规则不再同时进同一 prompt。
     #[test]
     fn rules_injection_respects_scenario_mode() {
         let t = parse_csv("suno_rules", "rule,scenario,value_min,value_max,unit,description\n\
-            line_max_chars,抖音,0,12,字,抖音每行不超过 12 字：短行易跟唱卡点清晰\n\
-            line_chars_verse,中文,6,13,字,普通模式 Verse 每行 6-13 字：太短信息量不足，太长难唱\n").unwrap();
+            line_max_chars,douyin,0,12,字,抖音每行不超过 12 字：短行易跟唱卡点清晰\n\
+            line_chars_verse,normal,6,13,字,普通模式 Verse 每行 6-13 字：太短信息量不足，太长难唱\n").unwrap();
         let kb = KnowledgeBase { tables: [("suno_rules".to_string(), t)].into_iter().collect() };
         let d = kb
             .render_table("suno_rules", None, None, Some("mode_d"))
@@ -2312,6 +2380,42 @@ mod tests {
         let empty = KnowledgeBase::default();
         assert!(vocal_mix_prompt_block(&empty, 9999).is_empty(), "删表回滚：不注入");
         assert!(vocal_mix_entries(&empty).is_none());
+    }
+
+
+    // ---- P1-6 RULE-SCENARIO-VOCAB ----
+
+    #[test]
+    fn scenario_vocab_embedded_csv_fully_registered() {
+        let kb = KnowledgeBase::load_embedded().unwrap();
+        assert!(kb.scenario_violations().is_empty(), "未登记 scenario: {:?}", kb.scenario_violations());
+        let t = kb.table("suno_rules").unwrap();
+        let idx = t.header_index("scenario").unwrap();
+        let count = |m: &str| t.rows.iter().filter(|r| scenario_allows_mode(&r[idx], m)).count();
+        // D 只拿 douyin|all；A/B/C 只拿 normal|all；二者并集 = 全表
+        let by = |v: &str| t.rows.iter().filter(|r| r[idx] == v).count();
+        let (all, dy, nm) = (by("all"), by("douyin"), by("normal"));
+        assert_eq!(count("mode_d"), all + dy);
+        for m in ["mode_a", "mode_b", "mode_c"] {
+            assert_eq!(count(m), all + nm, "{m}");
+        }
+        assert_eq!(all + dy + nm, t.rows.len(), "存在未归类行");
+        assert!(count("mode_d") < t.rows.len(), "D 不得拿全表（C-02 回归）");
+    }
+
+    #[test]
+    fn scenario_unknown_value_is_red_and_not_injected() {
+        let t = parse_csv("suno_rules", "rule,scenario,value_min,value_max,unit,description\n\
+            ok_rule,all,0,1,,通用\n\
+            leak_rule,创作,0,1,,旧未知值\n").unwrap();
+        let kb = KnowledgeBase { tables: [("suno_rules".to_string(), t)].into_iter().collect() };
+        assert_eq!(kb.scenario_violations(), vec!["suno_rules:3:创作".to_string()]);
+        for m in ["mode_a", "mode_b", "mode_c", "mode_d"] {
+            let out = kb.render_table("suno_rules", None, None, Some(m)).unwrap();
+            assert!(out.contains("ok_rule") && !out.contains("leak_rule"), "{m} 注入了未知场景行");
+        }
+        assert_eq!(Scenario::parse(" douyin "), Some(Scenario::Douyin));
+        assert!(Scenario::parse("抖音").is_none(), "旧中文取值已退役");
     }
 
 }

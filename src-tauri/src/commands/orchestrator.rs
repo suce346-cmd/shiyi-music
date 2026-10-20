@@ -529,8 +529,14 @@ fn inject_knowledge(
                     // 校验员：全量（规则必须全见）
                     kb.render_table(t, proj, Some(INJECT_MAX_FULL_ROWS), Some(mode))
                 } else {
-                    // 其他角色：按规则名子集过滤（rule 列 contains 匹配）
-                    kb.render_filtered_any(t, &[("rule", subset)], proj, plan, None, &[])
+                    // 其他角色：按规则名子集过滤（rule 列 contains 匹配），子集先过场景门（P1-6：
+                    // 旧实现子集路径绕过 scenario 过滤，抖音行可进 A/B 审改上下文）
+                    let allowed = kb.suno_rule_subset_for_mode(subset, mode);
+                    if allowed.is_empty() {
+                        Ok(String::new())
+                    } else {
+                        kb.render_filtered_any(t, &[("rule", &allowed)], proj, plan, None, &[])
+                    }
                 }
             }
             // 思维资产表（lyric_craft/compose_craft，单源判定 rules::is_craft_table）：注入门 =
@@ -3422,6 +3428,21 @@ mod tests {
         let src = include_str!("orchestrator.rs");
         let prod = src.split("#[cfg(test)]\nmod tests").next().unwrap();
         assert!(prod.matches("vocal_mix_prompt_block(").count() >= 3, "host/审改/定稿三处注入");
+    }
+
+
+    /// P1-6 接线锁：审改角色 suno_rules **子集路径**同样过场景门（旧实现绕过 → 抖音行进 A/B）
+    #[test]
+    fn scenario_gate_applies_to_role_subset_path() {
+        let kb = crate::knowledge::KnowledgeBase::load_embedded().unwrap();
+        let ly = roles::role_for(PipelineRole::Lyricist);
+        let b = inject_knowledge(&kb, ly.knowledge_tables, ly.craft_refs, "", "mode_b", Some(PipelineRole::Lyricist.storage_key()));
+        let d = inject_knowledge(&kb, ly.knowledge_tables, ly.craft_refs, "", "mode_d", Some(PipelineRole::Lyricist.storage_key()));
+        assert!(b.contains("line_chars_verse") && !b.contains("line_max_chars"), "mode_b 作词人不得拿抖音行字数规则");
+        assert!(d.contains("line_max_chars") && !d.contains("line_chars_verse"), "mode_d 作词人不得拿普通模式行字数规则");
+        let pr = roles::role_for(PipelineRole::Producer);
+        let pd = inject_knowledge(&kb, pr.knowledge_tables, pr.craft_refs, "", "mode_d", Some(PipelineRole::Producer.storage_key()));
+        assert!(!pd.contains("style_arc_"), "mode_d 制作人不得拿 A/B 弧线引导度行");
     }
 
 }

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **[P1-6] Scenario 词表闭合（C-02，RULE-SCENARIO-VOCAB）**：`knowledge::Scenario` 登记 `all/douyin/normal`；`suno_rules.csv` 26 行改值（17 行未知值重分类 + 抖音/中文改 token，逐行表见 `docs/qa/p1-6-scenario-reclass.md`）；未知值 fail-closed（不注入 + 启动 error + 守护测试红）；审改角色 suno_rules 子集路径补过场景门（旧实现绕过）。mode_d 注入 27/40（旧 38/40）。
 - **[残留清理] 定稿人设与前端标签**：`roles::auditor()` 人设重写为结构化 PlanIR 定稿人（输出完整 SongPlan JSON，规则全走 `${占位符}`），`produce_final_text` 改读该单源并按角色绑定注入 suno_rules；删除前端 `envelope_fallback`「格式降级」标签（旧历史不再兼容回放）；UI/README/i18n「格式输出」措辞改为定稿；守护测试扩至前端 TS/TSX 与旧端口措辞。
 - **[P1-5] vocal_mix 受控词表（M-07）**：新增 `knowledge/vocal_mix.csv`（人声 4 + 混音 5，label_en 去否定写法）；`SongPlan.global.vocal/mix` 只填词表 id，`render_suno` 展开为英文标签；`plan::validate` 新增覆盖门（各类 ≥1、未知 id / 类别错位为硬问题；删表即跳过）；主持人阶段 0/汇总、制作人/校验员审改、校验员定稿注入词表，超 `VOCAL_MIX_INJECT_MAX_CHARS` 只注入 id+label_en；覆盖目录张数判据改为 `EMBEDDED_TABLE_COUNT`=9。
 - **[P1-3/4 复审修复] 信封/转写保真全仓退役**：模式 prompt 输出节改为 SongPlan 字段映射（原文仍要求 `<<<NOTES>>>` 等四节文本，与结构化 schema 冲突）；删除 `envelope_spec`/`parse_plan_sections`/`envelope_defect_mode`/`plan_envelope_enabled`、`check_transcription_fidelity`、`TRANSCRIPTION_CONTRACT`、`auditor_format_prompt_mode_c`、`collect_hard_issues` 及 cfg(test) 旧辅助函数与对应测试；结构化调用补发 usage 与退避事件；refine 上一版非 SongPlan JSON 时回落阶段 0；守护测试扩至 `src/**` + prompt 快照。
