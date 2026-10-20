@@ -20,7 +20,7 @@ pub struct Limit {
     pub fact: Fact,
 }
 
-const RESEARCH: &str = "BLUEPRINT_v2 §2.3 / docs/research（2026-10-20 调研，待 §7 S1–S3/S4 探针确认）";
+const RESEARCH: &str = "docs/research/2026-10-19-suno-v6-and-vocal-mix-scan.md（公开资料扫描；上限/标签区间待 §7 S1–S3/S4 用户探针确认 → UserProbed）";
 const DATE: &str = "2026-10-20";
 
 /// Style 栏字符上限
