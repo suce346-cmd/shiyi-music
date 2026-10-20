@@ -250,6 +250,8 @@ export interface PipelineRequest {
   output_lang: OutputLang;
   /** P1-2 结构化能力探测缓存透传（旧后端忽略） */
   structured_caps?: Record<string, StructuredMode>;
+  /** P1-7：D 模式场景 id（emotion/daily/dance/story/guofeng）；缺省后端写 daily */
+  douyin_scene?: string;
 }
 
 /** llm-chunk 流式事件载荷（与后端 models::StreamChunk 对齐）。
