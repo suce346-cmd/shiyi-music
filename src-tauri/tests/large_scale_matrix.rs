@@ -266,7 +266,8 @@ fn offline_dry_run_paths_and_measurement() {
     let dir = results_dir();
     let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     assert!(dir.starts_with(&repo), "结果目录必须位于工程内: {}", dir.display());
-    assert!(!dir.to_string_lossy().contains("/Users/"), "禁止写死绝对路径");
+    // 运行期解析出的目录本身是绝对路径（Mac 上必在 /Users 下），不能按前缀判"写死"；
+    // 写死与否只看源码（下一条扫描）——旧断言在 box 上恒绿、在 Mac 上恒红（Mac 门首跑发现）。
     let src = include_str!("large_scale_matrix.rs");
     let hardcoded = ["/Users/", "hakayi"].concat();
     assert_eq!(src.matches(hardcoded.as_str()).count(), 0, "源码不得出现机器绝对路径");

@@ -435,10 +435,9 @@ mod tests {
     fn cli_get_global_is_read_only() {
         let before = cli_get(PROTECTED_ACCOUNT_EXACT);
         let after = cli_get(PROTECTED_ACCOUNT_EXACT);
-        match (before, after) {
-            (Ok(a), Ok(b)) => assert_eq!(a, b, "两次只读结果应一致"),
-            // 钥匙串交互被禁（CI/无 GUI 会话）等真实错误：只读路径不做断言，不得因此改写条目
-            _ => {}
+        // 钥匙串交互被禁（CI/无 GUI 会话）等真实错误：只读路径不做断言，不得因此改写条目
+        if let (Ok(a), Ok(b)) = (before, after) {
+            assert_eq!(a, b, "两次只读结果应一致");
         }
     }
 
