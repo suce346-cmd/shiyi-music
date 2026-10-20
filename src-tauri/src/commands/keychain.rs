@@ -112,8 +112,10 @@ fn cli_get(account: &str) -> Result<Option<String>, AppError> {
     )
 }
 
-/// 密钥格式门（全平台同一口径，`keychain_set` 入口调用；macOS stdin 写入路径的前提）：
+/// 密钥格式门——**仅 macOS `security -i` 写入路径**的前提（F5：交互模式按空白切词）。
+/// 非 macOS 走 keyring crate（无切词问题），不施加此门，避免误拒合法 Key。
 /// 无空白/引号/反斜杠/控制字符的可打印 ASCII。拒绝信息经 AppError 回到前端设置界面显示。
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn validate_secret_format(secret: &str) -> Result<(), AppError> {
     if is_safe_token(secret) {
         Ok(())
@@ -125,6 +127,7 @@ pub(crate) fn validate_secret_format(secret: &str) -> Result<(), AppError> {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn is_safe_token(v: &str) -> bool {
     !v.is_empty() && v.chars().all(|c| c.is_ascii_graphic() && c != '"' && c != '\'' && c != '\\')
 }
@@ -251,20 +254,26 @@ fn lib_delete(account: &str) -> Result<(), AppError> {
 
 // ── 统一入口（前端调用的 Tauri 命令）────────────────────────────────
 
-/// 写入前置校验（纯函数，不触碰钥匙串）：账户白名单 + 非空 + 格式门。
-fn precheck_set(account: &str, secret: &str) -> Result<(), AppError> {
+/// 写入前置校验（纯函数，不触碰钥匙串）：账户白名单 + 非空 + 格式门（仅 CLI 路径，F5）。
+/// `cli_path` = 是否走 macOS `security -i`（生产传 `cfg!(target_os = "macos")`；单测两支都测）。
+fn precheck_set(account: &str, secret: &str, cli_path: bool) -> Result<(), AppError> {
     validate_account(account)?;
     // O-5：空 secret 拒绝——清空应走 keychain_delete，写空值会在钥匙串留下空条目
     if secret.is_empty() {
         return Err(AppError::new(ErrorKind::Validation, "密钥为空，清空配置请使用删除"));
     }
-    validate_secret_format(secret)
+    #[cfg(any(target_os = "macos", test))]
+    if cli_path {
+        return validate_secret_format(secret);
+    }
+    let _ = cli_path;
+    Ok(())
 }
 
 /// 写入密钥（前端 updateSettings 同步调用）
 #[tauri::command]
 pub async fn keychain_set(account: String, secret: String) -> Result<(), AppError> {
-    precheck_set(&account, &secret)?;
+    precheck_set(&account, &secret, cfg!(target_os = "macos"))?;
     #[cfg(target_os = "macos")]
     { cli_set(&account, &secret) }
     #[cfg(not(target_os = "macos"))]
@@ -323,7 +332,6 @@ mod tests {
         }
     }
 
-    /// O-5：account 白名单——global/已知角色放行，未知角色与任意串拒绝
     /// C-08/D-02：密钥只走 stdin 命令行（不进 argv）；非法字符明确拒绝
     #[test]
     fn interactive_set_command_shape_and_rejects() {
@@ -348,11 +356,29 @@ mod tests {
     /// 全平台入口同口径：keychain_set 前置校验对非法 Key 返回 Validation（纯函数，不触碰钥匙串）
     #[test]
     fn precheck_rejects_bad_secret_before_write() {
-        let e = precheck_set("global", "sk bad key").unwrap_err();
+        let e = precheck_set("global", "sk bad key", true).unwrap_err();
         assert_eq!(e.kind, ErrorKind::Validation);
         assert!(e.message.contains("API Key"));
+        // F5：格式门只作用于 macOS CLI 路径；keyring 路径不误拒
+        assert!(precheck_set("global", "sk bad key", false).is_ok());
+        assert!(precheck_set("global", "", false).is_err(), "空值两条路径都拒");
+        assert!(precheck_set("role:hacker", "sk-ok", false).is_err(), "账户白名单两条路径都执行");
     }
 
+    /// F5：常见特殊字符（# ; $ & | * ? ! % ~ ` < > = @ , : / + 等）作为**单个 token** 原样进入
+    /// stdin 命令行，不被截断/改写；真实 `security -i` 解析由 Mac 验收脚本在隔离账户上实写读回确认
+    /// （scripts/mac-verify.sh 第 3 步）。
+    #[test]
+    fn interactive_set_command_passes_special_chars_verbatim() {
+        for k in ["sk-a#b", "sk;rm", "sk$HOME", "sk&x|y", "sk*?!", "sk%~`", "sk<>=@", "sk,:/+", "#leading", "trail;"] {
+            let cmd = interactive_set_command("test:shiyi:1", k).unwrap();
+            let toks: Vec<&str> = cmd.trim_end().split_whitespace().collect();
+            assert_eq!(toks.last().copied(), Some(k), "密钥必须是最后一个完整 token: {cmd:?}");
+            assert_eq!(toks.len(), 9, "不得多出/丢失 token: {cmd:?}");
+        }
+    }
+
+    /// O-5：account 白名单——global/已知角色放行，未知角色与任意串拒绝
     #[test]
     fn account_allowlist() {
         assert!(validate_account("global").is_ok());
