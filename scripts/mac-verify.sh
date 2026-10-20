@@ -14,12 +14,12 @@ step() { printf '\n== %s ==\n' "$1"; }
 step "0 环境"
 cargo --version | grep -q "1.99" && pass "cargo 1.99" || fail "需要 ~/.cargo/bin/cargo 1.99（当前 $(cargo --version)）"
 node -v
-[[ "$PWD" != *"/Desktop/"* ]] && pass "仓库不在 iCloud Desktop 下（$PWD）" || fail "仓库仍在 Desktop（C-01 根因）"
+[[ "$PWD" != *"/Desktop/"* ]] && pass "仓库不在 iCloud Desktop 下（${PWD}）" || fail "仓库仍在 Desktop（C-01 根因）"
 
 step "1 钥匙串验收（只读 global）"
 kc_hash() { local pw; if pw=$(security find-generic-password -s "$SERVICE" -a global -w 2>/dev/null); then printf %s "$pw" | shasum -a 256 | cut -c1-16; fi; }
 BEFORE=$(kc_hash)
-[ -n "$BEFORE" ] && pass "global 存在（sha256 前缀 $BEFORE）" || echo "  ⚠️ global 不存在：请先在 App 内重录 Key（P0-0）"
+[ -n "$BEFORE" ] && pass "global 存在（sha256 前缀 ${BEFORE}）" || echo "  ⚠️ global 不存在：请先在 App 内重录 Key（P0-0）"
 
 step "2 macOS 专属钥匙串测试（隔离账户）"
 OUT=$(cd src-tauri && cargo test --lib commands::keychain 2>&1) || { echo "$OUT"; fail "keychain 测试失败"; }
