@@ -7,7 +7,8 @@
 //      （Node 20：webidl.util.markAsUncloneable is not a function）。
 // 纯函数导出供单测；CLI 入口在文件末尾。
 import { execFileSync } from "node:child_process";
-import { dirname, resolve, sep } from "node:path";
+import { resolve } from "node:path";
+import { dirname as posixDirname, resolve as posixResolve, sep as posixSep } from "node:path/posix";
 import { homedir } from "node:os";
 
 /** 与 package.json engines.node 同源（单测断言二者一致） */
@@ -37,12 +38,14 @@ export function nodeVersionOk(version) {
  * @param {string} home
  */
 export function iCloudManagedAncestor(dir, hasFileProviderAttr, home) {
-  const mobileDocs = resolve(home, "Library", "Mobile Documents") + sep;
-  if ((resolve(dir) + sep).startsWith(mobileDocs)) return mobileDocs;
-  let cur = resolve(dir);
+  // iCloud 只存在于 macOS；一律按 POSIX 路径比较，避免 Windows CI 上 path.resolve 把
+  // "/Users/…" 改写成盘符路径导致单测误红（C-01）。
+  const mobileDocs = posixResolve(home, "Library", "Mobile Documents") + posixSep;
+  if ((posixResolve(dir) + posixSep).startsWith(mobileDocs)) return mobileDocs;
+  let cur = posixResolve(dir);
   for (;;) {
     if (hasFileProviderAttr(cur)) return cur;
-    const parent = dirname(cur);
+    const parent = posixDirname(cur);
     if (parent === cur) return null;
     cur = parent;
   }
