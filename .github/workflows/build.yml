@@ -50,22 +50,27 @@ jobs:
       - name: Clippy (-D warnings)
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
-      - name: Run Rust tests
-        # Windows 上 headless_modes 集成测试二进制启动即 STATUS_ENTRYPOINT_NOT_FOUND
-        # （tauri/WebView2 动态库入口点在测试 exe 加载时解析失败）——全部用例本就 #[ignore]，
-        # 云端只需 lib 全测 + 集成测试可编译可链接，不执行该二进制
+      # Windows：不用 bash（Git Bash PATH 常缺 cargo → exit 127）；默认 pwsh/cmd 与 Clippy 同 PATH。
+      # headless_modes 集成测在 Windows 上 WebView2 入口点失败且用例本就 #[ignore]，故只跑 --lib + 编译 tests。
+      - name: Run Rust tests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --lib *>&1 | Tee-Object -FilePath rust-test-output.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --manifest-path src-tauri/Cargo.toml --tests *>&1 | Tee-Object -FilePath rust-test-output.txt -Append
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run Rust tests (macOS/Linux)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            cargo test --manifest-path src-tauri/Cargo.toml --lib 2>&1 | tee rust-test-output.txt
-            cargo build --manifest-path src-tauri/Cargo.toml --tests 2>&1 | tee -a rust-test-output.txt
-          else
-            cargo test --manifest-path src-tauri/Cargo.toml 2>&1 | tee rust-test-output.txt
-          fi
+          set -o pipefail
+          cargo test --manifest-path src-tauri/Cargo.toml 2>&1 | tee rust-test-output.txt
 
       - name: Upload test log on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: rust-test-output-${{ matrix.os }}
           path: rust-test-output.txt

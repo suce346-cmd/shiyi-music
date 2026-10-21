@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **[CI] Windows「Run Rust tests」exit 127**：Git Bash PATH 找不到 cargo；改为 pwsh 跑 `--lib` + `build --tests`，Unix 仍 bash+pipefail；upload-artifact 升 v5。
+
 - **[文档/CI] README 补齐 Releases 下载入口与使用步骤；`testEnvGuard` iCloud 路径改 POSIX 比较，修 Windows CI 前端单测误红。
 
 - **[工程] npm audit**：传递依赖 `source-map-js` 1.2.1→1.2.2（GHSA-68fv-2mgg-jv7q），`npm audit` 清零；README/RELEASE 写明 Node 本机 22/24/26 可用、API Key「谁用谁填」不入库。
