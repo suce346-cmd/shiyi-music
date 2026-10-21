@@ -30,7 +30,7 @@ Mac 专属验收（钥匙串只读、特殊字符实写等）见 `scripts/mac-ve
 
 ## 3. 版本号三处同步 + CHANGELOG
 
-发版前把版本写到同一数字（当前为 `0.5.5`）：
+发版前把版本写到同一数字（当前为 `6.0.0`）：
 
 1. `package.json` → `"version"`
 2. `src-tauri/Cargo.toml` → `[package] version`
@@ -59,8 +59,8 @@ git push origin main
 - 推送版本 tag 触发产物与 GitHub Release：
 
 ```bash
-git tag v0.5.6
-git push origin v0.5.6
+git tag v6.0.0
+git push origin v6.0.0
 ```
 
 CI 会在门禁通过后产出 macOS / Windows 安装包，并挂到对应 Release。

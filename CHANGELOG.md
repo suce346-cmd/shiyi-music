@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 6.0.0（2026-10-21）
+
+- **[发版] v6.0.0**：全面复查修复、仓库清理、RELEASE 文档、依赖小版本升级、Windows CI 编译门禁、README 下载入口。
+
 - **[CI] Windows Rust**：修复 bash 缺 cargo（exit 127）后，实测 `--lib` 仍因 WebView2 `STATUS_ENTRYPOINT_NOT_FOUND` 无法启动；改为 Windows 仅 `--no-run` + `build --tests` 编译门禁，完整单测留 macOS；upload-artifact 升 v5。
 
 - **[文档/CI] README 补齐 Releases 下载入口与使用步骤；`testEnvGuard` iCloud 路径改 POSIX 比较，修 Windows CI 前端单测误红。
