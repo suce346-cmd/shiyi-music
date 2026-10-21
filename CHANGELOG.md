@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **[CI] Windows「Run Rust tests」exit 127**：Git Bash PATH 找不到 cargo；改为 pwsh 跑 `--lib` + `build --tests`，Unix 仍 bash+pipefail；upload-artifact 升 v5。
+- **[CI] Windows Rust**：修复 bash 缺 cargo（exit 127）后，实测 `--lib` 仍因 WebView2 `STATUS_ENTRYPOINT_NOT_FOUND` 无法启动；改为 Windows 仅 `--no-run` + `build --tests` 编译门禁，完整单测留 macOS；upload-artifact 升 v5。
 
 - **[文档/CI] README 补齐 Releases 下载入口与使用步骤；`testEnvGuard` iCloud 路径改 POSIX 比较，修 Windows CI 前端单测误红。
 

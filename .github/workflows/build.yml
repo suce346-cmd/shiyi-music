@@ -50,13 +50,14 @@ jobs:
       - name: Clippy (-D warnings)
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
-      # Windows：不用 bash（Git Bash PATH 常缺 cargo → exit 127）；默认 pwsh/cmd 与 Clippy 同 PATH。
-      # headless_modes 集成测在 Windows 上 WebView2 入口点失败且用例本就 #[ignore]，故只跑 --lib + 编译 tests。
-      - name: Run Rust tests (Windows)
+      # Windows：Tauri/WebView2 会使测试 exe 在加载期 STATUS_ENTRYPOINT_NOT_FOUND（0xc0000139），
+      # 连 `cargo test --lib` 也无法启动。云端 Windows 只做编译门禁（--no-run + build --tests）；
+      # 完整 Rust 单测在 macOS job 执行。
+      - name: Compile Rust tests (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          cargo test --manifest-path src-tauri/Cargo.toml --lib *>&1 | Tee-Object -FilePath rust-test-output.txt
+          cargo test --manifest-path src-tauri/Cargo.toml --lib --no-run *>&1 | Tee-Object -FilePath rust-test-output.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --manifest-path src-tauri/Cargo.toml --tests *>&1 | Tee-Object -FilePath rust-test-output.txt -Append
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
