@@ -116,7 +116,7 @@ fn forbidden_break_marks(text: &str) -> Vec<String> {
         let t = line.trim();
         if is_lyric_line(t) && (t.contains('/') || t.contains('、')) {
             issues.push(format!(
-                "第{}行使用了禁用断句符号（/ 或 、——Suno 会读出或忽略），请改用单空格断句: {}",
+                "第{}行使用了禁用断句符号（/ 或 、——Suno 会读出或忽略），请改为一行一乐句自然分句: {}",
                 i + 1,
                 t
             ));
@@ -362,7 +362,7 @@ pub fn check_bpm_range(mode: &str, bpm: u32) -> Option<String> {
 /// - 单点接线：`plan::validate::check_style_and_headers`（四模式共用同一调用，无第二处判法）。
 /// - 模式域单源：`rules::STYLE_PROMPT_MAX_MODES` / `STYLE_PROMPT_MIN_MODES`（注册表同读同两个常量，
 ///   杜绝"注册模式域 ≠ 执行模式域"漂移——本轮实测的 `douyin_bpm_min` 错挂执行者即此类）。
-/// - 上游承诺对齐：CHECKLIST_A/B/C/D 均承诺上限（≤350）；下限（≥30）仅 A/B/D 承诺，
+/// - 上游承诺对齐：CHECKLIST_A/B/C/D 均承诺上限（≤1000）；下限（≥30）仅 A/B/D 承诺，
 ///   C 的 STYLE 节是"氛围/流派基调一句"、上游无下限告知——故下限不对 C 执行
 ///   （多执行即上游零告知的隐性降级，违反"上游输出约束 ↔ 下游校验约束"同域原则）。
 /// - 不设流派/乐器/人声词表强制（原指令允许创造新流派），信息块完整性由制作人讨论轮把关。
@@ -595,8 +595,7 @@ mod tests {
             assert!(
                 style_prompt_length_issues(m, &long)
                     .iter()
-                    .any(|i| i.contains("350")
-                        || i.contains(&rules::STYLE_PROMPT_MAX_CHARS.to_string())),
+                    .any(|i| i.contains(&rules::STYLE_PROMPT_MAX_CHARS.to_string())),
                 "{m}"
             );
         }

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 6.1.0（2026-11-03）
+
+- **[架构/规则重构] v3 词曲声学一体直通管线与去机器味规则体系（`docs/BLUEPRINT_v3_CONTRACT.md`）**：
+  - **直通管线（Direct Pipeline）与初稿自愈**：常规生成默认由阶段 0/1 词曲声学主脑一次性产出完整 `SongPlan` IR（内置最多 2 次声韵/契约自愈重修），经 `direct_pipeline_role_summary` 拆解各领域专家视角（驱动圆桌阶段条、Q 版角色庆祝动效、气泡与详情弹窗），直通阶段 2 物理硬门+去机器味审计与 `render_suno` 编译；保留 `pipeline_refine` 局部靶向精修、轮间确认门（`round_gate`）与中途插话（`interject`）。
+  - **SongPlan IR 创作纵深扩展**：新增 `SongIntent`（立意五问 `plot_type`/`one_thing`/`to_whom`/`at_what_moment`/`anchor_object` 与 `rhyme_plan` 全局声律与句式网格统筹）、`AsymmetryPlan`（`short_line`/`deliberate_unrhymed`/`chorus_variation`/`withholding`）、`SectionMotion`（`push`/`stop`）、`GlobalStyle.mood`（置顶情绪质地）、`GlobalStyle.arrangement_hook`（标志性器乐记忆钩子）、`Section.subtraction`（高潮前减法抽空事件）与 `exemptions`（创作破格豁免理由）。
+  - **全局汉语声律（十三辙）与流行曲式双循环硬门**：`plan::validate` 新增汉语声韵分析器（含词尾多音字消歧与五大家族发音部位映射），执行 `section_rhyme_missing`（偶句与末句加权主韵闭环）、`rhyme_weak_particle`（禁止轻声虚词收尾充韵）、`rhyme_homophone_collision`（禁止非复沓句同音挤韵与同字重韵）、`prosody_meter_imbalance`（同段对偶句字数平衡）、`song_form_imbalance`（Mode B 双循环流行曲式）、`global_rhyme_scatter`（全曲主韵统筹与同部位邻韵微跳）、`homologous_section_rhyme_drift` / `homologous_section_meter_drift`（同职能主副歌跨段韵部与句式网格锁死）以及 `mode_c_rhyme_scheme` / `mode_c_copied_rhyme_char`（改词同辙对齐与禁照搬原词尾字）。
+  - **Suno 诚实编译器升级（`render_suno`）**：`Style` 固定按前置高权重顺序（`mood → genre → bpm/key/meter → vocal → instruments → arrangement_hook → arc → mix`）收敛渲染；段落头按 Section Delta 原则避免重复追加裸乐器名，并将 `subtraction`/`negative_local` 统一改写为正向声学状态（`X drop out`）；前端 `parseEnergy` 剥离单行段头能量锚点后自动收拢空竖线。
+  - **旧规则退役与双层校验升级**：`STYLE_PROMPT_MAX_CHARS` 从 `350` 升至 `1000`；废除中文行内机械单空格拆词，全面改为“一行对应一个自然演唱呼吸短句”；清除提示词中“Style 中英文皆可”矛盾指令；`vocal_mix.csv` 扩充至 16 项（`V-01..V-08`、`M-01..M-08`）并支持 `≥3` 词具象英文短语；`exemptions` 支持极简/独奏曲风硬门降级为 `Warn`；新增 `check_anti_ai_tells` 反 AI 味检测；修复 Mode D 优化/续跑/重试时 `douyinScene` 持久化传递。
+
 ## 6.0.0（2026-10-21）
 
 - **[发版] v6.0.0**：全面复查修复、仓库清理、RELEASE 文档、依赖小版本升级、Windows CI 编译门禁、README 下载入口。

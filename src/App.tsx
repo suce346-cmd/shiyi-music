@@ -8,7 +8,7 @@ import StatusIndicator from "./components/StatusIndicator";
 import RoundGateBar from "./components/RoundGateBar";
 import HistoryPanel from "./components/HistoryPanel";
 import RoundtablePanel from "./components/RoundtablePanel";
-import { useSettingsWithSecrets } from "./hooks/useSettings";
+import { useSettingsWithSecrets, sanitizeStored } from "./hooks/useSettings";
 import { SecretSyncError } from "./components/SecretSyncError";
 import { usePipeline, ROLE_NAMES, ROLE_EMOJIS, MODE_EXPERTS } from "./hooks/usePipeline";
 import { orderRoundSpeech, assembleFinalTurns } from "./utils/speechOrder";
@@ -20,6 +20,11 @@ import ProviderTemplates from "./components/ProviderTemplates";
 import { modelsForBaseUrl } from "./data/providers";
 import { formatUrlIssue } from "./utils/urlGuard";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
+import { scrubSettingsForExport } from "./utils/hotkeys";
+import { estimateRefineTargets } from "./utils/refineTargets";
 import type { AppError, Mode, ChatMessage, ChatTurn, HistoryEntry, LLMStatus, ExpertCard, PipelineRoleKey, StreamChunk, StructuredMode } from "./types";
 import { acceptStreamChunk } from "./utils/streamChunk";
 import { historyPlanFields } from "./utils/sunoPackage";
@@ -92,6 +97,8 @@ export default function App() {
     setErrorMessage(""); setErrorKind(null);
   }, []);
   const [lastUserInput, setLastUserInput] = useState("");
+  /** Mode D 最近一次生效场景（供优化/续跑/重试沿用，不再硬编码退回 daily） */
+  const lastDouyinSceneRef = useRef<string>("daily");
   const [conversation, setConversation] = useState<ChatTurn[]>([]);
   // 历史改走文件存储——初始空，启动 useEffect 从 history_load 回填 + 迁移旧 localStorage
   const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>([]);
@@ -239,9 +246,6 @@ export default function App() {
   /** 导出配置（排除密钥，经 dialog 选路径写文件） */
   const handleExportSettings = useCallback(async () => {
     try {
-      const { save } = await import("@tauri-apps/plugin-dialog");
-      const { writeTextFile } = await import("@tauri-apps/plugin-fs");
-      const { scrubSettingsForExport } = await import("./utils/hotkeys");
       const filePath = await save({
         defaultPath: "shiyi-settings.json",
         filters: [{ name: "JSON", extensions: ["json"] }],
@@ -257,9 +261,6 @@ export default function App() {
   /** 导入配置（dialog 选文件 → sanitizeStored 清洗 → 全量替换；密钥需重新输入） */
   const handleImportSettings = useCallback(async () => {
     try {
-      const { open } = await import("@tauri-apps/plugin-dialog");
-      const { readTextFile } = await import("@tauri-apps/plugin-fs");
-      const { sanitizeStored } = await import("./hooks/useSettings");
       const filePath = await open({
         multiple: false,
         filters: [{ name: "JSON", extensions: ["json"] }],
@@ -318,7 +319,6 @@ export default function App() {
     let unlistenClose: (() => void) | undefined;
     void (async () => {
       try {
-        const { getCurrentWindow } = await import("@tauri-apps/api/window");
         unlistenClose = await getCurrentWindow().onCloseRequested(async () => {
           await flushHistory();
         });
@@ -444,6 +444,9 @@ export default function App() {
       ? `原歌词：\n${extra.originalLyrics}\n\n新主题：\n${userInput}`
       : userInput;
     setLastUserInput(displayInput);
+    if (runMode === "mode_d") {
+      lastDouyinSceneRef.current = extra?.douyinScene ?? "daily";
+    }
     chatHistoryRef.current = [];
     speechLogRef.current = [];
     setConversation([]);
@@ -461,7 +464,7 @@ export default function App() {
         settings,
         extra: undefined,
         originalLyrics,
-        douyinScene: runMode === "mode_d" ? (extra?.douyinScene ?? "daily") : undefined,
+        douyinScene: runMode === "mode_d" ? lastDouyinSceneRef.current : undefined,
         // 专家发言实时追加到对话流（记录进 speechLog，结束时合并，不进入 chatHistoryRef）
         onSpeech: (speech) => {
           // 阶段0流式结束后清空中间态流式文本（首个专家发言时），避免统领全文重复显示
@@ -588,7 +591,6 @@ export default function App() {
       // #10 上一版是否"生成中断的半成品"（由 catch 固化时打标）——透传给注入层附告知
       const lastOutputPartial = lastMsg?.partial === true;
       // fast 增量时前端预估 targets 透传（无命中传空→后端自动路由；full 不传=全量）
-      const { estimateRefineTargets } = await import("./utils/refineTargets");
       const estimated = refineMode === "fast" ? estimateRefineTargets(feedback, mode) : [];
       raw = await pipeline.refine({
         mode,
@@ -598,7 +600,7 @@ export default function App() {
         settings,
         extra: undefined,
         originalLyrics,
-        douyinScene: mode === "mode_d" ? "daily" : undefined,
+        douyinScene: mode === "mode_d" ? lastDouyinSceneRef.current : undefined,
         refineMode,
         lastOutputPartial,
         refineTargets: refineMode === "fast" && estimated.length > 0 ? estimated : undefined,
@@ -656,7 +658,7 @@ export default function App() {
       if (mode === "mode_c" && lastFeedback) {
         await handleRefine(lastFeedback, "fast");
       } else if (mode !== "mode_c") {
-        await handleGenerate(lastUserInput);
+        await handleGenerate(lastUserInput, mode === "mode_d" ? { douyinScene: lastDouyinSceneRef.current } : undefined);
       }
     }
   }, [status, lastFeedback, lastUserInput, handleRefine, handleGenerate, mode]);
@@ -681,7 +683,7 @@ export default function App() {
         settings,
         extra: undefined,
         originalLyrics,
-        douyinScene: mode === "mode_d" ? "daily" : undefined,
+        douyinScene: mode === "mode_d" ? lastDouyinSceneRef.current : undefined,
         onSpeech: (speech) => {
           if (speechLogRef.current.length === 0) writeStreamText("");
           speechLogRef.current.push(speech);
@@ -730,6 +732,10 @@ export default function App() {
     chatHistoryRef.current = toChatMessages(ctx.conversation);
     setConversation(ctx.conversation);
     setMode(ctx.mode);
+    if (ctx.mode === "mode_d") {
+      const savedScene = (entry.song_plan as { mode_meta?: { douyin?: { scene?: string } } } | undefined)?.mode_meta?.douyin?.scene;
+      if (savedScene) lastDouyinSceneRef.current = savedScene;
+    }
     rosterRef.current = MODE_EXPERTS[ctx.mode].map((e) => e.id); // D-1：历史装载同步阵容序
     setLastUserInput(ctx.lastUserInput);
     setCurrentHistoryId(null);

@@ -176,6 +176,49 @@ pub async fn host_initial_plan<R: Runtime>(
     emit_progress(app, run_id, PipelineRole::Host, PhaseKind::Parsed, preview);
     let mut plan = ir.0;
     stamp_douyin_scene(req, &mut plan);
+    let mode_name = req.mode.to_str_name();
+    let original = req.original_lyrics_text();
+    for attempt in 0..2 {
+        let ctx = ValidateCtx {
+            mode: mode_name,
+            original_lyrics: original,
+            converged: None,
+        };
+        let issues = validate::validate(&plan, &ctx);
+        if validate::passed(&issues) {
+            break;
+        }
+        let hard_lines: Vec<String> = validate::hard_issues(&issues).iter().map(|i| i.line()).collect();
+        tracing::info!(
+            mode = %mode_name,
+            attempt = attempt + 1,
+            hard_count = hard_lines.len(),
+            "阶段0 初稿触发声韵/契约自愈重修"
+        );
+        emit_progress(
+            app,
+            run_id,
+            PipelineRole::Host,
+            PhaseKind::Structuring,
+            Some(format!("正在靶向精修 {} 项声韵/格律细节…", hard_lines.len())),
+        );
+        let repair_user = format!(
+            "{user}\n\n【初稿 JSON】\n{}\n\n【必须立即修正的声韵与契约硬伤（逐条彻底修复，保持立意锚点与全局主韵统一，输出完整 PlanIR JSON）】\n{}",
+            plan_to_checkpoint(&plan),
+            hard_lines.iter().map(|l| format!("- {l}")).collect::<Vec<_>>().join("\n")
+        );
+        let repair_msgs = vec![
+            json!({"role": "system", "content": system.clone()}),
+            json!({"role": "user", "content": repair_user}),
+        ];
+        if let Ok((repaired, resp2)) = llm::call_llm_structured::<PlanIr>(&call, repair_msgs, budget, Some(&hook)).await {
+            super::orchestrator::emit_usage(app, PipelineRole::Host, &resp2, run_id);
+            plan = repaired.0;
+            stamp_douyin_scene(req, &mut plan);
+        } else {
+            break;
+        }
+    }
     Ok(plan)
 }
 
@@ -298,6 +341,10 @@ pub async fn auditor_finalize<R: Runtime>(
 
     let mut plan = converged.clone();
     stamp_douyin_scene(req, &mut plan);
+    let _ = app.emit(
+        "pipeline",
+        PipelineEnvelope::new(run_id.to_string(), PipelineEvent::AuditStart),
+    );
     let ctx0 = ValidateCtx {
         mode: mode_name,
         original_lyrics: original,

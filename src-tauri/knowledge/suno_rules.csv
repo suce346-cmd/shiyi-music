@@ -2,12 +2,12 @@ rule,scenario,value_min,value_max,unit,description
 weirdness,all,10,35,,随机度：值越低生成越保守贴合 Style 描述；10-25 稳定可控适合画面明确的歌；26-35 自由适合探索性创作；超过 35 可能失控偏离主题
 style_influence,all,70,95,,Style 引导度：越高 Style Prompt 权重越大越贴合描述；70-85 平衡推荐档；86-95 强引导（风格明确时用）；低于 70 风格描述会被弱化
 audio_influence,all,0,0,,无参考音频（reference_audio=false）时必须为 0：否则 Suno 会尝试匹配不存在的音频导致生成漂移；reference_audio=true 时可非 0
-style_prompt_max_chars,all,0,350,字符,Style Prompt 上限 350 字符（含空格）：超过会被截断，信息块写完后必须自查长度
+style_prompt_max_chars,all,0,1000,字符,Style Prompt 上限 1000 字符（含空格）：对齐 Suno 物理上限，建议精炼在 8-15 个高权重声学标签内
 min_energy_gap,normal,3,10,级,最弱段与最强段能量差至少 3 级（0-10 标尺）：差太小全曲平淡无对比；差太大段落割裂
-min_instrument_gap,all,2,9,件,最弱段与最强段配器件数差至少 2 件：保证编曲层次变化，避免整曲同一配器密度
-instrument_max,all,3,7,件,全曲核心乐器上限 7 件：超过听感拥挤 Suno 容易糊成一团；弱段 3 件起
-min_instrument_weak,all,3,,件,最弱段至少 3 件（与单段 3-7 件下限一致）：低于 3 件听感单薄难以撑起段落层次
-min_instrument_strong,all,5,,件,最强段至少 5 件：少于 5 件撑不起高潮密度
+min_instrument_gap,all,2,9,件,最弱段与最强段配器件数差建议至少 2 件：保证编曲层次变化与进退场呼吸，避免整曲同一配器密度（极简编制可通过 exemptions 豁免）
+instrument_max,all,3,7,件,全曲核心乐器上限 7 件：超过听感拥挤 Suno 频谱容易糊成一团；遵循前景/中景/背景频谱预算
+min_instrument_weak,all,3,,件,常规最弱段参考 3 件（极简段 minimal=true 或 exemptions 声明可低至 1 件）：服务于段落对比
+min_instrument_strong,all,5,,件,常规最强段参考 4-5 件：通过配器加层或音区打开撑起高潮密度
 hook_min_count,douyin,2,,次,D 模式至少 2 个 Hook：抖音传播需要多点记忆
 verse_max_lines,douyin,0,4,行,抖音 Verse 上限 4 行：前奏短进副歌快
 line_max_chars,douyin,0,12,字,抖音每行不超过 12 字：短行易跟唱卡点清晰
@@ -35,10 +35,10 @@ style_arc_d_singlepeak,douyin,75,85,,抖音叙事型回落·单峰：Style 引�
 style_arc_d_loop,douyin,78,85,,抖音叙事型回落·回环：Style 引导度 78-85，Weirdness 20-28；叙事型例外专用（同 A/B style_arc_loop）
 hook_first,douyin,1,,,冷开或 Intro≤3 秒后紧接 Hook，Hook 须在前 10 秒落地：抖音完播率生死线
 stop_mark,douyin,1,,次,结尾骤停标记（骤停/all instruments cut）：抖音结尾留白制造循环播放冲动
-desc_line_max,all,0,200,字符,说明行整行（含方括号）不超过 200 字符：上限宽松但必须保乐器+行为动词，不得为缩短删乐器；超限会被 plan::validate 硬校验拦下
+desc_line_max,all,0,200,字符,说明行整行（含方括号）不超过 200 字符：聚焦段落局部变化量（Section Delta）与在场乐器+行为动词；超限会被 plan::validate 硬校验拦下
 no_full_band,all,0,,,禁 full band/all instruments 笼统写法：Suno 无法理解必须具体列乐器
 tag_list,all,1,,,结构标签用英文方括号（Verse/Chorus/Hook/Drop）：Suno 按标签识别段落结构
-line_break_rule,all,1,,,单空格等于弱停顿 换行等于强停顿：控制演唱呼吸点
+line_break_rule,all,1,,,一行一乐句自然呼吸：换行等于乐句边界与强停顿，禁止行内机械按词插空格切碎中文连读与声调包络
 no_slash,all,0,,,歌词禁 / 与 、：Suno 不识别这些符号会唱坏
 mark_system,all,1,,,人声标记体系：*假声* ~滑音 …拖长 [spoken] (ooh~)：Suno 可识别的人声表现标记
 verse2_new,all,1,,,Verse2 必须新增信息不重复：信息增量方向（后果/距离/新选择/时间推移/视角切换）

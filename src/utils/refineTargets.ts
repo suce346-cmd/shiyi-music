@@ -4,26 +4,27 @@
 import type { Mode, PipelineRoleKey } from "../types";
 
 export function estimateRefineTargets(feedback: string, mode: Mode): PipelineRoleKey[] {
+  const fb = feedback.toLowerCase();
   const out: PipelineRoleKey[] = [];
   const push = (r: PipelineRoleKey) => {
     if (!out.includes(r)) out.push(r);
   };
-  const has = (ks: string[]) => ks.some((k) => feedback.includes(k));
-  if (has(["歌词", "词", "句", "韵", "唱", "hook", "副歌", "主歌", "金句"])) {
+  const has = (ks: string[]) => ks.some((k) => fb.includes(k));
+  if (has(["歌词", "词", "句", "韵", "辙", "格律", "尾字", "锚点", "唱", "hook", "副歌", "主歌", "金句"])) {
     push(mode === "mode_c" ? "reviser" : "lyricist");
   }
   if (
-    has(["编曲", "配器", "乐器", "伴奏", "BPM", "bpm", "人声", "音色", "混音", "鼓", "吉他", "钢琴", "唢呐"])
+    has(["编曲", "配器", "乐器", "伴奏", "bpm", "人声", "音色", "混音", "和声", "前奏", "间奏", "尾奏", "减法", "抽空", "鼓", "吉他", "钢琴", "唢呐", "贝斯", "弦乐"])
   ) {
     push("producer");
   }
-  if (has(["情绪", "能量", "感觉", "氛围", "情感", "炸", "软", "嗨"])) {
+  if (has(["情绪", "能量", "感觉", "氛围", "情感", "立意", "留白", "高潮", "递进", "炸", "软", "嗨"])) {
     push("emotion");
   }
-  if (has(["抖音", "传播", "钩子", "洗脑", "爆", "魔性", "循环", "骤停"])) {
+  if (has(["抖音", "传播", "钩子", "洗脑", "爆", "魔性", "循环", "骤停", "卡点", "切片"])) {
     push(mode === "mode_d" ? "style_analyst" : "producer");
   }
-  if (has(["参数", "怪异度", "影响度", "Weirdness", "Influence"])) {
+  if (has(["参数", "怪异度", "影响度", "weirdness", "influence"])) {
     push("producer");
     push("emotion");
   }

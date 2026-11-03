@@ -76,6 +76,96 @@ export interface HistoryRendered {
   settings: string;
 }
 
+/** v3 歌曲展开模型（与 Rust `plan::PlotType` 对齐） */
+export type PlotType = "attitudinal" | "situational" | "narrative" | "expository";
+
+/** v3 创作立意五问与全局声律统筹（与 Rust `plan::SongIntent` 对齐） */
+export interface SongIntent {
+  plot_type: PlotType;
+  one_thing: string;
+  to_whom: string;
+  at_what_moment: string;
+  anchor_object: string;
+  rhyme_plan?: string | null;
+}
+
+/** v3 段落动静职能（与 Rust `plan::SectionMotion` 对齐） */
+export type SectionMotion = "push" | "stop";
+
+/** v3 刻意不对称与留白设计（与 Rust `plan::AsymmetryPlan` 对齐） */
+export interface AsymmetryPlan {
+  short_line?: string | null;
+  deliberate_unrhymed?: string | null;
+  chorus_variation?: string | null;
+  withholding?: string | null;
+}
+
+/** v3 全局风格与声场（与 Rust `plan::GlobalStyle` 对齐） */
+export interface GlobalStyle {
+  mood?: string | null;
+  genre: string[];
+  bpm?: number | null;
+  key?: string | null;
+  meter?: string | null;
+  vocal: string[];
+  instruments: string[];
+  arrangement_hook?: string | null;
+  arc?: string | null;
+  mix: string[];
+  negative: string[];
+}
+
+/** v3 段落结构（与 Rust `plan::Section` 对齐） */
+export interface SongSection {
+  kind: string;
+  label: string;
+  motion?: SectionMotion | null;
+  positive_local: string[];
+  negative_local: string[];
+  subtraction?: string | null;
+  energy?: number | null;
+  instruments: string[];
+  minimal: boolean;
+  target_seconds?: number | null;
+  lines: string[];
+}
+
+/** v3 Suno 参数设置（与 Rust `plan::SunoSettings` 对齐） */
+export interface SunoSettings {
+  weirdness: number;
+  style_influence: number;
+  variety: number;
+  vocal_gender?: "male" | "female" | null;
+  audio_influence?: number | null;
+  reference_audio?: boolean;
+}
+
+/** v3 SongPlan IR（与 Rust `plan::SongPlan` 对齐） */
+export interface SongPlan {
+  schema_version?: number;
+  title?: string | null;
+  intent?: SongIntent | null;
+  global?: GlobalStyle;
+  sections: Partial<SongSection>[];
+  settings?: SunoSettings;
+  mode_meta?: {
+    lyrics_lang?: OutputLang;
+    douyin?: {
+      scene?: string;
+      scene_source?: string;
+      clip?: { start_section: string; end_section: string; seconds: number };
+      hook_line?: string;
+      loop_tail?: boolean;
+    } | null;
+  };
+  asymmetry?: AsymmetryPlan | null;
+  exemptions?: string[];
+  notes?: string | null;
+  pronunciation_hints?: string | null;
+  persona?: string | null;
+  series_context?: string | null;
+}
+
 export interface HistoryEntry {
   id: string;
   mode: Mode;
@@ -90,8 +180,8 @@ export interface HistoryEntry {
   degraded?: string[];
   /** C5/ADR-3：终稿硬校验结论。旧记录没有此字段（与后端 serde 字段名同形 snake_case） */
   validation_passed?: boolean;
-  /** P1-10 / RULE-HISTORY-V2：SongPlan JSON（缺省未接线） */
-  song_plan?: unknown;
+  /** P1-10 / RULE-HISTORY-V2：SongPlan JSON（与后端 `plan::SongPlan` 对齐） */
+  song_plan?: SongPlan | unknown;
   /** P1-10：渲染四栏 */
   rendered?: HistoryRendered;
 }

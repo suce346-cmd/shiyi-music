@@ -1,5 +1,45 @@
 {
   "$defs": {
+    "AsymmetryPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "chorus_variation": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deliberate_unrhymed": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "short_line": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "withholding": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "chorus_variation",
+        "deliberate_unrhymed",
+        "short_line",
+        "withholding"
+      ],
+      "type": "object"
+    },
     "DouyinClip": {
       "additionalProperties": false,
       "properties": {
@@ -83,6 +123,13 @@
             "null"
           ]
         },
+        "arrangement_hook": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "bpm": {
           "maximum": 220,
           "minimum": 40,
@@ -121,6 +168,13 @@
           },
           "type": "array"
         },
+        "mood": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "negative": {
           "items": {
             "type": "string"
@@ -136,12 +190,14 @@
       },
       "required": [
         "arc",
+        "arrangement_hook",
         "bpm",
         "genre",
         "instruments",
         "key",
         "meter",
         "mix",
+        "mood",
         "negative",
         "vocal"
       ],
@@ -177,6 +233,26 @@
         "lyrics_lang"
       ],
       "type": "object"
+    },
+    "PlotType": {
+      "oneOf": [
+        {
+          "const": "attitudinal",
+          "type": "string"
+        },
+        {
+          "const": "situational",
+          "type": "string"
+        },
+        {
+          "const": "narrative",
+          "type": "string"
+        },
+        {
+          "const": "expository",
+          "type": "string"
+        }
+      ]
     },
     "SceneSource": {
       "enum": [
@@ -217,6 +293,17 @@
         "minimal": {
           "type": "boolean"
         },
+        "motion": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SectionMotion"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "negative_local": {
           "items": {
             "type": "string"
@@ -228,6 +315,13 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "subtraction": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "target_seconds": {
           "maximum": 600,
@@ -245,8 +339,10 @@
         "label",
         "lines",
         "minimal",
+        "motion",
         "negative_local",
         "positive_local",
+        "subtraction",
         "target_seconds"
       ],
       "type": "object"
@@ -267,6 +363,54 @@
         "end"
       ],
       "type": "string"
+    },
+    "SectionMotion": {
+      "oneOf": [
+        {
+          "const": "push",
+          "type": "string"
+        },
+        {
+          "const": "stop",
+          "type": "string"
+        }
+      ]
+    },
+    "SongIntent": {
+      "additionalProperties": false,
+      "properties": {
+        "anchor_object": {
+          "type": "string"
+        },
+        "at_what_moment": {
+          "type": "string"
+        },
+        "one_thing": {
+          "type": "string"
+        },
+        "plot_type": {
+          "$ref": "#/$defs/PlotType"
+        },
+        "rhyme_plan": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "to_whom": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "anchor_object",
+        "at_what_moment",
+        "one_thing",
+        "plot_type",
+        "rhyme_plan",
+        "to_whom"
+      ],
+      "type": "object"
     },
     "SunoSettings": {
       "additionalProperties": false,
@@ -330,8 +474,37 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "asymmetry": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AsymmetryPlan"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "exemptions": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "global": {
       "$ref": "#/$defs/GlobalStyle"
+    },
+    "intent": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SongIntent"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "mode_meta": {
       "$ref": "#/$defs/ModeMeta"
@@ -385,7 +558,10 @@
     }
   },
   "required": [
+    "asymmetry",
+    "exemptions",
     "global",
+    "intent",
     "mode_meta",
     "notes",
     "persona",

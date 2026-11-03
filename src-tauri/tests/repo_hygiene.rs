@@ -14,10 +14,18 @@ fn changelog_covers_current_version() {
     let cargo_ver = env!("CARGO_PKG_VERSION");
     let pkg = std::fs::read_to_string(repo().join("package.json")).unwrap();
     let pkg: serde_json::Value = serde_json::from_str(&pkg).unwrap();
-    assert_eq!(pkg["version"].as_str(), Some(cargo_ver), "package.json 与 Cargo.toml 版本不一致");
-    assert!(changelog.contains("\n## Unreleased"), "CHANGELOG 缺 Unreleased 段");
+    assert_eq!(
+        pkg["version"].as_str(),
+        Some(cargo_ver),
+        "package.json 与 Cargo.toml 版本不一致"
+    );
     assert!(
-        changelog.contains(&format!("\n## {cargo_ver}（")) || changelog.contains(&format!("\n## {cargo_ver} ")),
+        changelog.contains("\n## Unreleased"),
+        "CHANGELOG 缺 Unreleased 段"
+    );
+    assert!(
+        changelog.contains(&format!("\n## {cargo_ver}（"))
+            || changelog.contains(&format!("\n## {cargo_ver} ")),
         "CHANGELOG 缺当前版本 {cargo_ver} 段"
     );
 }
@@ -44,7 +52,8 @@ fn qa_jsonl_no_duplicate_content() {
 /// tauri-plugin-dialog 运行期加入 fs scope（导出到任意目录仍可用），不再需要全盘 `**`
 #[test]
 fn fs_write_scope_is_narrowed() {
-    let cap = std::fs::read_to_string(repo().join("src-tauri/capabilities/default.json")).unwrap();
+    let cap =
+        std::fs::read_to_string(repo().join("src-tauri/capabilities/default.json")).unwrap();
     let v: serde_json::Value = serde_json::from_str(&cap).unwrap();
     let perms = v["permissions"].as_array().unwrap();
     for p in perms {
@@ -52,7 +61,9 @@ fn fs_write_scope_is_narrowed() {
             for a in allow {
                 let path = a["path"].as_str().unwrap_or("");
                 assert!(
-                    ["$APPDATA/", "$DOWNLOAD/", "$DOCUMENT/"].iter().any(|pre| path.starts_with(pre)),
+                    ["$APPDATA/", "$DOWNLOAD/", "$DOCUMENT/"]
+                        .iter()
+                        .any(|pre| path.starts_with(pre)),
                     "fs scope 超出允许目录: {path}"
                 );
             }
@@ -63,7 +74,8 @@ fn fs_write_scope_is_narrowed() {
 /// P0-10：日志不落模型输出正文（信封门旧日志记录方案前 300 字）
 #[test]
 fn logs_do_not_record_model_output_head() {
-    let src = std::fs::read_to_string(repo().join("src-tauri/src/commands/orchestrator.rs")).unwrap();
+    let src =
+        std::fs::read_to_string(repo().join("src-tauri/src/commands/orchestrator.rs")).unwrap();
     let needle = ["output", "_head"].concat();
     assert_eq!(src.matches(needle.as_str()).count(), 0);
 }
@@ -120,7 +132,12 @@ fn removed_junk_assets_stay_removed() {
         assert!(!r.join(p).exists(), "已清理资产回流: {p}");
     }
     // 上移后的真源必须在
-    for p in ["docs/BLUEPRINT_v2.md", "docs/full-review-2026-10-20.md", "docs/RELEASE.md"] {
+    for p in [
+        "docs/BLUEPRINT_v2.md",
+        "docs/BLUEPRINT_v3_CONTRACT.md",
+        "docs/full-review-2026-10-20.md",
+        "docs/RELEASE.md",
+    ] {
         assert!(r.join(p).is_file(), "缺少文档真源: {p}");
     }
     let gi = std::fs::read_to_string(r.join(".gitignore")).unwrap();
@@ -136,4 +153,63 @@ fn removed_junk_assets_stay_removed() {
     ] {
         assert!(gi.lines().any(|l| l.trim() == pat), ".gitignore 缺 {pat}");
     }
+}
+
+/// v3 契约守护：全仓源码、知识库与文档严禁出现外部参考项目的身份指纹或连接指向
+#[test]
+fn no_external_reference_fingerprints() {
+    let r = repo();
+    let needles: Vec<String> = [
+        ["lyric-writing", "-skills"],
+        ["music-composition", "-skills"],
+        ["LYR-", "SPEC"],
+        ["ARR-", "SPEC"],
+        ["LYR-", "LINT"],
+        ["SPEC-", "LINT"],
+        ["lw-", "00"],
+        ["mc-", "00"],
+    ]
+    .iter()
+    .map(|p| p.concat())
+    .collect();
+
+    fn walk(dir: &Path, needles: &[String], hits: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, needles, hits);
+            } else if p.extension().and_then(|x| x.to_str()).is_some_and(|ext| {
+                ["rs", "ts", "tsx", "csv", "md", "json", "txt"].contains(&ext)
+            }) {
+                if p.file_name().and_then(|n| n.to_str()) == Some("repo_hygiene.rs") {
+                    continue;
+                }
+                let s = std::fs::read_to_string(&p).unwrap_or_default();
+                for n in needles {
+                    if s.contains(n.as_str()) {
+                        hits.push(format!("{}: {}", p.display(), n));
+                    }
+                }
+            }
+        }
+    }
+
+    let mut hits = Vec::new();
+    for sub in [
+        "src",
+        "src-tauri/src",
+        "src-tauri/knowledge",
+        "src-tauri/tests",
+        "docs",
+    ] {
+        walk(&r.join(sub), &needles, &mut hits);
+    }
+    assert!(
+        hits.is_empty(),
+        "发现外部参考项目身份指纹残留：\n{}",
+        hits.join("\n")
+    );
 }

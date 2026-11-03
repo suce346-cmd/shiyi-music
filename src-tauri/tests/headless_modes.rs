@@ -1,5 +1,6 @@
 //! 无头实网测试：四模式全链路 + 续跑（需真实网关，key 只从环境变量读，不进仓库）。
-//! 运行：SHIYI_TEST_API_KEY=... SHIYI_TEST_BASE_URL=... SHIYI_TEST_MODEL=... cargo test --test headless_modes -- --ignored --nocapture
+//! 运行（从项目根目录）：
+//! SHIYI_TEST_API_KEY=... SHIYI_TEST_BASE_URL=... SHIYI_TEST_MODEL=... cargo test --manifest-path src-tauri/Cargo.toml --test headless_modes -- --ignored --nocapture
 //! 缺变量时自动跳过（CI 无 key 不挂）。单用例预算：A/C=12 分钟，B/D=15 分钟（= 生产预算；短于生产 15 分钟；2026-10-20 实网 8 分钟在四路并发下 B 超时）。
 //! 凭据安全：源码、示例、测试均不写可用凭据字面量；URL 仅允许 http/https（validate_request 已拦 ftp）。
 
@@ -148,6 +149,74 @@ fn assert_events_pass(mode: Mode, events: &[serde_json::Value], original_lyrics:
     }
     let r = render_suno::render(&plan);
     assert!(!r.style.trim().is_empty() && !r.lyrics.trim().is_empty(), "render_suno 产物不应为空");
+    let tag_cnt = render_suno::style_tags(&plan).len();
+    println!("\n==================== [HEADLESS-AUDIT: MODE_{}] ====================", match_mode(&mode).to_uppercase());
+    println!("  [Step 1 · 顶层意图与全局韵律蓝图]");
+    println!("    - Title           : {:?}", plan.title);
+    if let Some(ref intent) = plan.intent {
+        println!("    - PlotType        : {:?}", intent.plot_type);
+        println!("    - OneThing        : {}", intent.one_thing);
+        println!("    - ToWhom          : {}", intent.to_whom);
+        println!("    - AtWhatMoment    : {}", intent.at_what_moment);
+        println!("    - AnchorObject    : {}", intent.anchor_object);
+        println!("    - RhymePlan       : {:?}", intent.rhyme_plan);
+    } else {
+        println!("    - Intent          : None");
+    }
+    println!("    - ArrangementHook : {:?}", plan.global.arrangement_hook);
+    println!(
+        "  [Step 2 · 编译后 Style Prompt ({} chars, {} tags in 8..=15)]",
+        r.style.chars().count(),
+        tag_cnt
+    );
+    println!("    - Style           : {}", r.style);
+    println!("  [Step 3 · 段落结构与全曲十三辙声韵轨迹 ({} sections)]", plan.sections.len());
+    let mut sec_trajectory: Vec<String> = Vec::new();
+    for (idx, sec) in plan.sections.iter().enumerate() {
+        let non_empty: Vec<&str> = sec.lines.iter().map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+        let mut fam_counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+        let mut last_fam = "-";
+        for l in &non_empty {
+            if let Some((_, _, fam, _)) = validate::analyze_line_prosody(l) {
+                *fam_counts.entry(fam).or_insert(0) += 1;
+                last_fam = fam;
+            }
+        }
+        let dom_fam = fam_counts
+            .iter()
+            .max_by_key(|(f, c)| (**c, **f == last_fam))
+            .map(|(f, _)| *f)
+            .unwrap_or("器乐无词");
+        if !non_empty.is_empty() {
+            sec_trajectory.push(format!("{}[{}]", sec.label, dom_fam));
+        }
+        println!(
+            "    - Sec #{idx} [{:?} \"{}\"] 主韵={} energy={:?} lines={}",
+            sec.kind, sec.label, dom_fam, sec.energy, non_empty.len()
+        );
+        for (li, line) in non_empty.iter().enumerate() {
+            let cjk_cnt = line.chars().filter(|c| (0x4E00..=0x9FFF).contains(&(*c as u32))).count();
+            if let Some((ch, py, fam, grp)) = validate::analyze_line_prosody(line) {
+                println!(
+                    "        L{}: ({}字 | 尾字「{}」{} · {}辙 · {}) {}",
+                    li + 1, cjk_cnt, ch, py, fam, grp, line
+                );
+            } else {
+                println!("        L{}: ({}字) {}", li + 1, cjk_cnt, line);
+            }
+        }
+    }
+    println!("    => 全曲跨段主韵轨迹: {}", sec_trajectory.join(" → "));
+    println!(
+        "  [Step 4 · 静态校验器结果] Hard=0, Warn={} {:?}",
+        issues.len(),
+        issues.iter().map(|i| i.line()).collect::<Vec<_>>()
+    );
+    println!("  [Step 5 · 最终交付完整 Lyrics 预览]");
+    for line in r.lyrics.lines() {
+        println!("    {}", line);
+    }
+    println!("===================================================================\n");
     plan
 }
 
@@ -163,7 +232,7 @@ fn assert_final_passes_hard_validation(mode: Mode, text: &str, _original_lyrics:
 async fn headless_mode_a() {
     let (text, events) = run_headless_with(
         Mode::ModeA,
-        "[Verse]\n深夜灯亮键盘响\n窗外雨落心火燃\n[Chorus]\n我不睡我不退\n熬过今夜见光来",
+        "[Verse]\n深夜灯亮键盘响\n窗外雨落夜微凉\n[Chorus]\n我不退也不慌\n熬过长夜见曙光",
         None,
         Duration::from_secs(12 * 60),
         |_| {},

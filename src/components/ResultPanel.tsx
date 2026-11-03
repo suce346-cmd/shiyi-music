@@ -53,8 +53,8 @@ export function parseEnergy(text: string): { display: string; sections: EnergySe
         // 单值取 X；区间（energy 3-4）取上限作为段落能量强度
         const energy = em[2] ? parseInt(em[2], 10) : parseInt(em[1], 10);
         sections.push({ label: currentLabel, energy });
-        // 移除能量标注（含前导逗号/空格），说明行保持干净（Suno 友好）
-        return line.replace(ENERGY_RE, "");
+        // 移除能量标注（含前导逗号/空格），若移除后竖线右侧为空则收拢为纯 [Label]，说明行保持干净（Suno 友好）
+        return line.replace(ENERGY_RE, "").replace(/\s*\|\s*\]$/, "]");
       }
       return line;
     })

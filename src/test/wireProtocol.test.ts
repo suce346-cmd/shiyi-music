@@ -3,7 +3,10 @@ import { describe, it, expect } from "vitest";
 import MODELS_SRC from "../../src-tauri/src/models/mod.rs?raw";
 import GATE_SRC from "../../src-tauri/src/commands/gate.rs?raw";
 import LLM_SRC from "../../src-tauri/src/commands/llm.rs?raw";
+import PLAN_SRC from "../../src-tauri/src/plan/mod.rs?raw";
+import ORCH_SRC from "../../src-tauri/src/commands/orchestrator.rs?raw";
 import TYPES_SRC from "../types/index.ts?raw";
+import REFINE_SRC from "../utils/refineTargets.ts?raw";
 
 /** 跨语言 wire-format 契约的**双向一致性锁**（第二十一批新增）。
  *
@@ -164,5 +167,67 @@ describe("wire-format 跨语言一致性（第二十一批）", () => {
     expect(rust.length, "llm.rs 未解析到 BackoffReason::as_str 取值（扫描面失效）").toBeGreaterThan(0);
     expect(ts, "前端 BackoffReason 与后端 llm::BackoffReason::as_str 不一致").toEqual(rust);
     expect(rust).toEqual(["network", "rate_limit", "server_error"]);
+  });
+
+  it("v3 SongPlan IR 核心结构体（SongPlan / SongIntent / AsymmetryPlan / GlobalStyle / Section / SunoSettings）字段前后端逐位一致", () => {
+    const rustStructFields = (src: string, name: string): string[] => {
+      const head = `pub struct ${name} {`;
+      const at = src.indexOf(head);
+      if (at < 0) return [];
+      const end = src.indexOf("}", at);
+      const body = src.slice(at + head.length, end);
+      return [...body.matchAll(/pub\s+([a-z_][a-z0-9_]*)\s*:/g)].map((m) => m[1]).sort();
+    };
+    const tsInterfaceFields = (src: string, name: string): string[] => {
+      const head = `export interface ${name} {`;
+      const at = src.indexOf(head);
+      if (at < 0) return [];
+      let depth = 0;
+      let end = -1;
+      for (let i = at + head.length - 1; i < src.length; i++) {
+        if (src[i] === "{") depth++;
+        else if (src[i] === "}") {
+          depth--;
+          if (depth === 0) {
+            end = i;
+            break;
+          }
+        }
+      }
+      const body = src.slice(at + head.length, end);
+      const topLines = body.split("\n").filter((l) => /^ {2}[a-z_][a-z0-9_]*\??\s*:/.test(l));
+      return topLines.map((l) => l.trim().split(/[?:]/)[0]).sort();
+    };
+
+    for (const [rustName, tsName] of [
+      ["SongPlan", "SongPlan"],
+      ["SongIntent", "SongIntent"],
+      ["AsymmetryPlan", "AsymmetryPlan"],
+      ["GlobalStyle", "GlobalStyle"],
+      ["Section", "SongSection"],
+      ["SunoSettings", "SunoSettings"],
+    ] as const) {
+      const rf = rustStructFields(PLAN_SRC, rustName);
+      const tf = tsInterfaceFields(TYPES_SRC, tsName);
+      expect(rf.length, `Rust ${rustName} 未解析到字段`).toBeGreaterThan(0);
+      expect(tf, `TS ${tsName} 与 Rust ${rustName} 字段集合不一致`).toEqual(rf);
+    }
+  });
+
+  it("反馈路由关键词表（orchestrator::roles_for_feedback ↔ refineTargets::estimateRefineTargets）前后端一致", () => {
+    const stripComments = (s: string) => s.split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");
+    const fnStart = ORCH_SRC.indexOf("pub fn roles_for_feedback");
+    const fnEnd = ORCH_SRC.indexOf("fn load_knowledge", fnStart);
+    const rustRegion = stripComments(ORCH_SRC.slice(fnStart, fnEnd));
+    const rustKeywords = [...rustRegion.matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
+    const tsStart = REFINE_SRC.indexOf("export function estimateRefineTargets");
+    const tsEnd = REFINE_SRC.indexOf("export const REFINE_TARGET_NAMES", tsStart);
+    const tsRegion = stripComments(REFINE_SRC.slice(tsStart, tsEnd));
+    const tsKeywords = [...tsRegion.matchAll(/"([^"]+)"/g)]
+      .map((m) => m[1])
+      .filter((k) => !["mode_c", "mode_d", "reviser", "lyricist", "producer", "emotion", "style_analyst"].includes(k))
+      .sort();
+    expect(rustKeywords.length).toBeGreaterThan(20);
+    expect(tsKeywords, "前端 refineTargets.ts 与后端 roles_for_feedback 关键词表不一致").toEqual(rustKeywords);
   });
 });

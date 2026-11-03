@@ -311,7 +311,7 @@ export default function RoundtablePanel({
               {validation.passed
                 ? t(locale, "round.valid.ok")
                 : `${t(locale, "round.valid.fail")} ${validation.issues.length}`}
-              {!validation.passed && validation.issues.length > 0 && (
+              {validation.issues.length > 0 && (
                 <ul className="mt-1 space-y-0.5 text-[10px]">
                   {validation.issues.map((i, idx) => <li key={idx}>· {i}</li>)}
                 </ul>

@@ -93,12 +93,12 @@ fn mode_c_line_alignment() {
     assert!(!r2.passed, "不等字数应打回");
 }
 
-/// Mode A/B：Style Prompt ≤350（超限打回）——助手单测；IR 接线见 plan::validate
+/// Mode A/B：Style Prompt ≤1000（超限打回）——助手单测；IR 接线见 plan::validate
 #[test]
 fn mode_ab_style_prompt_cap() {
     let long = "x".repeat(rules::STYLE_PROMPT_MAX_CHARS + 1);
     let issues = style_prompt_length_issues("mode_a", &long);
-    assert!(!issues.is_empty(), "超 350 字应打回，实际 {:?}", issues);
+    assert!(!issues.is_empty(), "超 1000 字应打回，实际 {:?}", issues);
 }
 
 /// Mode D：行长硬门经 plan::validate（文本 validate_douyin 已退役）

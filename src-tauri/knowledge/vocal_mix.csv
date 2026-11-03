@@ -3,9 +3,15 @@ V-01,vocal,清晰咬字,"clear diction, upfront lead vocal, articulate",字正�
 V-02,vocal,气声转音,"breathy vocal, smooth runs, subtle vibrato, intimate",气声修饰|转音顺滑|细腻处理,主唱带气声质感，转音自然顺滑，尾音带轻微颤音,主歌/低能段,截图V2
 V-03,vocal,情绪哭腔,"emotional delivery, slight cry in chorus, building intensity, restrained",情感递进|哭腔质感|感染力强,副歌人声带轻微哭腔，情绪逐层递进，感染力强而不煽情,副歌,截图V3
 V-04,vocal,和声伴唱,"layered harmonies, double-tracked backing vocals, lead-forward",多层和声|背景伴唱|层次分明,副歌加入双层和声伴唱，和声不盖过主唱,副歌,截图V4
+V-05,vocal,脆弱微破音,"fragile close-mic vocal, slight voice crack on high notes, audible breath",脆弱感|微破音|呼吸声,高音处带真实的微哑与脆弱边缘感，呼吸声可闻，打破AI完美修音假感,主歌/桥段/情感转折,v3声学库
+V-06,vocal,胸声撕裂爆发,"powerful chest-voice belt, raw gritty edge, wide dynamic range",胸声爆发|颗粒撕裂|高能顶峰,副歌全开真声胸腔共鸣，边缘带自然颗粒感与爆发张力,副歌/高潮,v3声学库
+V-07,vocal,慵懒半说半唱,"lazy behind-the-beat drawl, conversational half-spoken delivery, relaxed pocket",慵懒拖拍|半说半唱|松弛律动,节拍略微靠后，像深夜面对面说话般松弛自然，拒绝朗诵腔,主歌/R&B/说唱/抖音,v3声学库
+V-08,vocal,八度与三度叠唱,"octave double-tracked lead, lush 3rd harmony stack, call-and-response ad-libs",八度叠唱|三度和声|呼应伴唱,副歌叠加八度齐唱与三度和声墙，句尾带呼应衬词，撑满副歌宽度,副歌/终局副歌,v3声学库
 M-01,mix,人声贴唱,"vocal-forward, centered, close-mic, moderate reverb",居中贴耳|融合度高|混响适中,人声位于声场正中央，贴耳不遥远，混响适中,全程,截图M1
 M-02,mix,低频增强,"full low-end, deep sub-bass, punchy kick, tight lows",低频饱满|下潜扎实|弹性鼓点,低频贝斯饱满有力，鼓点弹性强，低频不浑浊,全程,截图M2
 M-03,mix,空间混响,"wide stereo field, lush hall reverb, spacious",声场宽阔|定位清晰|空间感,整体加入适度空间混响，声场宽阔不拥挤,全程,截图M3
 M-04,mix,分轨层次感,"clear separation, balanced EQ, transparent mix",分层清晰|三频均衡|通透干净,人声、鼓点、贝斯、旋律乐器分层清晰，高中低频均衡,全程,截图M4
 M-05,mix,母带质感,"mastered, wide dynamics, polished, hi-fi",母带质感|动态充足|高清晰度,经过母带处理，动态范围足，接近专业发行级,全程,截图M5
 M-06,mix,手机扬声器友好,"phone-speaker friendly, vocal-forward mids, controlled low-end",手机扬声器|外放友好|低频适度,人声中频突出，低频不过重，适配手机外放与短视频卡点剪辑,抖音/全程,蓝图§6.2
+M-07,mix,干声贴耳磁带暖感,"dry close-mic bedroom intimacy, subtle analog tape saturation, organic room tone",干声贴耳|磁带暖感|卧室呼吸,极少空间混响，保留手指擦弦与房间底噪，模拟磁带微饱和的温暖颗粒感,民谣/独立/主歌,v3声学库
+M-08,mix,侧链脉冲与瞬态雕刻,"sidechained sub-bass pocket, crisp transient punch, carved midrange for vocal",侧链呼吸|瞬态锐利|中频让位,低频与底鼓严密咬合，中频乐器向两侧让开中央通道给主唱，瞬态干净利落,流行/电子/摇滚/抖音,v3声学库

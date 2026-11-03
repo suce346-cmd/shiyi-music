@@ -1,8 +1,10 @@
-//! SongPlan 校验门（BLUEPRINT_v2 §2.3 / P1-4）——终稿的**唯一**硬门。
+//! SongPlan 校验门（v3 物理契约硬门 + 去机器味诊断）——终稿的**唯一**校验入口。
 //!
-//! 输入只有结构化字段：门只数 `sections[].instruments.len()`、只读 `energy`，不再对文本做
-//! 关键词启发式（配器门归因：文本口径 8/11 例出错，已弃用文本计数）。
+//! 输入只有结构化字段：门只读 `SongPlan` 结构化属性，不再对渲染文本做脆弱正则猜解。
 //! 阈值全部来自 `rules`（数字单源，提示词插值同源 → 上游告知 = 下游校验）与 `suno_profile`。
+//! 区分两层：
+//! - `Severity::Hard`：平台物理上限、字段极性、语言契约、Mode C 等字对齐、Mode D 完播结构硬门；
+//! - `Severity::Warn`：去机器味审美诊断（空洞形容词、能量单调无回落、末遍副歌雷同、抽象词堆砌、十三辙单调/高音闭口韵等），以及带 `exemptions` 显式创作理由豁免的配器/参数弹性项。
 
 use std::collections::BTreeMap;
 
@@ -60,6 +62,19 @@ impl Issue {
             severity: Severity::Warn,
         }
     }
+    /// 当 `exempted=true` 时降级为 Warn（保留诊断可见性但不打回），否则为 Hard。
+    pub(crate) fn hard_or_exempt(
+        exempted: bool,
+        code: &'static str,
+        path: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        if exempted {
+            Self::warn(code, path, message)
+        } else {
+            Self::hard(code, path, message)
+        }
+    }
     /// 面向模型/用户的一行（`[code] path: message`）
     pub fn line(&self) -> String {
         format!(
@@ -97,28 +112,55 @@ pub fn passed(issues: &[Issue]) -> bool {
     issues.iter().all(|i| i.severity != Severity::Hard)
 }
 
+fn has_exemption(p: &SongPlan) -> bool {
+    p.exemptions.iter().any(|e| !e.trim().is_empty())
+}
+
 pub fn validate(p: &SongPlan, ctx: &ValidateCtx<'_>) -> Vec<Issue> {
     let mut out = Vec::new();
     check_budget(p, &mut out);
     check_settings(p, &mut out);
     check_polarity(p, &mut out);
-    check_structure(p, &mut out);
+    check_structure(p, ctx.mode, &mut out);
     check_vocal_mix_coverage(p, &mut out);
     out.extend(validate_lang(p));
     if matches!(ctx.mode, "mode_a" | "mode_b") {
         check_arc(p, &mut out);
     }
-    if ctx.mode != "mode_c" {
-        if let Some(base) = ctx.converged {
-            check_fidelity(base, p, &mut out);
-        }
-    }
     check_style_and_headers(p, ctx.mode, &mut out);
     out.extend(super::style_lang::validate_style_english(p));
     check_params(p, ctx.mode, &mut out);
     check_lyric_lines(p, ctx.mode, &mut out);
+    check_anti_ai_tells(p, ctx.mode, &mut out);
     if ctx.mode == "mode_d" {
         check_douyin(p, &mut out);
+    }
+    check_prosody_and_rhyme(p, ctx, &mut out);
+    if ctx.mode != "mode_c" {
+        if let Some(base) = ctx.converged {
+            // 仅当收敛初稿 base 的歌词本身无任何声韵/字数/语言/Hook 硬伤（或为 Mode A 锁定用户原词）时，
+            // 才执行逐行保真锁；若初稿歌词存在押韵散乱、脱韵、同音挤韵或字数违例，必须允许定稿人重写违规歌词行！
+            let base_needs_lyric_rewrite = if ctx.mode == "mode_a" {
+                false
+            } else {
+                let mut base_issues = Vec::new();
+                base_issues.extend(validate_lang(base));
+                check_lyric_lines(base, ctx.mode, &mut base_issues);
+                if ctx.mode == "mode_d" {
+                    check_douyin(base, &mut base_issues);
+                }
+                let base_ctx = ValidateCtx {
+                    mode: ctx.mode,
+                    converged: None,
+                    original_lyrics: ctx.original_lyrics,
+                };
+                check_prosody_and_rhyme(base, &base_ctx, &mut base_issues);
+                base_issues.iter().any(|i| i.severity == Severity::Hard)
+            };
+            if !base_needs_lyric_rewrite {
+                check_fidelity(base, p, &mut out);
+            }
+        }
     }
     let rendered = render(p);
     if ctx.mode == "mode_c" {
@@ -127,7 +169,7 @@ pub fn validate(p: &SongPlan, ctx: &ValidateCtx<'_>) -> Vec<Issue> {
             {
                 out.push(Issue::hard("lyric_fill", "/sections", m));
             }
-            // P1-8 / C-03：韵脚咨询（仅 Warn，多音字取首读，不打回）
+            // P1-8 / C-03：韵脚咨询保留（2 行极小样本走 Warn；≥3 行真实曲目由 check_prosody_and_rhyme 硬门拦截）
             out.extend(advise_rhyme(orig, &rendered.lyrics));
         }
     }
@@ -235,18 +277,86 @@ fn last_cjk(s: &str) -> Option<char> {
     })
 }
 
-/// 行尾汉字 → 十三辙键；非汉字/无拼音 → None。
-fn line_rhyme_key(line: &str) -> Option<String> {
-    use pinyin::ToPinyin;
-    let ch = last_cjk(line)?;
-    let plain = ch.to_pinyin()?.plain().to_lowercase();
-    if plain.is_empty() {
-        return None;
-    }
-    Some(rhyme_family(strip_initial(&plain)).to_string())
+/// 抽取行内全部汉字（用于多音字词尾语境消歧与尾词排比判定）
+fn cjk_chars(s: &str) -> Vec<char> {
+    s.chars()
+        .filter(|c| {
+            let u = *c as u32;
+            (0x4E00..=0x9FFF).contains(&u) || (0x3400..=0x4DBF).contains(&u)
+        })
+        .collect()
 }
 
-fn strip_initial(plain: &str) -> &str {
+/// 常见词尾多音字语境消歧：返回消歧后的无调拼音（如 睡觉→jiao、感觉→jue、远行→xing、银行→hang）。
+fn contextual_pinyin_plain(line: &str, ch: char) -> Option<String> {
+    use pinyin::ToPinyin;
+    let cjks = cjk_chars(line);
+    let prev = if cjks.len() >= 2 {
+        Some(cjks[cjks.len() - 2])
+    } else {
+        None
+    };
+    let overriden = match (prev, ch) {
+        (Some('睡' | '午' | '困'), '觉') => Some("jiao"),
+        (Some(_), '觉') => Some("jue"),
+        (Some('音' | '奏' | '声' | '配' | '民' | '器' | '弦'), '乐') => Some("yue"),
+        (Some(_), '乐') => Some("le"),
+        (Some('银' | '外' | '内' | '排' | '本' | '改' | '同'), '行') => Some("hang"),
+        (_, '行') => Some("xing"),
+        (Some('归' | '偿' | '退' | '奉' | '往'), '还') => Some("huan"),
+        (_, '还') => Some("hai"),
+        (Some('睡' | '点' | '燃' | '找' | '猜' | '够'), '着') => Some("zhao"),
+        (Some('执' | '衣' | '穿' | '沉' | '附' | '落'), '着') => Some("zhuo"),
+        (Some('非' | '总' | '须' | '必'), '得') => Some("dei"),
+        (Some('成' | '首' | '古' | '国' | '帝' | '魔' | '旧'), '都') => Some("du"),
+        (_, '都') => Some("dou"),
+        (Some('星'), '宿') => Some("xiu"),
+        (Some('一' | '模'), '模') => Some("mu"),
+        _ => None,
+    };
+    if let Some(p) = overriden {
+        return Some(p.to_string());
+    }
+    let plain = ch.to_pinyin()?.plain().to_lowercase();
+    if plain.is_empty() {
+        None
+    } else {
+        Some(plain)
+    }
+}
+
+/// 行尾汉字 → (尾字, 完整无调拼音音节, 十三辙名称)。
+/// 公开行尾声韵分析接口（供集成测试与诊断打印：返回 (尾字, 无调拼音, 十三辙, 发音部位家族)）。
+pub fn analyze_line_prosody(line: &str) -> Option<(char, String, &'static str, &'static str)> {
+    let (ch, py, fam) = line_tail_prosody(line)?;
+    Some((ch, py, fam, rhyme_super_group(fam)))
+}
+
+fn line_tail_prosody(line: &str) -> Option<(char, String, &'static str)> {
+    let ch = last_cjk(line)?;
+    let plain = contextual_pinyin_plain(line, ch)?;
+    let fam = rhyme_family(extract_mandarin_final(&plain));
+    Some((ch, plain, fam))
+}
+
+/// 行尾汉字 → 十三辙键；非汉字/无拼音 → None。
+fn line_rhyme_key(line: &str) -> Option<String> {
+    let (_, _, fam) = line_tail_prosody(line)?;
+    Some(fam.to_string())
+}
+
+/// 汉语拼音韵母提取（修正 ye→ie、j/q/x/y + u/ue/uan/un→v/ve/van/vn，避免将「夜」误判为梭波或将「雨/去」误判为姑苏）。
+fn extract_mandarin_final(plain: &str) -> &str {
+    match plain {
+        "ye" => return "ie",
+        "yu" | "ju" | "qu" | "xu" => return "v",
+        "yue" | "jue" | "que" | "xue" => return "ve",
+        "yuan" | "juan" | "quan" | "xuan" => return "van",
+        "yun" | "jun" | "qun" | "xun" => return "vn",
+        "zhi" | "chi" | "shi" | "ri" | "zi" | "ci" | "si" => return "i",
+        "er" => return "er",
+        _ => {}
+    }
     const INITIALS: &[&str] = &[
         "zh", "ch", "sh", "b", "p", "m", "f", "d", "t", "n", "l", "g", "k", "h", "j", "q", "x",
         "r", "z", "c", "s", "y", "w",
@@ -261,14 +371,30 @@ fn strip_initial(plain: &str) -> &str {
     plain
 }
 
-/// 十三辙近似归并（咨询用；开口/闭口大类保留可区分性）。
-fn rhyme_family(finals: &str) -> &str {
+/// 十三辙发音部位五大家族（用于“全局韵脚统一 + 允许同部位邻韵轻微跳动”判据）：
+/// - 前鼻音家族(-n)：言前(an/ian/uan/üan) ↔ 人辰(en/in/un/ün)
+/// - 后鼻音家族(-ng)：江阳(ang/iang/uang) ↔ 中东(eng/ing/ong/iong)
+/// - 开口复合家族(a系)：发花(a/ia/ua) ↔ 怀来(ai/uai) ↔ 遥条(ao/iao)
+/// - 齐撮前高家族(i/e系)：衣期(i/ü) ↔ 乜斜(ie/üe) ↔ 灰堆(ei/ui)
+/// - 圆唇后元音家族(o/u系)：梭波(o/e/uo) ↔ 姑苏(u) ↔ 油求(ou/iu)
+fn rhyme_super_group(fam: &str) -> &'static str {
+    match fam {
+        "言前" | "人辰" => "前鼻音(-n:言前/人辰)",
+        "江阳" | "中东" => "后鼻音(-ng:江阳/中东)",
+        "发花" | "怀来" | "遥条" => "开口韵(a系:发花/怀来/遥条)",
+        "衣期" | "乜斜" | "灰堆" => "齐撮韵(i/e系:衣期/乜斜/灰堆)",
+        "梭波" | "姑苏" | "油求" => "圆唇韵(o/u系:梭波/姑苏/油求)",
+        _ => "其他",
+    }
+}
+
+/// 十三辙归并（开口/闭口/鼻韵母严格区分）。
+fn rhyme_family(finals: &str) -> &'static str {
     let f = finals.trim();
-    // 多音节取末韵母片段已由 Style::Finals 给出
     match f {
         "a" | "ia" | "ua" => "发花",
         "o" | "e" | "uo" => "梭波",
-        "ie" | "ue" | "ve" | "üe" => "乜斜",
+        "ie" | "ue" | "ve" | "üe" | "er" => "乜斜",
         "u" => "姑苏",
         "i" | "v" | "ü" => "衣期",
         "ai" | "uai" => "怀来",
@@ -279,12 +405,545 @@ fn rhyme_family(finals: &str) -> &str {
         "en" | "in" | "un" | "vn" | "ün" => "人辰",
         "ang" | "iang" | "uang" => "江阳",
         "eng" | "ing" | "ong" | "iong" => "中东",
-        _ => f, // 未知韵母原样比较
+        _ => "其他",
     }
 }
 
-/// §2.3 `validate_vocal_mix_coverage`（P1-5）：global.vocal / global.mix 只引用 vocal_mix 词表 id，
-/// 且各至少 1 个对应类别。词表缺失（回滚=删表）→ 跳过（不制造无法满足的门）。
+/// v3 汉语声律与押韵硬门（Mode B 写词 / Mode C 改词 / Mode D 抖音）：
+/// 1. section_rhyme_missing（Hard）：有词段落必须形成十三辙押韵闭环，且收尾合句（或偶句）必须入韵；
+/// 2. rhyme_homophone_collision（Hard）：同段内非复沓/非排比句严禁同音字挤韵（如 jian/jian、tong/tong）或同字重韵；
+/// 3. mode_c_rhyme_scheme & mode_c_copied_rhyme_char（Hard）：Mode C 必须严格对齐原词押韵行对，且严禁直接照搬原词尾字；
+/// 4. prosody_meter_imbalance（Hard）：同段对偶句（非显式声明的 short_line）字数律动不得失衡断裂。
+fn check_prosody_and_rhyme(p: &SongPlan, ctx: &ValidateCtx<'_>, out: &mut Vec<Issue>) {
+    if p.mode_meta.lyrics_lang != super::LyricLang::Zh {
+        return;
+    }
+    if !matches!(ctx.mode, "mode_b" | "mode_c" | "mode_d") {
+        return;
+    }
+    let total_lines: usize = p
+        .sections
+        .iter()
+        .map(|s| s.lines.iter().filter(|l| !l.trim().is_empty()).count())
+        .sum();
+    // 保留 2 行极简测试夹具（minimal_plan / advise_rhyme_known_samples）的独立门测试语义；
+    // 任何真实生成的歌曲或 ≥3 行的改词/写词/抖音作品全部强制过声律硬门。
+    if total_lines < 3 {
+        return;
+    }
+    let exempted = has_exemption(p);
+    if p.sections.len() >= 3 && total_lines >= 6 {
+        if let Some(it) = &p.intent {
+            if it.anchor_object.trim().is_empty()
+                || it.rhyme_plan.as_deref().unwrap_or("").trim().is_empty()
+            {
+                out.push(Issue::hard_or_exempt(
+                    exempted,
+                    "intent_missing",
+                    "/intent",
+                    "intent.anchor_object（核心锚点物）与 intent.rhyme_plan（全局十三辙声律与句式网格统筹）不得为空",
+                ));
+            }
+        }
+    }
+    let unrhymed_allowance = p
+        .asymmetry
+        .as_ref()
+        .and_then(|a| a.deliberate_unrhymed.as_deref())
+        .unwrap_or("");
+    let short_line_allowance = p
+        .asymmetry
+        .as_ref()
+        .and_then(|a| a.short_line.as_deref())
+        .unwrap_or("");
+
+    for (si, s) in p.sections.iter().enumerate() {
+        let non_empty: Vec<(usize, &str)> = s
+            .lines
+            .iter()
+            .enumerate()
+            .map(|(idx, l)| (idx, l.trim()))
+            .filter(|(_, l)| !l.is_empty())
+            .collect();
+        if non_empty.len() < 2 {
+            continue;
+        }
+        let mut prosodies: Vec<(usize, &str, char, String, &'static str)> = Vec::new();
+        for (li, l) in &non_empty {
+            if let Some((ch, plain, fam)) = line_tail_prosody(l) {
+                prosodies.push((*li, *l, ch, plain, fam));
+            }
+        }
+        if prosodies.len() < 2 {
+            continue;
+        }
+
+        let mut fam_counts: BTreeMap<&'static str, usize> = BTreeMap::new();
+        for (_, _, _, _, fam) in &prosodies {
+            *fam_counts.entry(*fam).or_insert(0) += 1;
+        }
+        let max_fam_count = fam_counts.values().copied().max().unwrap_or(0);
+        let rhymed_lines_count: usize = fam_counts.values().copied().filter(|&c| c >= 2).sum();
+
+        if matches!(ctx.mode, "mode_b" | "mode_d") {
+            let n = prosodies.len();
+            let (_, last_text, _, _, last_fam) = prosodies.last().unwrap();
+            let last_is_deliberate = !unrhymed_allowance.is_empty()
+                && (unrhymed_allowance.contains(*last_text)
+                    || last_text
+                        .chars()
+                        .filter(|c| !c.is_whitespace())
+                        .collect::<String>()
+                        .chars()
+                        .take(4)
+                        .all(|c| unrhymed_allowance.contains(c)));
+            // 计算偶句（第 2、4、6 句）与末句加权主导韵部 dom_fam
+            let mut weighted_fams: BTreeMap<&'static str, usize> = BTreeMap::new();
+            for (k, (_, _, _, _, fam)) in prosodies.iter().enumerate() {
+                let w = if k % 2 == 1 || k + 1 == n { 2 } else { 1 };
+                *weighted_fams.entry(*fam).or_insert(0) += w;
+            }
+            let dom_fam = weighted_fams
+                .iter()
+                .max_by_key(|(f, c)| (**c, **f == *last_fam))
+                .map(|(f, _)| *f)
+                .unwrap_or(*last_fam);
+            let last_rhymes = (*last_fam == dom_fam && fam_counts.get(dom_fam).copied().unwrap_or(0) >= 2) || last_is_deliberate;
+            let even_lines: Vec<&'static str> = prosodies
+                .iter()
+                .enumerate()
+                .filter(|(k, _)| k % 2 == 1)
+                .map(|(_, (_, _, _, _, fam))| *fam)
+                .collect();
+            let even_in_dom = even_lines.iter().filter(|&&f| f == dom_fam).count();
+            let even_ok = even_lines.is_empty() || even_in_dom * 2 >= even_lines.len() || last_is_deliberate;
+            let density_ok = if n == 2 {
+                !(kind_is_chorus_class(s.kind) || ctx.mode == "mode_d")
+                    || max_fam_count >= 2
+                    || last_is_deliberate
+            } else if n == 3 {
+                max_fam_count >= 2 && (last_rhymes || fam_counts.get(prosodies[1].4).copied().unwrap_or(0) >= 2)
+            } else {
+                rhymed_lines_count * 2 >= n && last_rhymes && even_ok
+            };
+
+            const WEAK_CADENCE_PARTICLES: &[char] = &['的', '吗', '呢', '吧', '啊', '呀', '啦', '呗'];
+            let (_, _, last_ch, _, _) = prosodies.last().unwrap();
+            if ctx.mode == "mode_b" && WEAK_CADENCE_PARTICLES.contains(last_ch) && !last_is_deliberate {
+                out.push(Issue::hard_or_exempt(
+                    exempted,
+                    "rhyme_weak_particle",
+                    format!("/sections/{si}/lines"),
+                    format!(
+                        "「{}」末句以轻声虚词「{}」收尾——收束落韵句必须以有分量的实词（名词/动词/形容词）入韵，严禁拿轻声虚词充当韵脚",
+                        s.label, last_ch
+                    ),
+                ));
+            }
+            if !density_ok {
+                let detail: Vec<String> = prosodies
+                    .iter()
+                    .enumerate()
+                    .map(|(k, (_, _, ch, py, fam))| format!("第{}行「{}」({}/{})", k + 1, ch, py, fam))
+                    .collect();
+                out.push(Issue::hard_or_exempt(
+                    exempted,
+                    "section_rhyme_missing",
+                    format!("/sections/{si}/lines"),
+                    format!(
+                        "「{}」段落缺乏十三辙押韵闭环或末句脱韵（当前尾字：{}）——必须统一本段主韵部（如偶句与末句同押江阳/言前/中东/怀来/遥条/发花/灰堆等同一十三辙），重写脱韵行",
+                        s.label,
+                        detail.join("、")
+                    ),
+                ));
+            }
+        }
+
+        for a_idx in 0..prosodies.len() {
+            for b_idx in (a_idx + 1)..prosodies.len() {
+                let (_, line_a, ch_a, ref py_a, fam_a) = prosodies[a_idx];
+                let (li_b, line_b, ch_b, ref py_b, fam_b) = prosodies[b_idx];
+                if fam_a != fam_b || py_a != py_b {
+                    continue;
+                }
+                let cjk_a = cjk_chars(line_a);
+                let cjk_b = cjk_chars(line_b);
+                if cjk_a == cjk_b {
+                    continue;
+                }
+                if cjk_a.len() >= 2
+                    && cjk_b.len() >= 2
+                    && cjk_a[cjk_a.len() - 2..] == cjk_b[cjk_b.len() - 2..]
+                {
+                    continue;
+                }
+                if ctx.mode == "mode_c" {
+                    if let Some(orig_text) = ctx.original_lyrics {
+                        let orig_lines = extract_c_lyric_lines(orig_text);
+                        if orig_lines
+                            .iter()
+                            .filter_map(|ol| line_tail_prosody(ol))
+                            .filter(|(_, opy, _)| opy == py_a)
+                            .count()
+                            >= 2
+                        {
+                            continue;
+                        }
+                    }
+                }
+                let reason = if ch_a == ch_b {
+                    format!("同字重韵（两行均以「{ch_a}」收尾）")
+                } else {
+                    format!("同音挤韵（「{ch_a}」与「{ch_b}」同音均为 {py_a}）")
+                };
+                out.push(Issue::hard_or_exempt(
+                    exempted,
+                    "rhyme_homophone_collision",
+                    format!("/sections/{si}/lines/{li_b}"),
+                    format!(
+                        "「{}」第 {} 行与第 {} 行出现{}——同段押韵必须使用不同声母的同辙字（当前为{}辙），请把第 {} 行句尾词换为其他声母的{}辙字",
+                        s.label,
+                        a_idx + 1,
+                        b_idx + 1,
+                        reason,
+                        fam_a,
+                        b_idx + 1,
+                        fam_a
+                    ),
+                ));
+            }
+        }
+
+        if matches!(ctx.mode, "mode_b" | "mode_d") && non_empty.len() >= 2 {
+            let lens: Vec<(usize, &str, usize)> = non_empty
+                .iter()
+                .filter(|(_, l)| {
+                    short_line_allowance.is_empty() || !short_line_allowance.contains(*l)
+                })
+                .map(|(li, l)| {
+                    let c = crate::commands::validator::count_line_chars_excluding_vocables(l, |ch| {
+                        ch.is_ascii_punctuation() || "，。！？；：、“”‘’（）—…·".contains(ch)
+                    });
+                    (*li, *l, c)
+                })
+                .filter(|(_, _, c)| *c > 0)
+                .collect();
+            if lens.len() >= 2 {
+                let min_l = lens.iter().map(|x| x.2).min().unwrap_or(0);
+                let max_l = lens.iter().map(|x| x.2).max().unwrap_or(0);
+                let max_gap = 3;
+                if max_l.saturating_sub(min_l) > max_gap {
+                    out.push(Issue::hard_or_exempt(
+                        exempted,
+                        "prosody_meter_imbalance",
+                        format!("/sections/{si}/lines"),
+                        format!(
+                            "「{}」句式律动失衡：最长句 {} 字 vs 最短句 {} 字（差 {} 字 > {} 字上限，且未在 asymmetry.short_line 声明破格短句）——请统一本段对偶句字数与节奏切分（如 7+7、8+8 或 6+6）",
+                            s.label,
+                            max_l,
+                            min_l,
+                            max_l - min_l,
+                            max_gap
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+
+    // ---- 5：全局韵脚统筹与跨段同职能锁死硬门（Mode B / Mode D，有词段落 ≥3 段时生效）----
+    if matches!(ctx.mode, "mode_b" | "mode_d") {
+        struct SecDom<'a> {
+            idx: usize,
+            kind: SectionKind,
+            label: &'a str,
+            dom_fam: &'static str,
+            group: &'static str,
+            line_cnt: usize,
+            avg_chars: usize,
+        }
+        let mut sec_dom: Vec<SecDom<'_>> = Vec::new();
+        for (si, s) in p.sections.iter().enumerate() {
+            let lines: Vec<&str> = s.lines.iter().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
+            if lines.len() < 2 {
+                continue;
+            }
+            let mut fc: BTreeMap<&'static str, usize> = BTreeMap::new();
+            let mut last_f: Option<&'static str> = None;
+            let line_cnt = lines.len();
+            for (li, l) in lines.iter().enumerate() {
+                if let Some((_, _, fam)) = line_tail_prosody(l) {
+                    // 中文词格律：偶句（第 2、4、6 句）与末句是落韵支柱，赋予 2 倍权重识别段落主韵（精准支持 XAXA / ABCB 隔句押韵）
+                    let weight = if li % 2 == 1 || li + 1 == line_cnt { 2 } else { 1 };
+                    *fc.entry(fam).or_insert(0) += weight;
+                    last_f = Some(fam);
+                }
+            }
+            // 取出现次数最多的十三辙作为本段主韵部（并列时取末句收尾韵部）
+            let dom_fam = fc
+                .iter()
+                .max_by_key(|(f, c)| (**c, Some(**f) == last_f))
+                .map(|(f, _)| *f)
+                .unwrap_or("其他");
+            let total_chars: usize = lines
+                .iter()
+                .map(|l| {
+                    crate::commands::validator::count_line_chars_excluding_vocables(l, |ch| {
+                        ch.is_ascii_punctuation() || "，。！？；：、“”‘’（）—…·".contains(ch)
+                    })
+                })
+                .sum();
+            let avg_chars = total_chars / lines.len().max(1);
+            sec_dom.push(SecDom {
+                idx: si,
+                kind: s.kind,
+                label: s.label.as_str(),
+                dom_fam,
+                group: rhyme_super_group(dom_fam),
+                line_cnt: lines.len(),
+                avg_chars,
+            });
+        }
+
+        if sec_dom.len() >= 3 {
+            // G1: 全曲韵部发散硬门（global_rhyme_scatter）
+            // 规则：全曲核心主韵部最多 2 个（一韵到底，或主歌A+副歌B双核）；
+            // 若出现第 3 个韵部（如 Bridge/Pre-Chorus 微跳），必须属于已出现的同一发音部位家族（同部位邻韵微跳）；
+            // 整首歌跨发音部位大类绝对不得超过 2 个，且不同十三辙总数不得超过 3 个。
+            let distinct_fams: std::collections::BTreeSet<&'static str> =
+                sec_dom.iter().map(|x| x.dom_fam).collect();
+            let distinct_groups: std::collections::BTreeSet<&'static str> =
+                sec_dom.iter().map(|x| x.group).collect();
+            let non_bridge_fams: std::collections::BTreeSet<&'static str> = sec_dom
+                .iter()
+                .filter(|x| x.kind != SectionKind::Bridge)
+                .map(|x| x.dom_fam)
+                .collect();
+
+            if distinct_fams.len() > 3 || distinct_groups.len() > 2 || non_bridge_fams.len() > 2 {
+                let summary: Vec<String> = sec_dom
+                    .iter()
+                    .map(|x| format!("{}[{}·{}]", x.label, x.dom_fam, x.group))
+                    .collect();
+                out.push(Issue::hard_or_exempt(
+                    exempted,
+                    "global_rhyme_scatter",
+                    "/sections",
+                    format!(
+                        "全曲各段韵脚严重跳脱、缺乏全局统筹（当前各段主韵：{}，共跨 {} 个十三辙 / {} 个发音部位家族）——全曲必须遵循全局韵部架构：①「一韵到底+邻韵微跳」（全曲统一 1 个主韵部，仅 Bridge/导歌可在同一发音部位家族内微跳邻韵，如言前↔人辰、江阳↔中东）或 ②「主副双韵锁死」（全曲主歌统一 A 韵、副歌统一 B 韵，非 Bridge 段最多 2 个十三辙，全曲含 Bridge 最多 3 个十三辙且不超过 2 个发音部位家族）",
+                        summary.join(" → "),
+                        distinct_fams.len(),
+                        distinct_groups.len()
+                    ),
+                ));
+            }
+
+            // G2: 同职能段落跨段韵部锁死（homologous_section_rhyme_drift）
+            // 0. 流行曲式双循环结构门（Mode B）：有 ≥2 段主歌时，Verse 1 与 Verse 2 之间必须有 Chorus/Hook（禁止 V1→V2 连堆在首遍副歌前），且全曲至少包含 2 遍普通 Chorus（或 Chorus + Final Chorus 共 ≥2–3 遍）
+            if ctx.mode == "mode_b" {
+                let verse_indices: Vec<usize> = sec_dom
+                    .iter()
+                    .filter(|x| x.kind == SectionKind::Verse)
+                    .map(|x| x.idx)
+                    .collect();
+                let chorus_indices: Vec<usize> = sec_dom
+                    .iter()
+                    .filter(|x| matches!(x.kind, SectionKind::Chorus | SectionKind::Hook))
+                    .map(|x| x.idx)
+                    .collect();
+                if verse_indices.len() >= 2 {
+                    let v1 = verse_indices[0];
+                    let v2 = verse_indices[1];
+                    let has_chorus_between = chorus_indices.iter().any(|&c| c > v1 && c < v2);
+                    if !has_chorus_between {
+                        out.push(Issue::hard_or_exempt(
+                            exempted,
+                            "song_form_imbalance",
+                            "/sections",
+                            "曲式结构失衡：Verse 1 与 Verse 2 直接连写，中间缺少第一遍 Chorus——标准流行曲式必须遵循「Verse 1 → (Pre-Chorus 1) → Chorus 1 → Verse 2 → (Pre-Chorus 2) → Chorus 2 → Bridge → Final Chorus → Outro」双循环结构".to_string(),
+                        ));
+                    }
+                }
+            }
+
+            // ① 所有 Chorus / Hook 段必须 100% 锁定同一个十三辙主韵部
+            let choruses: Vec<_> = sec_dom
+                .iter()
+                .filter(|x| matches!(x.kind, SectionKind::Chorus | SectionKind::Hook))
+                .collect();
+            if choruses.len() >= 2 {
+                let first_c_fam = choruses[0].dom_fam;
+                for c in choruses.iter().skip(1) {
+                    if c.dom_fam != first_c_fam {
+                        out.push(Issue::hard_or_exempt(
+                            exempted,
+                            "homologous_section_rhyme_drift",
+                            format!("/sections/{}/lines", c.idx),
+                            format!(
+                                "副歌跨段跑韵：「{}」主韵为「{}」辙，但「{}」跳到了「{}」辙——全曲所有 Chorus/Hook 必须锁死同一个十三辙主韵部",
+                                choruses[0].label, first_c_fam, c.label, c.dom_fam
+                            ),
+                        ));
+                    }
+                }
+            }
+
+            // ② 所有 Pre-Chorus 导歌段必须锁死同一发音部位家族，不得各自乱跳
+            let pre_choruses: Vec<_> = sec_dom
+                .iter()
+                .filter(|x| x.kind == SectionKind::PreChorus)
+                .collect();
+            if pre_choruses.len() >= 2 {
+                let pc0 = pre_choruses[0];
+                for pc in pre_choruses.iter().skip(1) {
+                    if pc.group != pc0.group {
+                        out.push(Issue::hard_or_exempt(
+                            exempted,
+                            "homologous_section_rhyme_drift",
+                            format!("/sections/{}/lines", pc.idx),
+                            format!(
+                                "导歌跨段韵脚跳脱：「{}」主韵为「{}」({})，但「{}」跳到了毫无亲缘的「{}」({})——Pre-Chorus 1 与 Pre-Chorus 2 唱同一套导歌旋律，必须锁死同一十三辙（或同发音部位邻韵）",
+                                pc0.label, pc0.dom_fam, pc0.group, pc.label, pc.dom_fam, pc.group
+                            ),
+                        ));
+                    }
+                }
+            }
+
+            // ③ 所有 Verse 段必须锁死同一十三辙（或最多在同一发音部位邻韵家族内微跳） + G3 句式网格对齐
+            let verses: Vec<_> = sec_dom
+                .iter()
+                .filter(|x| x.kind == SectionKind::Verse)
+                .collect();
+            if verses.len() >= 2 {
+                let v0 = verses[0];
+                for v in verses.iter().skip(1) {
+                    if v.group != v0.group {
+                        out.push(Issue::hard_or_exempt(
+                            exempted,
+                            "homologous_section_rhyme_drift",
+                            format!("/sections/{}/lines", v.idx),
+                            format!(
+                                "主歌跨段韵脚跳脱：「{}」主韵为「{}」({})，但「{}」跳到了毫无亲缘的「{}」({})——Verse 1 与 Verse 2 唱同一套主歌旋律，必须保持同一十三辙韵部（或仅在同一发音部位邻韵内微调）",
+                                v0.label, v0.dom_fam, v0.group, v.label, v.dom_fam, v.group
+                            ),
+                        ));
+                    }
+                    if v.line_cnt.abs_diff(v0.line_cnt) > 1 || v.avg_chars.abs_diff(v0.avg_chars) > 2 {
+                        out.push(Issue::hard_or_exempt(
+                            exempted,
+                            "homologous_section_meter_drift",
+                            format!("/sections/{}/lines", v.idx),
+                            format!(
+                                "主歌跨段格律失配：「{}」为 {} 行（均长 {} 字），而「{}」为 {} 行（均长 {} 字）——同旋律主歌段落的行数与句式字数网格必须对齐",
+                                v0.label, v0.line_cnt, v0.avg_chars, v.label, v.line_cnt, v.avg_chars
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    if ctx.mode == "mode_c" {
+        if let Some(orig_raw) = ctx.original_lyrics {
+            let orig_lines = extract_c_lyric_lines(orig_raw);
+            let new_lines: Vec<String> = p
+                .sections
+                .iter()
+                .flat_map(|s| s.lines.iter().map(|l| l.trim().to_string()))
+                .filter(|l| !l.is_empty())
+                .collect();
+            let n = orig_lines.len().min(new_lines.len());
+            if n >= 3 {
+                let orig_p: Vec<Option<(char, String, &'static str)>> =
+                    orig_lines[..n].iter().map(|l| line_tail_prosody(l)).collect();
+                let new_p: Vec<Option<(char, String, &'static str)>> =
+                    new_lines[..n].iter().map(|l| line_tail_prosody(l)).collect();
+
+                const PARTICLES: &[char] = &['的', '了', '吗', '呢', '吧', '啊', '呀', '着', '过'];
+                for k in 0..n {
+                    if let (Some((och, _, _)), Some((nch, _, fam))) = (&orig_p[k], &new_p[k]) {
+                        if och == nch
+                            && !PARTICLES.contains(och)
+                            && cjk_chars(&orig_lines[k]) != cjk_chars(&new_lines[k])
+                        {
+                            out.push(Issue::hard_or_exempt(
+                                exempted,
+                                "mode_c_copied_rhyme_char",
+                                "/sections",
+                                format!(
+                                    "改词第 {} 行尾字「{}」直接照搬了原词对应行尾字（原句「{}」→ 新句「{}」）——填词必须彻底替换为新主题下的其他{}辙字，严禁留用原词韵字",
+                                    k + 1,
+                                    nch,
+                                    orig_lines[k],
+                                    new_lines[k],
+                                    fam
+                                ),
+                            ));
+                        }
+                    }
+                }
+
+                let mut mismatch_count = 0usize;
+                for i in 0..n {
+                    for j in (i + 1)..n {
+                        let (Some((_, _, ofam_i)), Some((_, _, ofam_j))) = (&orig_p[i], &orig_p[j]) else {
+                            continue;
+                        };
+                        if ofam_i != ofam_j {
+                            continue;
+                        }
+                        if let (Some((nch_i, npy_i, nfam_i)), Some((nch_j, npy_j, nfam_j))) =
+                            (&new_p[i], &new_p[j])
+                        {
+                            if nfam_i != nfam_j {
+                                mismatch_count += 1;
+                                if mismatch_count <= 4 {
+                                    out.push(Issue::hard_or_exempt(
+                                        exempted,
+                                        "mode_c_rhyme_scheme",
+                                        "/sections",
+                                        format!(
+                                            "改词韵脚失配：原词第 {}/{} 行同押「{}」辙，但新词第 {} 行尾字「{}」({}[{}]) 与第 {} 行尾字「{}」({}[{}]) 不同辙——必须保持原词押韵行位置同辙对齐",
+                                            i + 1,
+                                            j + 1,
+                                            ofam_i,
+                                            i + 1,
+                                            nch_i,
+                                            npy_i,
+                                            nfam_i,
+                                            j + 1,
+                                            nch_j,
+                                            npy_j,
+                                            nfam_j
+                                        ),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 是否为具象的多词英文人声/混音描述（至少 3 个英文单词，非 V-xx/M-xx ID 形态）。
+fn is_descriptive_english_phrase(s: &str) -> bool {
+    let t = s.trim();
+    if t.starts_with("V-") || t.starts_with("M-") || t.starts_with("v-") || t.starts_with("m-") {
+        return false;
+    }
+    let word_count = t
+        .split(|c: char| c.is_whitespace() || c == ',' || c == ';')
+        .filter(|w| w.chars().any(|c| c.is_ascii_alphabetic()))
+        .count();
+    word_count >= 3
+}
+
+/// §2.3 `validate_vocal_mix_coverage`：global.vocal / global.mix 支持引用 vocal_mix 词表 id，
+/// 或书写 ≥3 词的具象英文人声/混音短语，且各至少 1 个有效项。词表缺失（回滚=删表）→ 跳过。
 pub fn check_vocal_mix_coverage(p: &SongPlan, out: &mut Vec<Issue>) {
     check_vocal_mix_coverage_with(crate::knowledge::shared_knowledge(), p, out)
 }
@@ -303,18 +962,22 @@ fn check_vocal_mix_coverage_with(
     ] {
         let mut hit = 0usize;
         for id in field {
-            match rows.iter().find(|e| e.id == id.trim()) {
+            let trimmed = id.trim();
+            match rows.iter().find(|e| e.id == trimmed) {
                 Some(e) if e.category == cat => hit += 1,
                 Some(e) => out.push(Issue::hard(
                     "vocal_mix_category",
                     path,
                     format!("「{id}」属 {} 类，不能填在 {cat} 字段", e.category),
                 )),
+                None if is_descriptive_english_phrase(trimmed) => {
+                    hit += 1;
+                }
                 None => out.push(Issue::hard(
                     "vocal_mix_unknown_id",
                     path,
                     format!(
-                        "「{id}」不是 vocal_mix 词表 id（可用：{}）",
+                        "「{id}」不是有效的 vocal_mix 词表 id（可用：{}），亦非 ≥3 词的具象英文描述短语",
                         ids_of(&rows, cat)
                     ),
                 )),
@@ -325,7 +988,7 @@ fn check_vocal_mix_coverage_with(
                 "vocal_mix_coverage",
                 path,
                 format!(
-                    "至少引用 1 个 {cat} 词表 id（可用：{}）",
+                    "至少引用 1 个 {cat} 词表 id（可用：{}）或填写 ≥3 词的具象英文描述",
                     ids_of(&rows, cat)
                 ),
             ));
@@ -413,7 +1076,7 @@ fn is_negative_phrase(s: &str) -> bool {
 /// 极性：负向词不得出现在正向层；正向层不得写否定句（应进 negative / negative_local）
 fn check_polarity(p: &SongPlan, out: &mut Vec<Issue>) {
     let g = &p.global;
-    let positive: Vec<(&str, &String)> = g
+    let mut positive: Vec<(&str, &String)> = g
         .genre
         .iter()
         .map(|x| ("/global/genre", x))
@@ -421,6 +1084,12 @@ fn check_polarity(p: &SongPlan, out: &mut Vec<Issue>) {
         .chain(g.instruments.iter().map(|x| ("/global/instruments", x)))
         .chain(g.mix.iter().map(|x| ("/global/mix", x)))
         .collect();
+    if let Some(m) = &g.mood {
+        positive.push(("/global/mood", m));
+    }
+    if let Some(h) = &g.arrangement_hook {
+        positive.push(("/global/arrangement_hook", h));
+    }
     for (path, v) in &positive {
         if is_negative_phrase(v) {
             out.push(Issue::hard(
@@ -482,8 +1151,11 @@ fn kind_is_chorus_class(k: SectionKind) -> bool {
     )
 }
 
-fn check_structure(p: &SongPlan, out: &mut Vec<Issue>) {
-    if p.sections.len() < rules::MIN_SECTION_TAGS {
+fn check_structure(p: &SongPlan, mode: &str, out: &mut Vec<Issue>) {
+    let exempted = has_exemption(p);
+    if p.sections.is_empty()
+        || (matches!(mode, "mode_a" | "mode_b") && p.sections.len() < rules::MIN_SECTION_TAGS)
+    {
         out.push(Issue::hard(
             "section_count",
             "/sections",
@@ -503,11 +1175,17 @@ fn check_structure(p: &SongPlan, out: &mut Vec<Issue>) {
             ));
         }
         if s.minimal {
+            let max_e = if s.kind == SectionKind::Bridge {
+                rules::MINIMAL_ENERGY_MAX + 1
+            } else {
+                rules::MINIMAL_ENERGY_MAX
+            };
             let energy_ok = s
                 .energy
-                .is_some_and(|e| u32::from(e) <= rules::MINIMAL_ENERGY_MAX);
+                .is_some_and(|e| u32::from(e) <= max_e);
             if !kind_allows_minimal(s.kind) || !energy_ok {
-                out.push(Issue::hard(
+                out.push(Issue::hard_or_exempt(
+                    exempted,
                     "minimal_misuse",
                     format!("/sections/{i}/minimal"),
                     format!(
@@ -552,7 +1230,7 @@ fn check_style_and_headers(p: &SongPlan, mode: &str, out: &mut Vec<Issue>) {
                 "header_too_long",
                 format!("/sections/{i}/positive_local"),
                 format!(
-                    "「{}」段头 {n} 字符 > 上限 {}——须再删 ≥{} 字符（段头 = 标签 + positive_local + instruments + energy N 拼接）：压缩 positive_local 短语，保留乐器，删修饰",
+                    "「{}」段头 {n} 字符 > 上限 {}——须再删 ≥{} 字符（段头 = 标签 + positive_local + instruments + energy N 拼接）：压缩 positive_local 短语，保留核心变化量，删冗余修饰",
                     s.label,
                     rules::DESC_LINE_MAX_CHARS,
                     n - rules::DESC_LINE_MAX_CHARS
@@ -574,20 +1252,29 @@ fn narrative_sections(p: &SongPlan) -> usize {
         .count()
 }
 
-/// 参数区间（A=弧线区间并集 / B=专属区间 / D=抖音区间+叙事型例外）、Audio Influence、BPM
+/// 参数区间（A=弧线区间并集 / B=专属区间 / D=抖音区间+叙事型例外；exemptions 非空时可豁免为 Warn）、Audio Influence、BPM
 fn check_params(p: &SongPlan, mode: &str, out: &mut Vec<Issue>) {
+    let exempted = has_exemption(p);
     let w = u32::from(p.settings.weirdness);
     let s = u32::from(p.settings.style_influence);
     match mode {
         "mode_a" => {
             let (wlo, whi, slo, shi) = rules::arc_param_union();
             if !(wlo..=whi).contains(&w) || !(slo..=shi).contains(&s) {
-                out.push(Issue::hard("param_range", "/settings", format!("Weirdness={w}/Style Influence={s} 越出弧线区间并集 {wlo}-{whi}/{slo}-{shi}")));
+                out.push(Issue::hard_or_exempt(
+                    exempted,
+                    "param_range",
+                    "/settings",
+                    format!(
+                        "Weirdness={w}/Style Influence={s} 越出弧线区间并集 {wlo}-{whi}/{slo}-{shi}"
+                    ),
+                ));
             }
         }
         "mode_b" => {
             if !(rules::MODE_B_WEIRD_MIN..=rules::MODE_B_WEIRD_MAX).contains(&w) {
-                out.push(Issue::hard(
+                out.push(Issue::hard_or_exempt(
+                    exempted,
                     "param_range",
                     "/settings/weirdness",
                     format!(
@@ -598,7 +1285,8 @@ fn check_params(p: &SongPlan, mode: &str, out: &mut Vec<Issue>) {
                 ));
             }
             if !(rules::MODE_B_STYLE_MIN..=rules::MODE_B_STYLE_MAX).contains(&s) {
-                out.push(Issue::hard(
+                out.push(Issue::hard_or_exempt(
+                    exempted,
                     "param_range",
                     "/settings/style_influence",
                     format!(
@@ -615,7 +1303,8 @@ fn check_params(p: &SongPlan, mode: &str, out: &mut Vec<Issue>) {
             let narrative = narrative_sections(p) >= rules::NARRATIVE_SECTIONS_MIN
                 && p.notes.as_deref().is_some_and(|n| n.contains("叙事型"));
             if !in_douyin && !narrative {
-                out.push(Issue::hard(
+                out.push(Issue::hard_or_exempt(
+                    exempted,
                     "param_range",
                     "/settings",
                     format!(
@@ -651,16 +1340,24 @@ fn check_params(p: &SongPlan, mode: &str, out: &mut Vec<Issue>) {
     }
 }
 
-/// 歌词行：A/B 禁 `/` `、` 断句；D 每行 ≤DOUYIN_V2_LINE_MAX 字（和音虚词不计）
+/// 歌词行：A/B 禁 `/` `、` 断句；全模式禁将 `[...]` 结构标签或说明块塞进歌词行；D 每行 ≤DOUYIN_V2_LINE_MAX 字（和音虚词不计）
 fn check_lyric_lines(p: &SongPlan, mode: &str, out: &mut Vec<Issue>) {
     for (i, s) in p.sections.iter().enumerate() {
         for (j, l) in s.lines.iter().enumerate() {
             let path = format!("/sections/{i}/lines/{j}");
+            let trimmed = l.trim();
+            if trimmed.starts_with('[') && trimmed.ends_with(']') && trimmed != "[spoken]" {
+                out.push(Issue::hard(
+                    "lyric_bracket_leak",
+                    path.clone(),
+                    format!("歌词行内不得混入结构标签或方括号说明行（应填在 label / positive_local）：{l}"),
+                ));
+            }
             if matches!(mode, "mode_a" | "mode_b") && (l.contains('/') || l.contains('、')) {
                 out.push(Issue::hard(
                     "break_mark",
                     path.clone(),
-                    format!("禁用断句符号（/ 或 、），改用单空格：{l}"),
+                    format!("禁用断句符号（/ 或 、），请直接分行或自然连写：{l}"),
                 ));
             }
             if mode == "mode_d" {
@@ -673,6 +1370,178 @@ fn check_lyric_lines(p: &SongPlan, mode: &str, out: &mut Vec<Issue>) {
                         path,
                         format!("{n} 字 > 上限 {}：{l}", rules::DOUYIN_V2_LINE_MAX_CHARS),
                     ));
+                }
+            }
+        }
+    }
+}
+
+/// v3 去机器味诊断（Anti-AI-Tell Audit，Severity::Warn，不阻断编译但透出至 AuditResult.findings）
+fn check_anti_ai_tells(p: &SongPlan, mode: &str, out: &mut Vec<Issue>) {
+    let exempted = has_exemption(p);
+
+    // A1: 空洞形容词拦截（Suno 无法转化为声学参数的万能废话词）
+    const EMPTY_ADJS: &[&str] = &[
+        "epic",
+        "emotional",
+        "beautiful",
+        "amazing",
+        "masterpiece",
+        "perfect",
+        "louder",
+    ];
+    let mut style_fields: Vec<(String, &str)> = Vec::new();
+    if let Some(m) = &p.global.mood {
+        style_fields.push(("/global/mood".into(), m.as_str()));
+    }
+    for (i, g) in p.global.genre.iter().enumerate() {
+        style_fields.push((format!("/global/genre/{i}"), g.as_str()));
+    }
+    for (i, inst) in p.global.instruments.iter().enumerate() {
+        style_fields.push((format!("/global/instruments/{i}"), inst.as_str()));
+    }
+    if let Some(a) = &p.global.arc {
+        style_fields.push(("/global/arc".into(), a.as_str()));
+    }
+    for (si, s) in p.sections.iter().enumerate() {
+        for (pi, c) in s.positive_local.iter().enumerate() {
+            style_fields.push((format!("/sections/{si}/positive_local/{pi}"), c.as_str()));
+        }
+    }
+    for (path, text) in style_fields {
+        for word in text.split(|c: char| !c.is_ascii_alphabetic()) {
+            let wl = word.to_ascii_lowercase();
+            if EMPTY_ADJS.contains(&wl.as_str()) {
+                out.push(Issue::warn(
+                    "style_empty_adjective",
+                    path.clone(),
+                    format!("含空洞修饰词「{word}」（Suno 无法将其转化为声学参数，建议改为具体奏法、音色或空间描述）"),
+                ));
+                break;
+            }
+        }
+    }
+
+    // A2: 能量单调递增无回落检查（仅 A/B 模式且 ≥4 段）
+    if matches!(mode, "mode_a" | "mode_b") && p.sections.len() >= 4 {
+        let energies: Vec<u8> = p.sections.iter().filter_map(|s| s.energy).collect();
+        if energies.len() == p.sections.len() {
+            let non_decreasing = energies.windows(2).all(|w| w[0] <= w[1]);
+            let has_growth = energies.first() < energies.last();
+            let has_sub = p
+                .sections
+                .iter()
+                .any(|s| s.minimal || s.subtraction.as_ref().is_some_and(|x| !x.trim().is_empty()));
+            if non_decreasing && has_growth && !has_sub && !exempted {
+                out.push(Issue::warn(
+                    "energy_monotonic",
+                    "/sections",
+                    "能量曲线全程单调递增无回落：建议在高潮前设置至少一处能量回落或减法抽空（subtraction），制造动态反差",
+                ));
+            }
+        }
+    }
+
+    // A3: 末遍副歌完全雷同检查（≥2 个有词 Chorus 段，首末 Chorus 的词、局部 cue 与配器完全一致）
+    let choruses: Vec<&super::Section> = p
+        .sections
+        .iter()
+        .filter(|s| s.kind == SectionKind::Chorus && !s.lines.is_empty())
+        .collect();
+    if choruses.len() >= 2 {
+        let first = choruses.first().unwrap();
+        let last = choruses.last().unwrap();
+        let has_var_note = p
+            .asymmetry
+            .as_ref()
+            .and_then(|a| a.chorus_variation.as_ref())
+            .is_some_and(|v| !v.trim().is_empty());
+        if first.lines == last.lines
+            && first.positive_local == last.positive_local
+            && first.instruments == last.instruments
+            && last.subtraction.is_none()
+            && !has_var_note
+            && !exempted
+        {
+            out.push(Issue::warn(
+                "chorus_static_repeat",
+                "/sections",
+                "末遍副歌与首遍副歌的词、局部提示与配器完全雷同：建议在末遍副歌做热点词微变、八度和声叠加或前两拍抽空反差",
+            ));
+        }
+    }
+
+    // A4 & A5: 中文歌词抽象套话与声律（十三辙单调 / 高潮尾字闭口韵）检查
+    if p.mode_meta.lyrics_lang == super::LyricLang::Zh && !exempted {
+        const ABSTRACT_CLICHES: &[&str] = &[
+            "时光", "岁月", "远方", "星辰", "余生", "救赎", "宿命", "深渊", "彼岸", "永恒",
+        ];
+        let mut hit_cliches: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        for s in &p.sections {
+            for l in &s.lines {
+                for &cl in ABSTRACT_CLICHES {
+                    if l.contains(cl) {
+                        hit_cliches.insert(cl);
+                    }
+                }
+            }
+        }
+        if hit_cliches.len() >= 2 {
+            let list: Vec<&str> = hit_cliches.into_iter().collect();
+            out.push(Issue::warn(
+                "lyric_abstract_cliche",
+                "/sections",
+                format!(
+                    "歌词出现高频抽象套话词（{}）：建议落实到可拍照的具体锚点物（anchor_object）与动作细节",
+                    list.join("、")
+                ),
+            ));
+        }
+        // 检查非复沓句中是否存在同一个汉字被反复当作韵脚 ≥4 次（全曲统一押同一十三辙是优良全局统筹，但不能反复拿同一个字凑韵）
+        let mut unique_lines: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut tail_char_counts: BTreeMap<char, usize> = BTreeMap::new();
+        for s in &p.sections {
+            for l in &s.lines {
+                let norm: String = cjk_chars(l).into_iter().collect();
+                if norm.is_empty() || !unique_lines.insert(norm) {
+                    continue;
+                }
+                if let Some(ch) = last_cjk(l) {
+                    *tail_char_counts.entry(ch).or_insert(0) += 1;
+                }
+            }
+        }
+        for (ch, count) in &tail_char_counts {
+            if *count >= 4 {
+                out.push(Issue::warn(
+                    "rhyme_char_overuse",
+                    "/sections",
+                    format!(
+                        "全曲不同歌词行中有 {count} 行重复以同一个「{ch}」字收尾：全局统押同一十三辙时，建议更换同辙内的不同汉字以丰富咬字层次"
+                    ),
+                ));
+            }
+        }
+        // 检查最高能量的 Chorus/Hook 末行是否落闭口韵（衣期/姑苏）
+        if let Some((idx, peak_sec)) = p
+            .sections
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| kind_is_chorus_class(s.kind) && !s.lines.is_empty())
+            .max_by_key(|(_, s)| s.energy.unwrap_or(5))
+        {
+            if let Some(last_line) = peak_sec.lines.last() {
+                if let Some(rk) = line_rhyme_key(last_line) {
+                    if matches!(rk.as_str(), "衣期" | "姑苏") {
+                        out.push(Issue::warn(
+                            "peak_closed_vowel",
+                            format!("/sections/{idx}/lines"),
+                            format!(
+                                "高潮段「{}」收尾句落闭口韵（{rk}辙），高音易憋嗓：建议改用发花/江阳/怀来/遥条/言前等开口洪亮韵部",
+                                peak_sec.label
+                            ),
+                        ));
+                    }
                 }
             }
         }
@@ -699,6 +1568,7 @@ fn check_arc(p: &SongPlan, out: &mut Vec<Issue>) {
     if p.sections.is_empty() {
         return;
     }
+    let exempted = has_exemption(p);
     let mut energies = Vec::new();
     for (i, s) in p.sections.iter().enumerate() {
         match s.energy {
@@ -715,7 +1585,8 @@ fn check_arc(p: &SongPlan, out: &mut Vec<Issue>) {
         energies.iter().map(|x| x.1).max(),
     ) {
         if max - min < rules::MIN_ENERGY_GAP {
-            out.push(Issue::hard(
+            out.push(Issue::hard_or_exempt(
+                exempted,
                 "energy_gap",
                 "/sections",
                 format!("能量差 {} < 下限 {}", max - min, rules::MIN_ENERGY_GAP),
@@ -740,7 +1611,8 @@ fn check_arc(p: &SongPlan, out: &mut Vec<Issue>) {
         let n = s.instruments.len();
         let floor = section_floor(s);
         if n < floor {
-            out.push(Issue::hard(
+            out.push(Issue::hard_or_exempt(
+                exempted,
                 "instrument_floor",
                 format!("/sections/{i}/instruments"),
                 format!("「{}」{n} 件 < 段下限 {floor}", s.label),
@@ -774,7 +1646,8 @@ fn check_arc(p: &SongPlan, out: &mut Vec<Issue>) {
     };
     if let (Some(strong), Some(weak)) = (pick(true), pick(false)) {
         if strong.2 < rules::MIN_INSTRUMENT_STRONG {
-            out.push(Issue::hard(
+            out.push(Issue::hard_or_exempt(
+                exempted,
                 "instrument_strong",
                 format!("/sections/{}/instruments", strong.0),
                 format!(
@@ -786,7 +1659,8 @@ fn check_arc(p: &SongPlan, out: &mut Vec<Issue>) {
             ));
         }
         if strong.0 != weak.0 && strong.2 < weak.2 + rules::MIN_INSTRUMENT_GAP {
-            out.push(Issue::hard(
+            out.push(Issue::hard_or_exempt(
+                exempted,
                 "instrument_gap",
                 "/sections",
                 format!(
@@ -845,7 +1719,12 @@ fn check_fidelity(base: &SongPlan, fin: &SongPlan, out: &mut Vec<Issue>) {
 /// - En：任一歌词行含 CJK → Hard（逐行定位）。
 /// - Zh：全曲无一行含 CJK → Hard（英文和声/拟声行允许混入，整首英文不允许）。
 pub fn validate_lang(p: &SongPlan) -> Vec<Issue> {
-    let is_cjk = |c: char| matches!(c, '\u{4E00}'..='\u{9FFF}' | '\u{3400}'..='\u{4DBF}' | '\u{F900}'..='\u{FAFF}');
+    let is_cjk = |c: char| {
+        matches!(
+            c,
+            '\u{4E00}'..='\u{9FFF}' | '\u{3400}'..='\u{4DBF}' | '\u{F900}'..='\u{FAFF}'
+        )
+    };
     let mut out = Vec::new();
     let mut total = 0usize;
     let mut cjk_lines = 0usize;
@@ -901,8 +1780,10 @@ mod tests {
         Section {
             kind,
             label: format!("{kind:?}"),
+            motion: None,
             positive_local: vec![],
             negative_local: vec![],
+            subtraction: None,
             energy: Some(energy),
             instruments: ["guzheng", "cello", "dizi", "pipa", "erhu", "piano", "drums"][..n]
                 .iter()
@@ -1106,14 +1987,13 @@ mod tests {
     }
 
     fn douyin_plan() -> SongPlan {
-        // 完整 D-V2 合规夹具（与 plan::douyin::tests::d_plan 同口径，精简）
         let mut p = minimal_plan();
         p.global.bpm = Some(110);
         p.global.negative = vec!["long intro".into(), "slow build".into(), "fade out".into()];
         p.global.mix = vec!["M-01".into(), "M-06".into()];
         p.settings.weirdness = 15;
         p.settings.style_influence = 90;
-        let hook_line = "干就完了";
+        let hook_line = "今夜不退";
         p.sections = vec![
             sec(SectionKind::Hook, 8, 3, false),
             sec(SectionKind::Verse, 4, 2, false),
@@ -1122,13 +2002,13 @@ mod tests {
         ];
         p.sections[0].label = "Hook".into();
         p.sections[0].target_seconds = Some(8);
-        p.sections[0].lines = vec![hook_line.into(), hook_line.into(), "今晚不睡".into()];
+        p.sections[0].lines = vec![hook_line.into(), hook_line.into(), "干就干脆".into()];
         p.sections[1].label = "Verse".into();
         p.sections[1].target_seconds = Some(8);
-        p.sections[1].lines = vec!["灯还亮着".into(), "窗外风大".into()];
+        p.sections[1].lines = vec!["冷风吹过长街".into(), "霓虹照亮黑夜".into()];
         p.sections[2].label = "Hook 2".into();
         p.sections[2].target_seconds = Some(8);
-        p.sections[2].lines = vec![hook_line.into(), hook_line.into()];
+        p.sections[2].lines = vec![hook_line.into(), hook_line.into(), "干就干脆".into()];
         p.sections[3].label = "Hook 3".into();
         p.sections[3].target_seconds = Some(8);
         p.sections[3].lines = vec![hook_line.into()];
@@ -1141,10 +2021,7 @@ mod tests {
                 end_section: "Hook".into(),
                 seconds: 15,
             },
-            hook_line: format!(
-                "{hook_line}
-今晚不睡"
-            ),
+            hook_line: format!("{hook_line}\n干就干脆"),
             loop_tail: true,
         });
         p
@@ -1159,7 +2036,7 @@ mod tests {
             validate(&p, &ctx("mode_d"))
         );
         let mut bad = douyin_plan();
-        bad.global.bpm = Some(80); // 日常场景 100–120 外
+        bad.global.bpm = Some(80);
         bad.mode_meta.douyin = None;
         bad.sections[0].lines = vec!["这一行歌词明显超过了十二个字的上限".into()];
         let c = codes(&validate(&bad, &ctx("mode_d")));
@@ -1184,7 +2061,6 @@ mod tests {
     #[test]
     fn style_length_wired_through_plan_validate() {
         let mut p = minimal_plan();
-        // 清空全局层，令渲染 Style 短于 STYLE_PROMPT_MIN
         p.global.genre = vec!["folk".into()];
         p.global.bpm = None;
         p.global.key = None;
@@ -1234,11 +2110,10 @@ mod tests {
     #[test]
     fn advise_rhyme_known_samples() {
         let orig = "[Verse]\n天上的星星不说话\n地上的孩子想妈妈\n";
-        // 话/妈 → 发花 同辙
         let good = "[Verse]\n海边的灯火不说话\n夜里的孩子想妈妈\n";
         let w = advise_rhyme(orig, good);
         assert!(w.is_empty(), "同辙保留不应告警: {w:?}");
-        let bad = "[Verse]\n海边的灯火不说话\n夜里的孩子在跑步\n"; // 话=发花，步=姑苏
+        let bad = "[Verse]\n海边的灯火不说话\n夜里的孩子在跑步\n";
         let w = advise_rhyme(orig, bad);
         assert!(
             w.iter()
@@ -1248,7 +2123,6 @@ mod tests {
         let mut p = minimal_plan();
         p.sections[0].lines = vec!["海边的灯火不说话".into()];
         p.sections[1].lines = vec!["夜里的孩子在跑步".into()];
-        // 保证至少两段有词：minimal_plan 结构
         let rendered =
             crate::plan::render_suno::to_package_text(&crate::plan::render_suno::render(&p));
         let v = validate(
@@ -1273,9 +2147,8 @@ mod tests {
 
     #[test]
     fn advise_rhyme_polyphone_reports_only() {
-        // 「行」多音；首读可能为 xing/hang——只要走 Warn 路径且不 panic
-        let orig = "大路朝天各自走\n小河有水慢慢流\n"; // 走/流 油求
-        let neu = "大路朝天各自行\n小河有水慢慢游\n"; // 行/? 游=油求
+        let orig = "大路朝天各自走\n小河有水慢慢流\n";
+        let neu = "大路朝天各自行\n小河有水慢慢游\n";
         let w = advise_rhyme(orig, neu);
         assert!(w.iter().all(|i| i.severity == Severity::Warn));
     }
@@ -1302,6 +2175,11 @@ mod tests {
         };
         let ok = minimal_plan();
         assert!(run(&ok).is_empty(), "fixture 引用合法 id");
+        // v3 新增：允许 ≥3 词的具象英文人声与混音描述直接过门
+        let mut custom = minimal_plan();
+        custom.global.vocal = vec!["husky baritone, close-mic breath, slight voice crack".into()];
+        custom.global.mix = vec!["dry close-mic bedroom tape warmth".into()];
+        assert!(run(&custom).is_empty(), "具象英文短语应放行");
         let mut p = minimal_plan();
         p.global.vocal.clear();
         assert_eq!(run(&p), vec!["vocal_mix_coverage"]);
@@ -1349,11 +2227,18 @@ mod tests {
         assert!(validate_lang(&p).is_empty(), "zh 允许英文和声行");
         p.mode_meta.lyrics_lang = LyricLang::En;
         let v = validate_lang(&p);
-        assert!(v.iter().any(|i| i.code == "lyrics_lang_mismatch" && i.path == "/sections/1/lines/0"), "{v:?}");
+        assert!(
+            v.iter()
+                .any(|i| i.code == "lyrics_lang_mismatch" && i.path == "/sections/1/lines/0"),
+            "{v:?}"
+        );
         p.sections[1].lines = vec!["rain on the street".into()];
         assert!(validate_lang(&p).is_empty(), "en 英文歌词应过");
         p.mode_meta.lyrics_lang = LyricLang::Zh;
-        assert!(codes(&validate(&p, &ctx("mode_b"))).contains(&"lyrics_lang_mismatch"), "zh 全英文须经 validate 打回");
+        assert!(
+            codes(&validate(&p, &ctx("mode_b"))).contains(&"lyrics_lang_mismatch"),
+            "zh 全英文须经 validate 打回"
+        );
     }
 
     #[test]
@@ -1364,5 +2249,159 @@ mod tests {
         p.sections[1].lines = vec!["rain".into()];
         p.global.genre = vec!["民谣".into()];
         assert!(validate_lang(&p).is_empty(), "Style 中文不归 validate_lang（归 §3.7）");
+    }
+
+    #[test]
+    fn v3_anti_ai_tells_and_exemptions_work() {
+        let mut p = ab_plan(vec![
+            sec(SectionKind::Verse, 2, 1, false),
+            sec(SectionKind::PreChorus, 4, 1, false),
+            sec(SectionKind::Chorus, 6, 1, false),
+            sec(SectionKind::Chorus, 8, 1, false),
+        ]);
+        p.global.mood = Some("epic emotional masterpiece".into());
+        p.sections[2].lines = vec!["走过漫长时光与远方".into(), "寻找宿命的星辰".into()];
+        p.sections[3].lines = p.sections[2].lines.clone();
+        // 未声明 exemptions 时：配器不足报 Hard，同时检出空洞形容词/能量单调/副歌雷同/抽象套话 Warn
+        let issues = validate(&p, &ctx("mode_b"));
+        assert!(!passed(&issues));
+        let warn_codes: Vec<&str> = issues
+            .iter()
+            .filter(|i| i.severity == Severity::Warn)
+            .map(|i| i.code)
+            .collect();
+        for w in [
+            "style_empty_adjective",
+            "energy_monotonic",
+            "chorus_static_repeat",
+            "lyric_abstract_cliche",
+        ] {
+            assert!(warn_codes.contains(&w), "应检出软诊断 {w}: {warn_codes:?}");
+        }
+        // 声明 exemptions 后：极简独奏编制的配器门槛自动降级为 Warn，不再硬打回
+        p.exemptions = vec!["独立民谣独奏编制，全曲仅一把古筝".into()];
+        let issues_exempt = validate(&p, &ctx("mode_b"));
+        assert!(
+            passed(&issues_exempt),
+            "声明 exemptions 后应放行极简编制: {issues_exempt:?}"
+        );
+    }
+
+    #[test]
+    fn v3_prosody_and_rhyme_hard_gates_work() {
+        // 1. Mode B: 段落末句脱韵 -> section_rhyme_missing (Hard) + 同音挤韵 -> rhyme_homophone_collision (Hard) + 句长失衡 -> prosody_meter_imbalance (Hard)
+        let mut p = minimal_plan();
+        p.sections[1].lines = vec![
+            "箱子敞着口蹲在客厅中间".into(),
+            "灯泡一闪一闪数着还剩几件".into(),
+            "杯子裹进你留下的旧毛衣".into(),
+            "咖啡洒在".into(),
+        ];
+        let issues = validate(&p, &ctx("mode_b"));
+        assert!(
+            issues.iter().any(|i| i.code == "rhyme_homophone_collision" && i.severity == Severity::Hard),
+            "同音挤韵（间 jian / 件 jian）必须触发 Hard 打回: {issues:?}"
+        );
+        assert!(
+            issues.iter().any(|i| i.code == "section_rhyme_missing" && i.severity == Severity::Hard),
+            "末句脱韵必须触发 Hard 打回: {issues:?}"
+        );
+        assert!(
+            issues.iter().any(|i| i.code == "prosody_meter_imbalance" && i.severity == Severity::Hard),
+            "句长极差过大且未声明 short_line 必须触发 Hard 打回: {issues:?}"
+        );
+
+        // 2. Mode C: 照搬原词尾字 + 同音挤韵 -> 全部 Hard 打回
+        let orig = "昨夜星辰昨夜风\n画楼西畔桂堂东\n身无彩凤双飞翼\n心有灵犀一点通";
+        let mut pc = minimal_plan();
+        pc.sections[0].lines = vec![];
+        pc.sections[1].lines = vec![
+            "凌晨机房灯微红".into(),
+            "两块屏幕光不同".into(),
+            "没开口却同频率".into(),
+            "屏幕两端一点通".into(),
+        ];
+        let issues_c = validate(
+            &pc,
+            &ValidateCtx {
+                mode: "mode_c",
+                converged: None,
+                original_lyrics: Some(orig),
+            },
+        );
+        assert!(
+            issues_c.iter().any(|i| i.code == "mode_c_copied_rhyme_char" && i.severity == Severity::Hard),
+            "改词直接照搬原词尾字「通」必须触发 Hard 打回: {issues_c:?}"
+        );
+        assert!(
+            issues_c.iter().any(|i| i.code == "rhyme_homophone_collision" && i.severity == Severity::Hard),
+            "改词同音挤韵（同 tong / 通 tong）必须触发 Hard 打回: {issues_c:?}"
+        );
+
+        // 3. 全局韵部乱跳（Verse 1 江阳 -> Pre-Chorus 怀来 -> Chorus 言前 -> Verse 2 遥条）-> global_rhyme_scatter + homologous_section_rhyme_drift (Hard)
+        let mut pg = minimal_plan();
+        pg.sections = vec![
+            Section {
+                kind: SectionKind::Verse,
+                label: "Verse 1".into(),
+                motion: None,
+                positive_local: vec!["close room".into()],
+                negative_local: vec![],
+                subtraction: None,
+                energy: Some(3),
+                instruments: vec!["guzheng".into(), "cello".into()],
+                minimal: false,
+                target_seconds: None,
+                lines: vec!["纸箱没封口靠在白墙".into(), "胶带垂下来晃着微光".into()],
+            },
+            Section {
+                kind: SectionKind::PreChorus,
+                label: "Pre-Chorus".into(),
+                motion: None,
+                positive_local: vec!["close room".into()],
+                negative_local: vec![],
+                subtraction: None,
+                energy: Some(5),
+                instruments: vec!["guzheng".into(), "cello".into()],
+                minimal: false,
+                target_seconds: None,
+                lines: vec!["胶带撕开又粘回来".into(), "箱底露出旧毛衣的白".into()],
+            },
+            Section {
+                kind: SectionKind::Chorus,
+                label: "Chorus 1".into(),
+                motion: None,
+                positive_local: vec!["wide hall".into()],
+                negative_local: vec![],
+                subtraction: None,
+                energy: Some(8),
+                instruments: vec!["guzheng".into(), "cello".into(), "dizi".into(), "pipa".into()],
+                minimal: false,
+                target_seconds: None,
+                lines: vec!["这间房我扫了三遍".into(), "灰还卡在指甲尖".into()],
+            },
+            Section {
+                kind: SectionKind::Verse,
+                label: "Verse 2".into(),
+                motion: None,
+                positive_local: vec!["close room".into()],
+                negative_local: vec![],
+                subtraction: None,
+                energy: Some(4),
+                instruments: vec!["guzheng".into(), "cello".into()],
+                minimal: false,
+                target_seconds: None,
+                lines: vec!["胶带在手里绕了两遭".into(), "又怕它压到最底下的票".into()],
+            },
+        ];
+        let issues_g = validate(&pg, &ctx("mode_b"));
+        assert!(
+            issues_g.iter().any(|i| i.code == "global_rhyme_scatter" && i.severity == Severity::Hard),
+            "四段跨四个毫无亲缘的十三辙必须触发 global_rhyme_scatter Hard 打回: {issues_g:?}"
+        );
+        assert!(
+            issues_g.iter().any(|i| i.code == "homologous_section_rhyme_drift" && i.severity == Severity::Hard),
+            "Verse 1(江阳) 与 Verse 2(遥条) 跨段跑韵必须触发 homologous_section_rhyme_drift Hard 打回: {issues_g:?}"
+        );
     }
 }

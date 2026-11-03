@@ -9,8 +9,8 @@
 //!   顺序按 M9（受众→物件→约束→旋律）排段。主持人保持零 CSV 检索语义，仅加静态地基。
 //! - 无新增依赖，无网络调用，无凭据改动。
 
-/// Style Prompt 上限字符数（含空格）
-pub const STYLE_PROMPT_MAX_CHARS: usize = 350;
+/// Style Prompt 上限字符数（含空格；对齐 Suno 物理上限 1000）
+pub const STYLE_PROMPT_MAX_CHARS: usize = 1000;
 /// Style Prompt 过短告警下限（极端缺失提示）
 pub const STYLE_PROMPT_MIN_CHARS: usize = 30;
 /// 结构标签最少段落数
@@ -184,7 +184,7 @@ pub fn arc_param_union() -> (u32, u32, u32, u32) {
 /// （`validator::style_prompt_length_issues`）同读这两个常量——
 /// 防"注册模式域 ≠ 执行模式域"漂移（第三批实测 `douyin_bpm_min` 错挂执行者即同类）。
 ///
-/// 上限：A/B/C/D 全部承诺（CHECKLIST_A/B/C/D 均写 "Style Prompt≤350字符"）。
+/// 上限：A/B/C/D 全部承诺（CHECKLIST_A/B/C/D 均写 "Style Prompt≤1000字符"）。
 pub const STYLE_PROMPT_MAX_MODES: &[&str] = ALL_MODES;
 /// 下限：仅 A/B/D 承诺（CHECKLIST_A/B/D 写 "≥30字符"）；C 的 STYLE 节为"氛围/流派基调一句"，
 /// 上游无下限告知，故下限不对 C 执行。
@@ -819,10 +819,10 @@ pub fn checklist(mode: &str) -> String {
 /// 由 `no_handwritten_rule_numbers_in_prose_carriers` 扫描 `PROSE_CARRIERS` 锁定）——
 /// 旧实现手写全文数字，与常量/`ARC_PARAMS` 脱钩（#21 家族残留：`CHECKLIST_A` 的
 /// 10 条弧线区间整段复刻 `ARC_PARAMS`、`CHECKLIST_D` 的抖音区间无常量锁）。
-const CHECKLIST_A: &str = "【校验清单 A·单源】Style Prompt≤${STYLE_PROMPT_MAX}字符且≥${STYLE_PROMPT_MIN}字符；结构标签≥${MIN_SECTION_TAGS}段；能量差≥${MIN_ENERGY_GAP}级（${ENERGY_SCALE}）；配器差≥${MIN_INSTRUMENT_GAP}件、单段${INSTRUMENT_RANGE}件（最弱段即下限${MIN_INSTRUMENT_WEAK}件，声明'极简段'的段落豁免下限）、最强段≥${MIN_INSTRUMENT_STRONG}件；说明行≤${DESC_LINE_MAX}字符（含方括号整行计，须含${DESC_LINE_SPACE_SLOT}与人声状态槽位；上限内须保乐器+行为动词）；弧线参数：${ARC_INLINE}；Audio Influence 默认 0（reference_audio 开启时可非 0）；断句单空格、禁/与、标点全半角。";
-const CHECKLIST_B: &str = "【校验清单 B·单源】Style Prompt≤${STYLE_PROMPT_MAX}字符且≥${STYLE_PROMPT_MIN}字符；结构标签≥${MIN_SECTION_TAGS}段；能量差≥${MIN_ENERGY_GAP}级（${ENERGY_SCALE}）；配器差≥${MIN_INSTRUMENT_GAP}件、单段${INSTRUMENT_RANGE}件（最弱段即下限${MIN_INSTRUMENT_WEAK}件，声明'极简段'的段落豁免下限）、最强段≥${MIN_INSTRUMENT_STRONG}件；说明行≤${DESC_LINE_MAX}字符（含方括号整行计，须含${DESC_LINE_SPACE_SLOT}与人声状态槽位；上限内须保乐器+行为动词）；参数固定区间：Weirdness ${MODE_B_WEIRD_RANGE}、Style Influence ${MODE_B_STYLE_RANGE}（B 专属区间为准，弧线区间不适用 B）；Audio Influence 默认 0（reference_audio 开启时可非 0）；断句单空格、禁/与、标点全半角。";
-const CHECKLIST_C: &str = "【校验清单 C·单源】逐行等字数（差一字即失败，尾部≤${LYRIC_FILL_TAIL}行收尾）；行数与原歌词一致；段落结构与原歌词一致（禁新增Hook/Chorus段）；韵脚位置与模式保留；说明行带方括号且≤${DESC_LINE_MAX}字符（整行计，须含${DESC_LINE_SPACE_SLOT}与人声状态槽位）；Style Prompt≤${STYLE_PROMPT_MAX}字符；断句单空格、禁/与、标点全半角。";
-const CHECKLIST_D: &str = "【校验清单 D·单源】Hook≥${HOOK_MIN}次；单段Verse≤${VERSE_MAX_LINES}行；每行≤${DOUYIN_V2_LINE_MAX}字；结尾骤停（一刀切，含abruptly/cut标识）；BPM≥${DOUYIN_V2_BPM_MIN}；Style Prompt≤${STYLE_PROMPT_MAX}字符且≥${STYLE_PROMPT_MIN}字符；说明行≤${DESC_LINE_MAX}字符（含方括号整行计，须含${DESC_LINE_SPACE_SLOT}与人声状态槽位；上限内须保乐器+行为动词）；参数抖音${DOUYIN_V2_WEIRD_RANGE}/${DOUYIN_V2_STYLE_RANGE}（仅当含≥${NARRATIVE_SECTIONS_MIN}叙事段Verse/Pre-Chorus/Bridge且方案写明'叙事型'归类，方可回落A/B弧线区间，二者缺一打回）；Audio Influence 默认 0（reference_audio 开启时可非 0）；断句单空格、禁/与、标点全半角。";
+const CHECKLIST_A: &str = "【校验清单 A·单源】Style Prompt≤${STYLE_PROMPT_MAX}字符且≥${STYLE_PROMPT_MIN}字符；结构标签≥${MIN_SECTION_TAGS}段；能量差≥${MIN_ENERGY_GAP}级（${ENERGY_SCALE}）；配器差≥${MIN_INSTRUMENT_GAP}件、单段${INSTRUMENT_RANGE}件（最弱段即下限${MIN_INSTRUMENT_WEAK}件，声明'极简段'的段落豁免下限）、最强段≥${MIN_INSTRUMENT_STRONG}件；说明行≤${DESC_LINE_MAX}字符（含方括号整行计，须含${DESC_LINE_SPACE_SLOT}与人声状态槽位；上限内须保乐器+行为动词）；弧线参数：${ARC_INLINE}；Audio Influence 默认 0（reference_audio 开启时可非 0）；全局十三辙统筹（一韵到底或主副双韵锁死+Bridge同部位邻韵微跳，禁跨段乱换韵；同类段落同韵同句式网格、末句必入韵、禁同音挤韵/同字重韵）、一行一气自然分句、禁/与、标点全半角。";
+const CHECKLIST_B: &str = "【校验清单 B·单源】Style Prompt≤${STYLE_PROMPT_MAX}字符且≥${STYLE_PROMPT_MIN}字符；结构标签≥${MIN_SECTION_TAGS}段；能量差≥${MIN_ENERGY_GAP}级（${ENERGY_SCALE}）；配器差≥${MIN_INSTRUMENT_GAP}件、单段${INSTRUMENT_RANGE}件（最弱段即下限${MIN_INSTRUMENT_WEAK}件，声明'极简段'的段落豁免下限）、最强段≥${MIN_INSTRUMENT_STRONG}件；说明行≤${DESC_LINE_MAX}字符（含方括号整行计，须含${DESC_LINE_SPACE_SLOT}与人声状态槽位；上限内须保乐器+行为动词）；参数固定区间：Weirdness ${MODE_B_WEIRD_RANGE}、Style Influence ${MODE_B_STYLE_RANGE}（B 专属区间为准，弧线区间不适用 B）；Audio Influence 默认 0（reference_audio 开启时可非 0）；一行一气自然分句、禁/与、标点全半角。";
+const CHECKLIST_C: &str = "【校验清单 C·单源】逐行等字数（差一字即失败，尾部≤${LYRIC_FILL_TAIL}行收尾）；行数与原歌词一致；段落结构与原歌词一致（禁新增Hook/Chorus段）；韵脚位置与十三辙同部硬对齐（禁照搬原词行尾韵字、禁同音挤韵）；说明行带方括号且≤${DESC_LINE_MAX}字符（整行计，须含${DESC_LINE_SPACE_SLOT}与人声状态槽位）；Style Prompt≤${STYLE_PROMPT_MAX}字符；一行一气自然分句、禁/与、标点全半角。";
+const CHECKLIST_D: &str = "【校验清单 D·单源】Hook≥${HOOK_MIN}次；单段Verse≤${VERSE_MAX_LINES}行；每行≤${DOUYIN_V2_LINE_MAX}字；结尾骤停（一刀切，含abruptly/cut标识）；BPM≥${DOUYIN_V2_BPM_MIN}；Style Prompt≤${STYLE_PROMPT_MAX}字符且≥${STYLE_PROMPT_MIN}字符；说明行≤${DESC_LINE_MAX}字符（含方括号整行计，须含${DESC_LINE_SPACE_SLOT}与人声状态槽位；上限内须保乐器+行为动词）；参数抖音${DOUYIN_V2_WEIRD_RANGE}/${DOUYIN_V2_STYLE_RANGE}（仅当含≥${NARRATIVE_SECTIONS_MIN}叙事段Verse/Pre-Chorus/Bridge且方案写明'叙事型'归类，方可回落A/B弧线区间，二者缺一打回）；Audio Influence 默认 0（reference_audio 开启时可非 0）；一行一气自然分句、禁/与、标点全半角。";
 
 /// 阶段 0 地基 primer（模式专属，每模式≤800字；M9 顺序：受众→物件→约束→旋律）。
 /// 定位 = **工序顺序锚点**（primer 独有内容：意象家族/声学映射/Verse2 新增信息/借体覆盖/弧线能量标尺），
@@ -843,9 +843,9 @@ pub fn host_primer(mode: &str) -> Option<&'static str> {
 // 数值规则：常量派生项写 `${占位符}`；**物件清单下限（≥5件具体物）数值权威在知识库 CSV**
 // （`lyric_craft::LC-01`），无常量可派，故保留字面量并在 `PROSE_CARRIERS` 登记
 // 「CSV 同源锁」`primer_ab_stage0_threshold_matches_lyric_craft_row`（登记即受控，不是漏网）。
-const PRIMER_AB: &str = "【阶段0地基·A/B】受众：先一句话定对象阅历与时机（写给谁听、何时听），不到不写。物件：先建时空物件清单（≥5件具体物，禁抽象词开局），再定意象家族（一首歌一个系统）与声学映射（每个意象写出乐器/音色对应）。约束：声调服从旋律走向（硬门），韵脚密度为软优化；Verse2须新增信息；借体覆盖：每个抽象词配具体物象，禁裸奔。旋律骨架：先定弧线10选1与能量标尺（${ENERGY_BAND_1}静止/${ENERGY_BAND_2}铺垫/${ENERGY_BAND_3}推进/${ENERGY_BAND_4}爆发/${ENERGY_BAND_5}用尽全力），弱强差≥${MIN_ENERGY_GAP}级，配器差≥${MIN_INSTRUMENT_GAP}件，全曲≤${INSTRUMENT_MAX}件。";
+const PRIMER_AB: &str = "【阶段0地基·A/B】受众：先一句话定对象阅历与时机（写给谁听、何时听），不到不写。物件：围绕唯一核心锚点物（anchor_object 三层递进折射）建同场景时空物件清单（≥5件具体物，禁抽象词开局），再定意象家族（一首歌一个系统）与声学映射（每个意象写出乐器/音色对应）。约束：副歌核心记忆句先行，声调服从旋律走向与全局十三辙统筹均为硬门（全曲统归单一主韵或主副同族双韵，仅Bridge可微跳同部位邻韵，禁各段乱换韵；Verse1/2与Chorus跨段同韵同句式网格，偶句与段末必以实词入主韵，禁虚词凑韵、禁同音挤韵/同字重韵）；Verse2须新增信息；借体覆盖：每个抽象词配具体物象，禁裸奔。旋律骨架：先定弧线10选1与能量标尺（${ENERGY_BAND_1}静止/${ENERGY_BAND_2}铺垫/${ENERGY_BAND_3}推进/${ENERGY_BAND_4}爆发/${ENERGY_BAND_5}用尽全力），弱强差≥${MIN_ENERGY_GAP}级，配器差≥${MIN_INSTRUMENT_GAP}件，全曲≤${INSTRUMENT_MAX}件。";
 // C：对齐铁律 + 节奏保留 + 借体。
-const PRIMER_C: &str = "【阶段0地基·C】对齐铁律：逐行等字数（差一字即失败）、行数与原歌词一致、段落结构与原歌词一致（禁新增段）。节奏保留：词组切分与原歌词一致（3+4、2+2+3等），呼吸点位置一致，韵脚位置与模式保留。借体：新意象转译原意象叙事功能（非替换），意象家族统一，抽象词每个有借体，套话具体化。";
+const PRIMER_C: &str = "【阶段0地基·C】对齐铁律：逐行等字数（差一字即失败）、行数与原歌词一致、段落结构与原歌词一致（禁新增段）。声律硬门：词组顿逗切分与原歌词一致（3+4、2+2+3等），原词押韵行对100%同辙对齐（硬门），严禁照搬原词行尾韵字或同音挤韵。借体：新意象转译原意象叙事功能（非替换），意象家族统一，抽象词每个有借体，套话具体化。";
 // D：前10秒Hook/画面 + 道具刻度 + 骤停提醒 + 字数提醒。
 const PRIMER_D: &str = "【阶段0地基·D】前${DOUYIN_V2_HOOK_LAND}秒：开场${DOUYIN_V2_HOOK_LAND}秒内建钩子或强画面，直接进内容不慢铺垫。道具刻度：核心情感绑有世俗重量的具体物（物作刻度），金句短、魔性、可独立传播，Hook≥${HOOK_MIN}次。约束：Verse≤${VERSE_MAX_LINES}行，每行≤${DOUYIN_V2_LINE_MAX}字，说明行≤${DESC_LINE_MAX}字符（含方括号整行计），BPM≥${DOUYIN_V2_BPM_MIN}。收尾：结尾骤停一刀切（不渐弱），动态标签用对，骤停后无乐器残留。";
 
@@ -882,7 +882,7 @@ pub const PROSE_SOURCE_FILES: &[&str] = &["commands/prompts.rs", "commands/roles
 /// 显式声明 HostSummary 包装外形（与 `plan_flow::host_summary_schema` 同形，单测锁定）。
 pub const HOST_SUMMARY_SHAPE: &str = "【本阶段输出外形（最高优先级，覆盖上文\u{201c}按 SongPlan 填字段\u{201d}的顶层形状）】\
 顶层必须是且仅是 {\"plan\": <完整 SongPlan 对象>, \"next_tasks\": \"<下轮任务；无需继续则空字符串>\"} 两个键；\
-SongPlan 的 schema_version/title/global/sections/settings/notes/mode_meta/persona 等字段全部放进 plan 内，禁止出现在顶层。";
+SongPlan 的 schema_version/title/intent/global/sections/settings/asymmetry/exemptions/notes/mode_meta/persona 等字段全部放进 plan 内，禁止出现在顶层。";
 
 /// `PROSE_CARRIERS` 之外的散文定义显式豁免（名 → 理由）。
 /// 只用于"形似散文、实际不进 LLM 上下文"的定义；进上下文的一律登记，不得豁免。
@@ -1410,7 +1410,7 @@ mod tests {
         );
         assert!(
             r.contains(&STYLE_PROMPT_MAX_CHARS.to_string()),
-            "350: {}",
+            "1000: {}",
             r
         );
         assert!(
@@ -1749,6 +1749,8 @@ mod tests {
             "2-3 维",
             "2-3维",
             // 上限符号写法（console/半角混写都要拦）
+            "≤1000",
+            "<=1000",
             "≤350",
             "≤200",
             "≤80",
@@ -3133,7 +3135,7 @@ mod tests {
         let ab = checklist("mode_a");
         assert!(
             ab.contains(&format!("≤{}", STYLE_PROMPT_MAX_CHARS)),
-            "缺350"
+            "缺1000"
         );
         assert!(ab.contains(&format!("≥{}", MIN_ENERGY_GAP)), "缺能量差3");
         assert!(
@@ -3547,7 +3549,7 @@ pub fn desc_line_contract() -> String {
 pub const DESC_LINE_SPACE_SLOT: &str = "空间/力度";
 
 /// 审改修订 target/content 语义（P1-3）：target = SongPlan JSON Pointer，content = 替换值。
-pub const PATCH_TARGET_RULE: &str = "target 为 SongPlan 字段的 JSON Pointer（如 /global/instruments、/sections/N/instruments、/sections/N/positive_local、/sections/N/energy、/sections/N/lines、/settings/weirdness、/notes），content 为该字段替换后的完整 JSON 值（数组字段给整个数组，数值字段给数字），reason 说明理由；增删整段时 target 用 /sections 并给出完整段落数组";
+pub const PATCH_TARGET_RULE: &str = "target 为 SongPlan 字段的 JSON Pointer（如 /intent、/asymmetry、/global/instruments、/sections/N/instruments、/sections/N/positive_local、/sections/N/subtraction、/sections/N/energy、/sections/N/lines、/settings/weirdness、/notes），content 为该字段替换后的完整 JSON 值（数组字段给整个数组，数值字段给数字），reason 说明理由；增删整段时 target 用 /sections 并给出完整段落数组";
 pub const PATCH_TARGET_RULE_LYRIC: &str = "target 只用 /sections/N/lines（意见类建议用 /notes），content 为该段替换后的完整歌词行数组（一行一个字符串，不含结构标签与括号说明），reason 说明理由";
 
 /// SongPlan 字段契约（P1-3/4）：主持人/审改/定稿按 schema 填字段，交付包由 render_suno 渲染。
@@ -3556,39 +3558,28 @@ pub fn plan_field_contract() -> String {
 }
 
 const PLAN_FIELD_CONTRACT: &str = "【SongPlan 字段契约（最高优先级：本阶段按 JSON schema 填字段，不输出排版文本；交付包由程序渲染）】\n\
-1. Style Prompt → global：genre / bpm / key / meter / instruments / arc 填英文短标签；vocal / mix 只填《人声/混音词表》id（各 ≥1，渲染展开为英文标签；渲染为逗号串，≤${STYLE_PROMPT_MAX} 字符）。\n\
-2. Exclude → global.negative：直接写要排除的元素，不加 no/without；正向字段不得出现否定写法。\n\
-3. 说明行 → 每段 instruments + positive_local + energy + negative_local（instruments / positive_local / negative_local 均为**字符串数组**，每项一个短语；energy 为整数）：instruments 只放在场乐器；positive_local 写行为、${DESC_LINE_SPACE_SLOT}、人声状态；energy 为 ${ENERGY_SCALE}（A/B 必填）；段内退出写 negative_local（渲染为 X drop out）。\n\
-4. 极简段 → minimal=true：仅 intro/outro/bridge/interlude 且 energy≤${MINIMAL_ENERGY_MAX}，notes 写理由。\n\
-5. 配器（A/B）：极简 ≥${MIN_INSTRUMENT_MINIMAL}；Chorus 类 ≥${MIN_INSTRUMENT_CHORUS}；其余 ≥${MIN_INSTRUMENT_CORE}；最强 ≥${MIN_INSTRUMENT_STRONG}；差 ≥${MIN_INSTRUMENT_GAP}；上限 ${INSTRUMENT_MAX}。\n\
-6. 歌词 → sections[].lines；参数 → settings（variety=${VARIETY}；reference_audio 默认 false，为 true 时 audio_influence 可非 0）；notes 写分析/裁决，不渲染。\n7. D 模式另填 mode_meta.douyin（clip/hook_line/loop_tail；scene 由请求盖写勿自选）；mix 含 M-01+M-06；negative 含 long intro/slow build/fade out。\n8. 可选文本层（默认 null=关闭）：pronunciation_hints（多音字/发音）、persona（声音指纹）、series_context（专辑/系列一致性）。";
+1. 立意、全局声律与不对称 → intent（plot_type 优先 attitudinal/situational，填 one_thing 口语真话、to_whom 具体对象、at_what_moment 具体时刻、anchor_object 可拍照锚点物、rhyme_plan 全局十三辙主韵与句式字数网格统筹）；asymmetry（short_line 破格短句、deliberate_unrhymed 转折失韵句、chorus_variation 末遍副歌热点微变、withholding 终局悬置留白）；exemptions（有意的创作破格理由，**字符串数组**，无则 []）。\n\
+2. Style Prompt → global：mood（置顶核心情绪与声学质地，单字符串）/ genre（**字符串数组**）/ bpm（整数）/ key（单字符串）/ meter（单字符串）/ vocal（**字符串数组**）/ instruments（**字符串数组**）/ arrangement_hook（贯穿全曲的器乐记忆点，单字符串）/ arc（单字符串）/ mix（**字符串数组**），均填具象英文短标签（禁 epic/emotional/beautiful/masterpiece 等空洞词）；vocal 只填 1 项核心人声画像（1 个《人声/混音词表》id 或 1 条≥3词具象英文人声短语，禁叠多个 V-xx 防词义打架），mix 填 1–2 项（各 ≥1；渲染为精炼逗号串，≤${STYLE_PROMPT_MAX} 字符）。\n\
+3. Exclude → global.negative（**字符串数组**）：直接写要排除的英文声学元素（不加 no/without）；正向字段不得出现否定写法。\n\
+4. 说明行 → 每段 motion（push/stop）+ instruments + positive_local + subtraction（本段抽空/减法事件，英文）+ energy + negative_local（instruments / positive_local / negative_local 均为**字符串数组**；energy 为整数）：instruments 只放在场乐器；positive_local 写局部变化量（奏法行为、${DESC_LINE_SPACE_SLOT}、人声状态）；energy 为 ${ENERGY_SCALE}（A/B 必填）；段内退出写 subtraction 或 negative_local（渲染为 X drop out）。\n\
+5. 极简段 → minimal=true：intro/outro/bridge/interlude/verse 等剥离段且 energy≤${MINIMAL_ENERGY_MAX}，或在 exemptions 写明理由。\n\
+6. 配器参考（A/B）：极简 ≥${MIN_INSTRUMENT_MINIMAL}；Chorus 类 ≥${MIN_INSTRUMENT_CHORUS}；其余 ≥${MIN_INSTRUMENT_CORE}；最强 ≥${MIN_INSTRUMENT_STRONG}；差 ≥${MIN_INSTRUMENT_GAP}；全曲硬上限 ${INSTRUMENT_MAX}（防止频谱拥挤）。\n\
+7. 歌词 → sections[].lines（纯歌词行，禁塞结构标签或括号备注；一行对应一乐句自然呼吸，禁行内机械按词插空格，禁 `/` 与 `、`）；参数 → settings（variety=${VARIETY}；reference_audio 默认 false，为 true 时 audio_influence 可非 0）；notes 只写精简决策备忘（三两句话），不渲染。\n8. D 模式另填 mode_meta.douyin（clip/hook_line/loop_tail；scene 由请求盖写勿自选）；mix 含 M-01+M-06；negative 含 long intro/slow build/fade out。\n9. 可选文本层（默认 null=关闭）：pronunciation_hints（多音字/发音）、persona（声音指纹）、series_context（专辑/系列一致性）。";
 
 /// 说明行契约正文（单源：本文件唯一一份；数值一律 `${占位符}`）。
-const DESC_LINE_CONTRACT: &str = "【说明行契约（全模式统一）】每段说明行形如 [乐器1+行为, 乐器2+行为, …, ${DESC_LINE_SPACE_SLOT}, 人声状态]（由渲染器从 SongPlan 字段拼出；A/B 能量只填该段 energy 字段），整行含方括号 ≤${DESC_LINE_MAX} 字符。上限宽松：不得为缩短而删乐器或行为动词（最强段 ≥${MIN_INSTRUMENT_STRONG} 件、单段 ${INSTRUMENT_RANGE} 件照常执行），也不得靠堆修饰词占满；超过上限的说明行会被 plan::validate 硬校验拦下。\n\
-1. 乐器主次：乐器逐个列名 + 行为动词，按主次排列（主奏在前、支撑次之、色彩点缀最后）；禁 full band 等笼统写法。\n\
-2. 槽位齐全：每段说明行必须同时含乐器集、${DESC_LINE_SPACE_SLOT}（声场或力度动态，如 close room / wide hall / 突转）、人声状态——缺任一槽位即格式缺陷（制作人逐段核对，校验员在定稿人补齐）。\n\
-3. 人声映射：每段说明行的人声状态必须能映射到 Style Prompt 的人声描述序列（高能段用开放真声形态、低能段用气声/假声形态），不得自造与 Style Prompt 无关的人声描述。\n\
+const DESC_LINE_CONTRACT: &str = "【说明行契约（全模式统一）】每段说明行形如 [乐器1+行为, 乐器2+行为, …, ${DESC_LINE_SPACE_SLOT}, 人声状态]（由渲染器从 SongPlan 字段拼出；A/B 能量只填该段 energy 字段），整行含方括号 ≤${DESC_LINE_MAX} 字符。聚焦段落局部变化量（Section Delta）：不得为缩短而删核心乐器或行为动词（最强段 ≥${MIN_INSTRUMENT_STRONG} 件、单段 ${INSTRUMENT_RANGE} 件参考），也不得靠堆空洞修饰词占满；超过上限的说明行会被 plan::validate 硬校验拦下。\n\
+1. 乐器主次：乐器逐个列名 + 行为动词，按前景/中景/背景排列（主奏在前、律动支撑次之、色彩铺底最后）；禁 full band 等笼统写法。\n\
+2. 槽位齐全：每段说明行必须同时含乐器集、${DESC_LINE_SPACE_SLOT}（声场或力度动态，如 close room / wide hall / sudden drop）、人声状态——缺任一槽位即格式缺陷（制作人逐段核对，校验员在定稿人补齐）。\n\
+3. 人声映射：每段说明行的人声状态必须能映射到 Style Prompt 的人声描述序列（高能段用开放真声/叠唱形态、低能段用近麦气声/微破音形态），不得自造与 Style Prompt 冲突的人声描述。\n\
 4. 能量标注：A/B 模式每段必填 energy 字段（${ENERGY_SCALE} 单值整数，禁区间）；渲染器统一输出为 energy N——不得把能量写进 positive_local 等文本字段（会重复且触发 Style English 校验）。";
 
 /// 极简段豁免条款（单源；**仅 A/B 适用**）：下游执行者 = `plan::validate::section_floor`
 /// 过滤 + `plan::validate` 的 mode_a/mode_b 最弱段下限检查。
-///
-/// 上下游同域修复（2026-09-18，审计 #20 延伸）：旧版此条款只写在 `prompts.rs` 的 mode_a 一处
-/// （还额外限死"Bridge/Intro"与"1-2 件"），mode_b **零告知**，而 A/B 两模式的说明行规则又写着
-/// "Intro/Outro 不豁免"——与执行者"任何含'极简段'标记的段落（含 Intro/Outro）均豁免下限"
-/// 正好对立。上游告知与下游执行器不一致 = 必然打回降级。现单源定义，A/B 同读一个占位符。
-///
-/// 适用边界（与执行者严格一致，改执行者必须同改此处）：
-/// - 只有 mode_a / mode_b 可引用；`mode_d` 无逐段件数硬门（`validate_douyin` 不查配器件数）、
-///   `mode_c` 亦不查配器——二者不得告知本豁免（`minimal_section_exemption_is_ab_only` 锁定）。
-/// - 豁免对象只有"最弱段下限"一条；配器差、最强段下限、全曲上限照常校验。
-/// - 声明方式：说明行内含"极简段"标记 + NOTES 写明理由（可审计）。
 pub fn minimal_section_exemption() -> String {
     format!(
-        "【极简段豁免（模式 A/B）】配器按段硬查：每段说明行都计入（含 Intro/Outro），最弱段下限 {} 件；\
-若某段音乐上确需少于 {} 件（剥离型 Bridge/Intro、反差段落），必须在该段说明行内加\"极简段\"标记\
-（如 [felt piano, rain room, 极简段]）并在 NOTES 写明理由——声明后该段豁免最弱段下限；\
-配器差 ≥{} 件、最强段 ≥{} 件、全曲 ≤{} 件照常校验。未声明而低于下限的段落会被硬校验打回。",
+        "【极简段豁免（模式 A/B）】配器按段核查：常规最弱段参考 {} 件；\
+若某段音乐上确需少于 {} 件（如剥离型 Bridge/Intro/Outro、清唱反差段落），将该段 `minimal` 设为 `true`（或在 `exemptions` / `notes` 写明极简段理由）——声明后该段豁免最弱段下限；\
+配器差 ≥{} 件、最强段 ≥{} 件、全曲 ≤{} 件照常核查。",
         MIN_INSTRUMENT_WEAK,
         MIN_INSTRUMENT_WEAK,
         MIN_INSTRUMENT_GAP,

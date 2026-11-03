@@ -467,7 +467,7 @@ pub const EMBEDDED_TABLE_COUNT: usize = 9;
 /// 表名单源
 pub const VOCAL_MIX_TABLE: &str = "vocal_mix";
 /// 注入预算（字符）：完整块超出即退化为只注入 `id=label_en`（BLUEPRINT P1-5）
-pub const VOCAL_MIX_INJECT_MAX_CHARS: usize = 1200;
+pub const VOCAL_MIX_INJECT_MAX_CHARS: usize = 2200;
 
 /// 词表一行（只取校验/渲染/注入需要的列）
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -508,7 +508,7 @@ pub fn vocal_mix_label_en(kb: &KnowledgeBase, id: &str) -> Option<String> {
 /// 表缺失 → 空串。
 pub fn vocal_mix_prompt_block(kb: &KnowledgeBase, max_chars: usize) -> String {
     let Some(rows) = vocal_mix_entries(kb) else { return String::new() };
-    let head = "【人声/混音词表（vocal_mix）】global.vocal 填 category=vocal 的 id、global.mix 填 category=mix 的 id（各至少 1 个，只写 id，渲染时展开为英文标签）：\n";
+    let head = "【人声/混音词表（vocal_mix）】global.vocal 填 category=vocal 的 id（或≥3词的具象英文人声短语）、global.mix 填 category=mix 的 id（或≥3词的具象英文混音短语），各至少 1 项，词表 id 渲染时自动展开为英文标签：\n";
     let full: String = rows
         .iter()
         .map(|e| format!("{} | {} | {} | {} | {}\n", e.id, e.category, e.label_en, e.label_cn, e.applies_to))
@@ -934,6 +934,11 @@ impl KnowledgeBase {
                         .unwrap_or(false)
                 })
                 .filter_map(|row| row.first().cloned())
+                .filter(|id| {
+                    !crate::rules::CRAFT_RESERVED_ROWS
+                        .iter()
+                        .any(|(reg_id, _)| reg_id == id)
+                })
                 .collect();
             warn_reserved_rows_once(name, &reserved_ids);
         }
@@ -2361,7 +2366,7 @@ mod tests {
     fn vocal_mix_table_shape_and_ids() {
         let kb = KnowledgeBase::load_embedded().unwrap();
         let rows = vocal_mix_entries(&kb).expect("嵌入版必须含 vocal_mix");
-        assert_eq!(rows.len(), 10, "人声 4 + 混音 6（含 phone-speaker）");
+        assert_eq!(rows.len(), 16, "人声 8 + 混音 8（含 phone-speaker 与 v3 声学扩展）");
         let mut ids = std::collections::HashSet::new();
         for e in &rows {
             assert!(ids.insert(e.id.clone()), "id 重复: {}", e.id);
@@ -2371,8 +2376,8 @@ mod tests {
             let l = e.label_en.to_lowercase();
             assert!(!l.split(',').any(|t| { let t = t.trim(); t.starts_with("no ") || t.starts_with("without ") }), "{} label_en 含否定（正向层禁否定）", e.id);
         }
-        assert_eq!(rows.iter().filter(|e| e.category == "vocal").count(), 4);
-        assert_eq!(rows.iter().filter(|e| e.category == "mix").count(), 6);
+        assert_eq!(rows.iter().filter(|e| e.category == "vocal").count(), 8);
+        assert_eq!(rows.iter().filter(|e| e.category == "mix").count(), 8);
     }
 
     #[test]

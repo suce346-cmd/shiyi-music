@@ -20,31 +20,31 @@ import { composeRefineInput } from "../utils/partialDraft";
 export const MODE_EXPERTS: Record<Mode, Omit<ExpertCard, "status" | "note">[]> = {
   // 想法模式(B)：情感 → 作词 → 制作 + 落座（主持/校验）
   mode_b: [
-    { id: "emotion", name: "情感分析师", emoji: "🎭", color: "#f5a3b7", knowledge: ["emotions"] },
-    { id: "lyricist", name: "作词人", emoji: "📝", color: "#a78bfa", knowledge: ["cliches", "hooks"] },
-    { id: "producer", name: "制作人", emoji: "🎤", color: "#f5b35c", knowledge: ["style_genre", "instruments", "suno_rules"] },
+    { id: "emotion", name: "情感分析师", emoji: "🎭", color: "#f5a3b7", knowledge: ["emotions", "lyric_craft", "compose_craft", "suno_rules"] },
+    { id: "lyricist", name: "作词人", emoji: "📝", color: "#a78bfa", knowledge: ["cliches", "hooks", "lyric_craft", "suno_rules"] },
+    { id: "producer", name: "制作人", emoji: "🎤", color: "#f5b35c", knowledge: ["style_genre", "instruments", "suno_rules", "compose_craft"] },
     { id: "host", name: "主持人", emoji: "👑", color: "#f59e0b", knowledge: [] },
     { id: "auditor", name: "校验员", emoji: "🔍", color: "#a3a3a3", knowledge: ["suno_rules"] },
   ],
   // 歌词模式(A)：情感 → 制作 + 落座（无作词）
   mode_a: [
-    { id: "emotion", name: "情感分析师", emoji: "🎭", color: "#f5a3b7", knowledge: ["emotions"] },
-    { id: "producer", name: "制作人", emoji: "🎤", color: "#f5b35c", knowledge: ["style_genre", "instruments", "suno_rules"] },
+    { id: "emotion", name: "情感分析师", emoji: "🎭", color: "#f5a3b7", knowledge: ["emotions", "lyric_craft", "compose_craft", "suno_rules"] },
+    { id: "producer", name: "制作人", emoji: "🎤", color: "#f5b35c", knowledge: ["style_genre", "instruments", "suno_rules", "compose_craft"] },
     { id: "host", name: "主持人", emoji: "👑", color: "#f59e0b", knowledge: [] },
     { id: "auditor", name: "校验员", emoji: "🔍", color: "#a3a3a3", knowledge: ["suno_rules"] },
   ],
   // 改写模式(C)：改词 + 固定（Q6：制作人无 Style Prompt 可审，已摘除）
   mode_c: [
-    { id: "reviser", name: "改词人", emoji: "✍️", color: "#7ec8a0", knowledge: ["cliches"] },
+    { id: "reviser", name: "改词人", emoji: "✍️", color: "#7ec8a0", knowledge: ["cliches", "lyric_craft", "suno_rules"] },
     { id: "host", name: "主持人", emoji: "👑", color: "#f59e0b", knowledge: [] },
     { id: "auditor", name: "校验员", emoji: "🔍", color: "#a3a3a3", knowledge: ["suno_rules"] },
   ],
   // 抖音模式(D)：情感 → 作词 → 流行 → 制作 + 固定
   mode_d: [
-    { id: "emotion", name: "情感分析师", emoji: "🎭", color: "#f5a3b7", knowledge: ["emotions"] },
-    { id: "lyricist", name: "作词人", emoji: "📝", color: "#a78bfa", knowledge: ["cliches", "hooks"] },
-    { id: "style_analyst", name: "流行风格分析师", emoji: "🔥", color: "#f472b6", knowledge: ["hooks"] },
-    { id: "producer", name: "制作人", emoji: "🎤", color: "#f5b35c", knowledge: ["style_genre", "instruments", "suno_rules"] },
+    { id: "emotion", name: "情感分析师", emoji: "🎭", color: "#f5a3b7", knowledge: ["emotions", "lyric_craft", "compose_craft", "suno_rules"] },
+    { id: "lyricist", name: "作词人", emoji: "📝", color: "#a78bfa", knowledge: ["cliches", "hooks", "lyric_craft", "suno_rules"] },
+    { id: "style_analyst", name: "流行风格分析师", emoji: "🔥", color: "#f472b6", knowledge: ["hooks", "lyric_craft", "suno_rules"] },
+    { id: "producer", name: "制作人", emoji: "🎤", color: "#f5b35c", knowledge: ["style_genre", "instruments", "suno_rules", "compose_craft"] },
     { id: "host", name: "主持人", emoji: "👑", color: "#f59e0b", knowledge: [] },
     { id: "auditor", name: "校验员", emoji: "🔍", color: "#a3a3a3", knowledge: ["suno_rules"] },
   ],
@@ -433,6 +433,7 @@ export function usePipeline() {
             ...prev,
             phase: "validating",
             currentStage: null,
+            doneStages: prev.doneStages.includes("auditor") ? prev.doneStages : [...prev.doneStages, "auditor"],
             validation: { passed: e.pass, issues: e.findings },
             // 审查通过时清掉打回错误
             error: e.pass ? null : prev.error,

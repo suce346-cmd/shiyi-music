@@ -10,13 +10,13 @@
 
 正式安装包在 GitHub Releases（不是仓库文件列表里）：
 
-**最新版 → [Releases · v6.0.0](https://github.com/suce346-cmd/shiyi-music/releases/tag/v6.0.0)**
+**最新版 → [Releases · v6.1.0](https://github.com/suce346-cmd/shiyi-music/releases/tag/v6.1.0)**
 
 | 平台 | 文件 |
 |---|---|
-| macOS Apple Silicon（M 系列） | [shiyi._6.0.0_aarch64.dmg](https://github.com/suce346-cmd/shiyi-music/releases/download/v6.0.0/shiyi._6.0.0_aarch64.dmg) |
-| macOS Intel | [shiyi._6.0.0_x64.dmg](https://github.com/suce346-cmd/shiyi-music/releases/download/v6.0.0/shiyi._6.0.0_x64.dmg) |
-| Windows x64 | [shiyi._6.0.0_x64-setup.exe](https://github.com/suce346-cmd/shiyi-music/releases/download/v6.0.0/shiyi._6.0.0_x64-setup.exe) |
+| macOS Apple Silicon（M 系列） | [shiyi._6.1.0_aarch64.dmg](https://github.com/suce346-cmd/shiyi-music/releases/download/v6.1.0/shiyi._6.1.0_aarch64.dmg) |
+| macOS Intel | [shiyi._6.1.0_x64.dmg](https://github.com/suce346-cmd/shiyi-music/releases/download/v6.1.0/shiyi._6.1.0_x64.dmg) |
+| Windows x64 | [shiyi._6.1.0_x64-setup.exe](https://github.com/suce346-cmd/shiyi-music/releases/download/v6.1.0/shiyi._6.1.0_x64-setup.exe) |
 
 历史版本见 [全部 Releases](https://github.com/suce346-cmd/shiyi-music/releases)。
 
@@ -42,9 +42,12 @@
 
 ## 它怎么工作（简版）
 
-圆桌流水线：主持人出初稿 → 角色审改 → 校验员把关 → 主持人汇总（最多约 3 轮）→ 校验员定稿为结构化 SongPlan（硬规则校验，最多打回 3 次）→ 渲染成 Suno 提示词包。
+v3 确定性词曲声学一体管线：
+1. **阶段 0/1（立意五问 + 词曲声学一体创作）**：从五问锚点（`plot_type` / `one_thing` / `to_whom` / `at_what_moment` / `anchor_object`）、刻意不对称设计（`asymmetry`）与三维声场减法编曲出发，一次性构建完整结构化 `SongPlan` IR，并自动拆解各专业视角摘要（当开启「轮间确认门」、中途插话或点击「按反馈快速优化」时，自动路由对应领域专家按 JSON Pointer 靶向精修）。
+2. **阶段 2（物理硬门 + 去机器味双层终审）**：执行 `plan::validate` 硬校验（Style ≤1000 字符纯英文、一行一气自然分句、Mode C 逐行等字对齐、Mode D 场景 BPM 与 15s 切片等）與 6 项反 AI 味检测（空洞形容词、主歌前四句悬空抽象词、能量单调无减法、末遍副歌零变化、单韵到底、高音闭口韵憋嗓），如有硬伤由校验员靶向修复（最多 3 次）。
+3. **阶段 3（确定性编译）**：由 `render_suno` 按前置高权重顺序渲染出可直接粘贴的 Style / Exclude / Settings / Lyrics 四栏提示词包。
 
-规则真源：[docs/BLUEPRINT_v2.md](./docs/BLUEPRINT_v2.md) · 最近全面复查：[docs/full-review-2026-10-20.md](./docs/full-review-2026-10-20.md)
+架构与规则契约：[docs/BLUEPRINT_v3_CONTRACT.md](./docs/BLUEPRINT_v3_CONTRACT.md) · 历史蓝图：[docs/BLUEPRINT_v2.md](./docs/BLUEPRINT_v2.md) · 全面复查：[docs/full-review-2026-10-20.md](./docs/full-review-2026-10-20.md)
 
 ---
 

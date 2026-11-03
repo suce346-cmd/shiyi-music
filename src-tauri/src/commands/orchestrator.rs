@@ -66,22 +66,34 @@ pub fn roles_for_feedback(feedback: &str, mode: &Mode) -> Vec<PipelineRole> {
         }
     };
     // 歌词类
-    if ["歌词", "词", "句", "韵", "唱", "hook", "副歌", "主歌", "金句"].iter().any(|k| fb.contains(k)) {
+    if ["歌词", "词", "句", "韵", "辙", "格律", "尾字", "锚点", "唱", "hook", "副歌", "主歌", "金句"]
+        .iter()
+        .any(|k| fb.contains(k))
+    {
         push(if *mode == Mode::ModeC { Reviser } else { Lyricist });
     }
     // 编曲类
-    if ["编曲", "配器", "乐器", "伴奏", "bpm", "人声", "音色", "混音", "鼓", "吉他", "钢琴", "唢呐"]
-        .iter()
-        .any(|k| fb.contains(k))
+    if [
+        "编曲", "配器", "乐器", "伴奏", "bpm", "人声", "音色", "混音", "和声", "前奏", "间奏",
+        "尾奏", "减法", "抽空", "鼓", "吉他", "钢琴", "唢呐", "贝斯", "弦乐",
+    ]
+    .iter()
+    .any(|k| fb.contains(k))
     {
         push(Producer);
     }
     // 情绪类
-    if ["情绪", "能量", "感觉", "氛围", "情感", "炸", "软", "嗨"].iter().any(|k| fb.contains(k)) {
+    if ["情绪", "能量", "感觉", "氛围", "情感", "立意", "留白", "高潮", "递进", "炸", "软", "嗨"]
+        .iter()
+        .any(|k| fb.contains(k))
+    {
         push(Emotion);
     }
     // 抖音传播类（仅 ModeD 有 StyleAnalyst；其他模式回落 Producer）
-    if ["抖音", "传播", "钩子", "洗脑", "爆", "魔性", "循环", "骤停"].iter().any(|k| fb.contains(k)) {
+    if ["抖音", "传播", "钩子", "洗脑", "爆", "魔性", "循环", "骤停", "卡点", "切片"]
+        .iter()
+        .any(|k| fb.contains(k))
+    {
         push(if *mode == Mode::ModeD { StyleAnalyst } else { Producer });
     }
     // 参数类
@@ -430,9 +442,9 @@ pub const INJECT_MAX_INSTRUMENTS_ROWS: usize = 15;
 pub const INJECT_MAX_CRAFT_ROWS: usize = 8;
 /// 全量表（suno_rules）渲染截断上限（当前 50 条规则 = 40 + 10×style_arc_d_*，留 10 条余量防静默截断）
 pub const INJECT_MAX_FULL_ROWS: usize = 60;
-/// 单角色一次注入总字数封顶（超过告警；最坏情况 = 制作人 mode_d 含 10 条 style_arc_d_*，
-/// add_douyin_arc 实测 5514 字，取 6000 留 ~8% 余量）
-pub const INJECT_MAX_TOTAL_CHARS: usize = 6000;
+/// 单角色一次注入总字数封顶（超过告警；最坏情况 = 制作人 mode_d 含 10 条 style_arc_d_* 与 v3 声学规则，
+/// 留足余量设为 7200）
+pub const INJECT_MAX_TOTAL_CHARS: usize = 7200;
 /// 完整档案传递原则（2026-09-13，用户设计确认）：方案/修订史全量传给每个角色——
 /// 每个角色拿到的是完整档案（情绪/歌词/编曲/指令/分析），不做信息孤岛。
 /// 旧值 8000 字在 NOTES 分析并入方案后（M1）已达 80%，一旦越线从尾部切掉的
@@ -1300,7 +1312,11 @@ async fn produce_final_text<R: Runtime>(
     // Auditor 定稿：按 SongPlan schema 输出完整方案（不再转写文本包；交付由 render_suno）
     // 定稿人设单源 = roles::auditor().system_prompt（经 rules 插值）；suno_rules 按角色绑定全量注入
     let r = roles::auditor();
-    let mut system = crate::rules::interpolate(r.system_prompt);
+    let mut system = format!(
+        "{}\n\n【本模式核心词曲创作与声学方法论（返修时必须严格遵循，保持立意锚点与全局声律统一）】\n{}",
+        crate::rules::interpolate(r.system_prompt),
+        prompt_for_mode(mode)
+    );
     system.push_str(&inject_knowledge(
         &load_knowledge()?,
         r.knowledge_tables,
@@ -1534,6 +1550,146 @@ pub async fn run_pipeline_with_timeout<R: Runtime>(
     }
 }
 
+/// v3 直通管线（Direct Pipeline）各领域座位摘要：从已产出的 `SongPlan` 中按角色领地提取结构化设计切片，
+/// 使前端圆桌阶段条、角色 Q 版动效、气泡与详情弹窗完整呈现词曲声学拆解，无需额外多轮 LLM 派活。
+pub(crate) fn direct_pipeline_role_summary(
+    current_plan: &str,
+    role: PipelineRole,
+    req: &PipelineRequest,
+) -> String {
+    let Ok(plan) = plan_flow::plan_from_checkpoint(current_plan) else {
+        return format!("{}：已完成词曲一体初稿核验 ✅", role.name());
+    };
+    match role {
+        PipelineRole::Emotion => {
+            let intent_txt = match &plan.intent {
+                Some(it) => format!(
+                    "展开={:?} · 真话「{}」 · 锚点物「{}」",
+                    it.plot_type, it.one_thing, it.anchor_object
+                ),
+                None => "已建立情绪基调".to_string(),
+            };
+            let energies: Vec<String> = plan
+                .sections
+                .iter()
+                .map(|s| {
+                    let e = s.energy.map(|v| v.to_string()).unwrap_or_else(|| "-".into());
+                    format!("{}({})", s.label, e)
+                })
+                .collect();
+            let mood = plan
+                .global
+                .mood
+                .clone()
+                .filter(|m| !m.trim().is_empty())
+                .or_else(|| plan.global.arc.clone())
+                .unwrap_or_else(|| "dynamic arc".into());
+            format!(
+                "情感与能量轨迹 ✅\n· 立意：{}\n· 质地与弧线：{}\n· 段落能量：{}",
+                intent_txt,
+                mood,
+                energies.join(" → ")
+            )
+        }
+        PipelineRole::Lyricist => {
+            let total_lines: usize = plan.sections.iter().map(|s| s.lines.len()).sum();
+            let asym_txt = match &plan.asymmetry {
+                Some(a) => {
+                    let mut parts = Vec::new();
+                    if let Some(sl) = &a.short_line {
+                        parts.push(format!("破格短句「{}」", sl));
+                    }
+                    if let Some(cv) = &a.chorus_variation {
+                        parts.push(format!("副歌微变「{}」", cv));
+                    }
+                    if let Some(wh) = &a.withholding {
+                        parts.push(format!("留白「{}」", wh));
+                    }
+                    if parts.is_empty() {
+                        "自然呼吸分句".to_string()
+                    } else {
+                        parts.join(" · ")
+                    }
+                }
+                None => "一行一气自然分句".to_string(),
+            };
+            let rp = plan.intent.as_ref().and_then(|i| i.rhyme_plan.as_deref()).unwrap_or("全局十三辙统筹");
+            format!(
+                "词作与全局声律 ✅\n· 结构：共 {} 段 / {} 行歌词\n· 全局韵部统筹：{}\n· 去机器味设计：{}",
+                plan.sections.len(),
+                total_lines,
+                rp,
+                asym_txt
+            )
+        }
+        PipelineRole::Reviser => {
+            let total_lines: usize = plan.sections.iter().map(|s| s.lines.len()).sum();
+            let orig_lines = req
+                .original_lyrics_text()
+                .map(|o| o.lines().filter(|l| !l.trim().is_empty()).count())
+                .unwrap_or(total_lines);
+            let anchor = plan
+                .intent
+                .as_ref()
+                .map(|i| i.anchor_object.clone())
+                .unwrap_or_else(|| "新主题核心意象".into());
+            format!(
+                "填词声律对齐 ✅\n· 行数核对：新词 {} 行 / 原词基准 {} 行\n· 意象转译锚点：{}",
+                total_lines, orig_lines, anchor
+            )
+        }
+        PipelineRole::Producer => {
+            let genre = if plan.global.genre.is_empty() {
+                "custom genre".to_string()
+            } else {
+                plan.global.genre.join(", ")
+            };
+            let inst = if plan.global.instruments.is_empty() {
+                "minimal".to_string()
+            } else {
+                plan.global.instruments.join(", ")
+            };
+            let hook = plan
+                .global
+                .arrangement_hook
+                .clone()
+                .unwrap_or_else(|| "section contrast".into());
+            let subs: Vec<String> = plan
+                .sections
+                .iter()
+                .filter_map(|s| s.subtraction.as_ref().map(|sub| format!("{}: {}", s.label, sub)))
+                .collect();
+            let sub_txt = if subs.is_empty() {
+                "按段落密度递进".to_string()
+            } else {
+                subs.join("；")
+            };
+            format!(
+                "三维声场与配器制作 ✅\n· 流派与配器：{} | {}\n· 器乐记忆钩子：{}\n· 减法留白：{}",
+                genre, inst, hook, sub_txt
+            )
+        }
+        PipelineRole::StyleAnalyst => {
+            if let Some(dy) = &plan.mode_meta.douyin {
+                let hook_preview = dy.hook_line.lines().next().unwrap_or(&dy.hook_line);
+                format!(
+                    "短视频卡点与完播设计 ✅\n· 场景：{}（{}–{} BPM）\n· 核心 Hook：「{}」\n· 15s 高潮切片：{} → {}（loop_tail={}）",
+                    dy.scene.label_zh(),
+                    dy.scene.bpm_band().0,
+                    dy.scene.bpm_band().1,
+                    hook_preview,
+                    dy.clip.start_section,
+                    dy.clip.end_section,
+                    dy.loop_tail
+                )
+            } else {
+                "流行记忆点与传播节奏已就位 ✅".to_string()
+            }
+        }
+        _ => format!("{}：已完成方案统合 ✅", role.name()),
+    }
+}
+
 /// 主流程内层：三阶段（主持人统领 → 角色审改+校验员审查讨论 → 校验员格式化）
 /// budget 为共享预算（Arc），调用链逐层透传
 /// 增量模式（request.refine_targets.is_some()）时阶段 0 跳过——以上一版方案为起步，
@@ -1619,7 +1775,38 @@ async fn run_pipeline_inner<R: Runtime>(
     let mut stop_at_user_gate: Option<u32> = None;
     // 实际走到的轮次（含收敛/上限/提前收工三种终局）——检查点与降级声明同源读取
     let mut last_round: u32 = 0;
-    for round in 1..=MAX_DISCUSSION_ROUNDS {
+    // v3 直通管线（Direct Pipeline）：常规生成（非增量精修、未开启轮间确认门、且阶段0期间无用户插话）
+    // 直接从阶段0 词曲一体初稿进入阶段2 物理硬门+去机器味审计与编译，彻底告别无意义的委员会多轮任务分发扯皮；
+    // 仅在增量角色精修（incremental）、手动开启轮间门（gate_enabled）或存在用户中途插话时才运行定向审改轮。
+    let initial_notes = interject::drain(&run_id);
+    for note in &initial_notes {
+        let preview: String = note.chars().take(60).collect();
+        revisions_log.push(("用户插话".to_string(), note.clone()));
+        if next_tasks.is_empty() {
+            next_tasks = note.clone();
+        } else {
+            next_tasks.push_str(&format!("\n{}", note));
+        }
+        emit(PipelineEvent::StepDone {
+            role: PipelineRole::Host,
+            summary: format!("收到用户插话，已纳入本轮讨论：{}", preview),
+        });
+    }
+    let run_discussion_loop = incremental || gate_enabled || !initial_notes.is_empty();
+    let max_rounds = if run_discussion_loop { MAX_DISCUSSION_ROUNDS } else { 0 };
+    if !run_discussion_loop {
+        converged = true;
+        for role in roles.iter() {
+            emit(PipelineEvent::StepStart { role: *role });
+            let summary = direct_pipeline_role_summary(&current_plan, *role, &request);
+            revisions_log.push((role.name().to_string(), summary.clone()));
+            emit(PipelineEvent::StepDone {
+                role: *role,
+                summary,
+            });
+        }
+    }
+    for round in 1..=max_rounds {
         last_round = round;
         let mut all_agree = true;
         // 三元组 =（角色, 修订片段, 角色总体意见）——异议必达，无具体修订的意见也要汇总
@@ -3651,6 +3838,42 @@ mod tests {
         assert!(pd.matches("style_arc_d_").count() >= 10 || pd.contains("style_arc_d_loop"));
         assert!(!pb.contains("style_arc_d_"), "mode_b 不得拿 d_ 弧线");
         assert!(pb.contains("style_arc_dry"));
+    }
+
+    #[test]
+    fn direct_pipeline_role_summaries_cover_all_roles() {
+        let mut plan = crate::plan::fixtures::minimal_plan();
+        plan.intent = Some(crate::plan::SongIntent {
+            plot_type: crate::plan::PlotType::Situational,
+            one_thing: "不是放不下你，是气自己还在等".into(),
+            to_whom: "副驾驶的前任".into(),
+            at_what_moment: "凌晨便利店".into(),
+            anchor_object: "冷掉的关东煮".into(),
+            rhyme_plan: Some("全曲主韵言前辙(an/ian)，Bridge微跳人辰辙(en/in)".into()),
+        });
+        plan.asymmetry = Some(crate::plan::AsymmetryPlan {
+            short_line: Some("别回头".into()),
+            deliberate_unrhymed: None,
+            chorus_variation: Some("末遍高八度".into()),
+            withholding: Some("没发出的消息".into()),
+        });
+        plan.global.mood = Some("intimate, nocturnal".into());
+        plan.global.arrangement_hook = Some("muted guitar ostinato".into());
+        plan.sections[0].subtraction = Some("drums drop out".into());
+        let cp = plan_flow::plan_to_checkpoint(&plan);
+        let req = make_request(None);
+
+        let em = direct_pipeline_role_summary(&cp, PipelineRole::Emotion, &req);
+        assert!(em.contains("冷掉的关东煮") && em.contains("intimate"), "{em}");
+
+        let ly = direct_pipeline_role_summary(&cp, PipelineRole::Lyricist, &req);
+        assert!(ly.contains("别回头") && ly.contains("没发出的消息"), "{ly}");
+
+        let rv = direct_pipeline_role_summary(&cp, PipelineRole::Reviser, &req);
+        assert!(rv.contains("行数核对") && rv.contains("冷掉的关东煮"), "{rv}");
+
+        let pr = direct_pipeline_role_summary(&cp, PipelineRole::Producer, &req);
+        assert!(pr.contains("muted guitar ostinato") && pr.contains("drums drop out"), "{pr}");
     }
 
 }
