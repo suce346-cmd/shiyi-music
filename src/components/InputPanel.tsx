@@ -3,7 +3,7 @@ import { IconSend, IconSparkles, IconEdit } from "@tabler/icons-react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { readTextFile } from "@tauri-apps/plugin-fs";
 import type { Mode, AppSettings, Locale } from "../types";
-import { t } from "../i18n";
+import { t, type MessageKey } from "../i18n";
 import { isSubmitHotkey, isImportableFile } from "../utils/hotkeys";
 import SceneSelector from "./SceneSelector";
 
@@ -19,6 +19,13 @@ interface Props {
   inputRef?: React.RefObject<HTMLTextAreaElement | null>;
 }
 
+const VOCAL_MIX_PRESETS: ReadonlyArray<{ id: string; key: MessageKey; directive: string }> = [
+  { id: "V-09", key: "input.preset.v09", directive: "终局副歌半音升调叠唱（V-09）" },
+  { id: "M-09", key: "input.preset.m09", directive: "二创分轨干声预净化（M-09）" },
+  { id: "V-05", key: "input.preset.v05", directive: "高音边缘脆弱微破音（V-05）" },
+  { id: "M-07", key: "input.preset.m07", directive: "复古模拟磁带暖感（M-07）" },
+];
+
 export default function InputPanel({ mode, disabled, settings, onGenerate, inputRef, locale }: Props) {
   const [lyrics, setLyrics] = useState("");
   const [inspiration, setInspiration] = useState("");
@@ -27,9 +34,16 @@ export default function InputPanel({ mode, disabled, settings, onGenerate, input
   /** 拖拽提示（非文本文件/读取失败时显示） */
   const [dropMsg, setDropMsg] = useState("");
   const [douyinScene, setDouyinScene] = useState<string | null>(null);
+  const [selectedPresets, setSelectedPresets] = useState<string[]>([]);
   const localRef = useRef<HTMLTextAreaElement | null>(null);
   /** 当前模式主输入框 */
   const mainRef = inputRef ?? localRef;
+
+  const togglePreset = (id: string) => {
+    setSelectedPresets((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+  };
 
   const handleSubmit = () => {
     if (!settings.apiKey) return;
@@ -48,6 +62,14 @@ export default function InputPanel({ mode, disabled, settings, onGenerate, input
       if (!inspiration.trim()) return;
       if (mode === "mode_d") {
         extra = { ...(extra ?? {}), douyinScene: douyinScene ?? "daily" };
+      }
+    }
+    if (selectedPresets.length > 0) {
+      const directives = VOCAL_MIX_PRESETS.filter((p) => selectedPresets.includes(p.id))
+        .map((p) => p.directive)
+        .join("、");
+      if (directives) {
+        userInput = `${userInput}\n【声学制作偏好：${directives}】`;
       }
     }
     onGenerate(userInput, extra);
@@ -183,6 +205,30 @@ export default function InputPanel({ mode, disabled, settings, onGenerate, input
             placeholder={mode === "mode_b" ? `${t(locale, "input.ph.inspiration.b")}${t(locale, "input.ph.suffix.submit")}，${t(locale, "input.ph.suffix.drop")}` : `${t(locale, "input.ph.inspiration.d")}${t(locale, "input.ph.suffix.submit")}，${t(locale, "input.ph.suffix.drop")}`} />
         </div>
       )}
+
+      <div className="space-y-1">
+        <div className="text-[11px] text-text-muted">{t(locale, "input.presets.label")}</div>
+        <div className="flex flex-wrap gap-1.5">
+          {VOCAL_MIX_PRESETS.map((p) => {
+            const active = selectedPresets.includes(p.id);
+            return (
+              <button
+                key={p.id}
+                type="button"
+                disabled={disabled}
+                onClick={() => togglePreset(p.id)}
+                className={`px-2 py-0.5 rounded-lg text-[11px] border transition-all duration-150 ${
+                  active
+                    ? "bg-brand-500/20 border-brand-500/50 text-brand-400 font-medium"
+                    : "bg-surface-2/50 border-border/35 text-text-muted hover:text-text-2"
+                }`}
+              >
+                {t(locale, p.key)}
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
       {dropMsg && (
         <p className="text-[11px] text-warning">{dropMsg}</p>

@@ -24,7 +24,7 @@
 
 ### 三条核心铁律
 1. **每段说明行聚焦卡点与变化量（Section Delta）**：`global` 放全局英文风格基调，每段 `positive_local` 放局部配器动作、空间切换与人声态度。
-2. **Style Prompt 恒英文且高权重置顶**：逗号分隔，< 1000 字符，置顶 `mood` + 流派律动 + 记忆钉乐器 + 人声姿态 + 手机友好混音；`global.arc` 用直白动态描述（如 `"relentless high energy hook"` 或 `"quiet intro exploding into full drop"`），禁止使用 `from A to B` 句式。
+2. **Style Prompt 恒英文、高权重置顶且禁艺人真名**：逗号分隔，< 1000 字符，置顶 `mood` + 流派律动 + 记忆钉乐器 + 人声姿态 + 手机友好混音；**严禁出现真实艺人/乐队名（`style_artist_name_leak`）**；`global.arc` 用直白动态描述（如 `"relentless high energy hook"` 或 `"quiet intro exploding into full drop"`），禁止使用 `from A to B` 句式。
 3. **三种鲜明动态走向**（0-10 标尺）：
    - **全程高位**：7-9 分持续高压，用 Drop / Beat Switch 切段。
    - **高开骤停**：8-10 分拉满，结尾一拍骤停留白。
@@ -39,8 +39,8 @@
     · Bridge/反差：全程高位=7，2件，稍剥离；高开骤停=—；先压后炸=8，3件，再次推
     · 最后Hook：全程高位=10，4件，最炸；高开骤停=10，4件，骤停前一拍最炸；先压后炸=10，5-6件，炸完即停
 
-### 1. 人声态度推导
-六维思考检查表（音域/音色/发声/颤音/咬字/节奏感——`global.vocal` 选词表 ID 如 `V-01`/`V-06`/`V-07` 或 ≥3 词具象英文短语；每段说明行 ≤200 字符，只写最核心的 2-3 维局部人声状态，如痞气拖拍 `lazy drawl`、微哑哭腔 `slight cry`、干脆喊唱 `punchy chant`）。
+### 1. 人声态度推导（三级物理锚定）
+六维思考检查表（音域/音色/发声/颤音/咬字/节奏感——`global.vocal` 选词表 ID 如 `V-01`/`V-06`/`V-07`/`V-09` 或 ≥3 词具象英文短语，用具体音域+声带颗粒度锚定并配合 `global.negative` 排除平庸罐头音；每段说明行 ≤200 字符，只写最核心的 2-3 维局部人声状态，如痞气拖拍 `lazy drawl`、微哑哭腔 `slight cry`、干脆喊唱 `punchy chant`）。
 
 ### 2. 记忆钉音色与格式化歌词
 把画面里的声音元素直接转化为记忆钉配器（如唢呐滑音、808 滑音贝斯、清脆响指、复古合成器琶音）。每件乐器带具体行为动词，禁写 `full band`。
@@ -67,8 +67,8 @@
 - **声律卡点与十三辙押韵硬门（违反直接打回）**：
   1. **全局一韵统领与段末合辙（`global_rhyme_scatter` / `section_rhyme_missing`）**：短视频洗脑的核心是全曲句尾韵脚死死咬住同一个口腔共鸣位置与重拍（Snare/Clap）！全曲所有 `Hook` 段与 `Verse` 段优先**一韵到底统押同一个十三辙韵部**（如上例全曲统押言前辙 `遍 bian / 眼 yan / 片 pian / 衫 shan / 劝 quan`；仅 Bridge 可微跳同部位邻韵如人辰辙 `en/in`），全曲所有 Hook 必须 100% 锁死同一主韵，每段偶句与**最后一句（收尾合句）必须入韵**，严禁各段乱换韵或写出不押韵的散文句！
   2. **严禁同音挤韵与同字重韵（`rhyme_homophone_collision`）**：除原句复沓外，不同行尾字严禁使用同音字（声母+韵母相同）或同一个字，必须换用不同声母的同辙字。
-  3. **对偶律动对称（`prosody_meter_imbalance`）**：每行 <= 12 字，若无叙事歌词，核心金句重复 2-4 遍并配合编曲加层/变奏即可成曲；同段上下对偶句字数与节奏切分必须紧凑对称（如七字对七字、八字对八字，除非在 `asymmetry.short_line` 显式声明破格短句）；**一行一乐句自然连写，禁止在中文词间机械插空格，禁用 `/` 与 `、`**。
-- Suno 参数：Weirdness: 12-20 | Style Influence: 85-95 | Audio Influence = 0，Variety = 0。
+  3. **对偶律动对称与禁圆括号舞台指令（`prosody_meter_imbalance` / `lyric_paren_direction`）**：每行 <= 12 字，若无叙事歌词，核心金句重复 2-4 遍并配合编曲加层/变奏即可成曲；同段上下对偶句字数与节奏切分必须紧凑对称（如七字对七字、八字对八字，除非在 `asymmetry.short_line` 显式声明破格短句）；**一行一乐句自然连写，禁止在中文词间机械插空格，禁用 `/` 与 `、`，严禁在歌词行内写 `(鼓点骤停)`、`(drop)` 等圆括号舞台指示**。
+- Suno 参数：Weirdness: 12-20 | Style Influence: 85-95 | Audio Influence = 0（无参考音频/reference_audio=false 时；开启参考音频时建议设为 70–85），Variety = 0。
 
 ## 输出要求
 直接输出符合 schema 的完整 `SongPlan` JSON 对象（含 `intent`、`global`、`sections`、`settings`、`mode_meta.douyin`、`asymmetry`、`exemptions`、`notes`）。`notes` 仅用三两句话简述 Hook 卡点设计与 15 秒切片理由，`global` 与所有段落 cue 必须使用英文。

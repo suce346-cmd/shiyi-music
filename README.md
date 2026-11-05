@@ -10,13 +10,13 @@
 
 正式安装包在 GitHub Releases（不是仓库文件列表里）：
 
-**最新版 → [Releases · v6.1.0](https://github.com/suce346-cmd/shiyi-music/releases/tag/v6.1.0)**
+**最新版 → [Releases · v6.2.0](https://github.com/suce346-cmd/shiyi-music/releases/tag/v6.2.0)**
 
 | 平台 | 文件 |
 |---|---|
-| macOS Apple Silicon（M 系列） | [shiyi._6.1.0_aarch64.dmg](https://github.com/suce346-cmd/shiyi-music/releases/download/v6.1.0/shiyi._6.1.0_aarch64.dmg) |
-| macOS Intel | [shiyi._6.1.0_x64.dmg](https://github.com/suce346-cmd/shiyi-music/releases/download/v6.1.0/shiyi._6.1.0_x64.dmg) |
-| Windows x64 | [shiyi._6.1.0_x64-setup.exe](https://github.com/suce346-cmd/shiyi-music/releases/download/v6.1.0/shiyi._6.1.0_x64-setup.exe) |
+| macOS Apple Silicon（M 系列） | [shiyi._6.2.0_aarch64.dmg](https://github.com/suce346-cmd/shiyi-music/releases/download/v6.2.0/shiyi._6.2.0_aarch64.dmg) |
+| macOS Intel | [shiyi._6.2.0_x64.dmg](https://github.com/suce346-cmd/shiyi-music/releases/download/v6.2.0/shiyi._6.2.0_x64.dmg) |
+| Windows x64 | [shiyi._6.2.0_x64-setup.exe](https://github.com/suce346-cmd/shiyi-music/releases/download/v6.2.0/shiyi._6.2.0_x64-setup.exe) |
 
 历史版本见 [全部 Releases](https://github.com/suce346-cmd/shiyi-music/releases)。
 

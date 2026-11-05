@@ -265,6 +265,7 @@ fn extract_c_lyric_lines(text: &str) -> Vec<String> {
                 && !l.starts_with("风格")
                 && !l.starts_with("参数")
                 && !l.starts_with("Weirdness")
+                && !l.starts_with("【声学制作偏好：")
                 && !crate::commands::validator::is_bare_package_line(l)
         })
         .collect()
@@ -1340,8 +1341,58 @@ fn check_params(p: &SongPlan, mode: &str, out: &mut Vec<Issue>) {
     }
 }
 
-/// 歌词行：A/B 禁 `/` `、` 断句；全模式禁将 `[...]` 结构标签或说明块塞进歌词行；D 每行 ≤DOUYIN_V2_LINE_MAX 字（和音虚词不计）
+/// 歌词行：A/B 禁 `/` `、` 断句；全模式禁将 `[...]` 结构标签或圆括号 `(舞台/器乐指示)` 塞进歌词行；D 每行 ≤DOUYIN_V2_LINE_MAX 字（和音虚词不计）
 fn check_lyric_lines(p: &SongPlan, mode: &str, out: &mut Vec<Issue>) {
+    const STAGE_PAREN_KEYWORDS: &[&str] = &[
+        "独奏",
+        "间奏",
+        "前奏",
+        "尾奏",
+        "伴奏",
+        "停顿",
+        "骤停",
+        "渐弱",
+        "渐强",
+        "旁白",
+        "念白",
+        "低语",
+        "气声",
+        "升调",
+        "鼓点",
+        "吉他",
+        "钢琴",
+        "弦乐",
+        "贝斯",
+        "唢呐",
+        "古筝",
+        "二胡",
+        "笛子",
+        "合成器",
+        "混响",
+        "抽空",
+        "solo",
+        "instrumental",
+        "break",
+        "drums",
+        "guitar",
+        "piano",
+        "bass",
+        "synth",
+        "strings",
+        "whisper",
+        "spoken",
+        "fade",
+        "drop",
+        "cut",
+        "pause",
+        "silence",
+        "reverb",
+        "chorus",
+        "verse",
+        "bridge",
+        "intro",
+        "outro",
+    ];
     for (i, s) in p.sections.iter().enumerate() {
         for (j, l) in s.lines.iter().enumerate() {
             let path = format!("/sections/{i}/lines/{j}");
@@ -1352,6 +1403,32 @@ fn check_lyric_lines(p: &SongPlan, mode: &str, out: &mut Vec<Issue>) {
                     path.clone(),
                     format!("歌词行内不得混入结构标签或方括号说明行（应填在 label / positive_local）：{l}"),
                 ));
+            }
+            // v6.2 硬门：Suno 会把歌词框圆括号 (...) 内的舞台指示/配器动作直接当成歌词唱出来！
+            // 仅允许简短和声回声（如 "(oh yeah)" / "(不退)" / "(x2)"），严禁整行圆括号说明或含器乐/舞台调度词。
+            if matches!(mode, "mode_b" | "mode_c" | "mode_d") {
+                let norm_paren = trimmed.replace('（', "(").replace('）', ")");
+                if let (Some(open), Some(close)) = (norm_paren.find('('), norm_paren.rfind(')')) {
+                    if close > open {
+                        let inner = norm_paren[open + 1..close].trim().to_lowercase();
+                        let whole_line_paren =
+                            norm_paren.starts_with('(') && norm_paren.ends_with(')');
+                        let is_repeat_mark = inner.starts_with('x')
+                            && inner[1..].chars().all(|c| c.is_ascii_digit());
+                        let has_stage_kw = STAGE_PAREN_KEYWORDS
+                            .iter()
+                            .any(|kw| inner.contains(kw));
+                        if has_stage_kw || (whole_line_paren && !is_repeat_mark && inner.chars().count() > 4) {
+                            out.push(Issue::hard(
+                                "lyric_paren_direction",
+                                path.clone(),
+                                format!(
+                                    "歌词行内严禁混入圆括号舞台/配器指示「{l}」（Suno v6 会把圆括号文字当成歌词直接唱出！请将配器/奏法/人声指示移入本段 positive_local 或 subtraction，歌词行只留真正要唱的字词）"
+                                ),
+                            ));
+                        }
+                    }
+                }
             }
             if matches!(mode, "mode_a" | "mode_b") && (l.contains('/') || l.contains('、')) {
                 out.push(Issue::hard(
@@ -1376,11 +1453,11 @@ fn check_lyric_lines(p: &SongPlan, mode: &str, out: &mut Vec<Issue>) {
     }
 }
 
-/// v3 去机器味诊断（Anti-AI-Tell Audit，Severity::Warn，不阻断编译但透出至 AuditResult.findings）
+/// v3/v6.2 去机器味与平台防坑诊断（Anti-AI-Tell & Suno v6 Guardrails）
 fn check_anti_ai_tells(p: &SongPlan, mode: &str, out: &mut Vec<Issue>) {
     let exempted = has_exemption(p);
 
-    // A1: 空洞形容词拦截（Suno 无法转化为声学参数的万能废话词）
+    // A1: 空洞形容词拦截 + 跨界伪视觉词拦截 + 真实艺人名泄漏拦截
     const EMPTY_ADJS: &[&str] = &[
         "epic",
         "emotional",
@@ -1389,6 +1466,43 @@ fn check_anti_ai_tells(p: &SongPlan, mode: &str, out: &mut Vec<Issue>) {
         "masterpiece",
         "perfect",
         "louder",
+    ];
+    const VISUAL_HALLUCINATIONS: &[&str] = &[
+        "4k",
+        "8k",
+        "1080p",
+        "uhd",
+        "widescreen",
+        "color palette",
+        "lossless video",
+    ];
+    const BLOCKED_ARTISTS: &[&str] = &[
+        "taylor swift",
+        "the weeknd",
+        "daft punk",
+        "ed sheeran",
+        "billie eilish",
+        "ariana grande",
+        "kendrick lamar",
+        "eminem",
+        "travis scott",
+        "kanye west",
+        "post malone",
+        "bruno mars",
+        "coldplay",
+        "imagine dragons",
+        "linkin park",
+        "metallica",
+        "nirvana",
+        "radiohead",
+        "pink floyd",
+        "hans zimmer",
+        "blackpink",
+        "newjeans",
+        "stray kids",
+        "jay chou",
+        "eason chan",
+        "jj lin",
     ];
     let mut style_fields: Vec<(String, &str)> = Vec::new();
     if let Some(m) = &p.global.mood {
@@ -1409,6 +1523,7 @@ fn check_anti_ai_tells(p: &SongPlan, mode: &str, out: &mut Vec<Issue>) {
         }
     }
     for (path, text) in style_fields {
+        let lower = text.to_ascii_lowercase();
         for word in text.split(|c: char| !c.is_ascii_alphabetic()) {
             let wl = word.to_ascii_lowercase();
             if EMPTY_ADJS.contains(&wl.as_str()) {
@@ -1419,6 +1534,54 @@ fn check_anti_ai_tells(p: &SongPlan, mode: &str, out: &mut Vec<Issue>) {
                 ));
                 break;
             }
+        }
+        for vh in VISUAL_HALLUCINATIONS {
+            let hit = if vh.contains(' ') {
+                lower.contains(vh)
+            } else {
+                lower
+                    .split(|c: char| !c.is_ascii_alphanumeric())
+                    .any(|tok| tok == *vh)
+            };
+            if hit {
+                out.push(Issue::warn(
+                    "style_visual_hallucination",
+                    path.clone(),
+                    format!(
+                        "含绘画/视频跨界伪提示词「{vh}」（Suno 声学模型无法解析视觉分辨率或画幅词，请改用 M-04/M-05 等分轨均衡与母带动态标签）"
+                    ),
+                ));
+                break;
+            }
+        }
+        let has_like_pattern =
+            lower.contains("in the style of ") || lower.contains("sounds like ");
+        let matched_artist = BLOCKED_ARTISTS.iter().copied().find(|a| lower.contains(a));
+        if has_like_pattern || matched_artist.is_some() {
+            let culprit = matched_artist.unwrap_or("in the style of / sounds like");
+            out.push(Issue::hard_or_exempt(
+                exempted,
+                "style_artist_name_leak",
+                path.clone(),
+                format!(
+                    "风格或段落提示含真实艺人引用「{culprit}」——Suno v6 会拦截真实艺人名并在后台强制重写整个 Style 框！请将其拆解为四维声学特征（年代流派 + 音域与声带颗粒度 + 标志性律动配器 + 混音空间），严禁直接写艺人名"
+                ),
+            ));
+        }
+    }
+
+    // A1b: 参考音频模式参数联动诊断（Cover / Voice 模式下 Variety 须为 0 且 Audio Influence 建议 70-85）
+    if p.settings.reference_audio {
+        let ai = p.settings.audio_influence.unwrap_or(0);
+        if p.settings.variety != 0 || ai < 65 {
+            out.push(Issue::warn(
+                "reference_audio_slider_mismatch",
+                "/settings",
+                format!(
+                    "已开启 reference_audio（当前 Variety={}, Audio Influence={}）：Suno v6 下翻唱/锁声线建议保持 Variety=0 且将 Audio Influence 设为 70–85，否则原曲旋律或克隆声线易漂移",
+                    p.settings.variety, ai
+                ),
+            ));
         }
     }
 
@@ -1466,22 +1629,58 @@ fn check_anti_ai_tells(p: &SongPlan, mode: &str, out: &mut Vec<Issue>) {
             out.push(Issue::warn(
                 "chorus_static_repeat",
                 "/sections",
-                "末遍副歌与首遍副歌的词、局部提示与配器完全雷同：建议在末遍副歌做热点词微变、八度和声叠加或前两拍抽空反差",
+                "末遍副歌与首遍副歌的词、局部提示与配器完全雷同：建议在末遍副歌做热点词微变、八度和声叠加、半音升调（key modulation up a half-step）或前两拍抽空反差",
             ));
         }
     }
 
-    // A4 & A5: 中文歌词抽象套话与声律（十三辙单调 / 高潮尾字闭口韵）检查
+    // A4 & A5 & A6: 中文歌词抽象套话、比喻自解（Class 2）、励志套语（Class 5）、主副歌交界回声（Verse-Chorus Echo）与声律检查
     if p.mode_meta.lyrics_lang == super::LyricLang::Zh && !exempted {
         const ABSTRACT_CLICHES: &[&str] = &[
             "时光", "岁月", "远方", "星辰", "余生", "救赎", "宿命", "深渊", "彼岸", "永恒",
         ];
+        const CLICHE_ESCALATIONS: &[&str] = &[
+            "冲破枷锁",
+            "逆风飞翔",
+            "重写命运",
+            "照亮黑暗",
+            "撕碎沉默",
+            "打破宿命",
+            "穿越黑暗",
+        ];
+        const METAPHOR_DECODE_MARKERS: &[&str] = &[
+            "就像我们的",
+            "代表我们的",
+            "说明我们",
+            "意味着我们",
+            "正如同我们",
+            "象征着我们",
+        ];
         let mut hit_cliches: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
-        for s in &p.sections {
-            for l in &s.lines {
+        let mut hit_escalations: std::collections::BTreeSet<&str> =
+            std::collections::BTreeSet::new();
+        for (si, s) in p.sections.iter().enumerate() {
+            for (li, l) in s.lines.iter().enumerate() {
                 for &cl in ABSTRACT_CLICHES {
                     if l.contains(cl) {
                         hit_cliches.insert(cl);
+                    }
+                }
+                for &esc in CLICHE_ESCALATIONS {
+                    if l.contains(esc) {
+                        hit_escalations.insert(esc);
+                    }
+                }
+                for &md in METAPHOR_DECODE_MARKERS {
+                    if l.contains(md) {
+                        out.push(Issue::warn(
+                            "lyric_metaphor_decoded",
+                            format!("/sections/{si}/lines/{li}"),
+                            format!(
+                                "歌词出现「比喻自解/破喻」句式（含「{md}」）：写物即写情，请直接保留具象动作或物象，删掉向听众解释比喻含义的说明文"
+                            ),
+                        ));
+                        break;
                     }
                 }
             }
@@ -1496,6 +1695,46 @@ fn check_anti_ai_tells(p: &SongPlan, mode: &str, out: &mut Vec<Issue>) {
                     list.join("、")
                 ),
             ));
+        }
+        if !hit_escalations.is_empty() {
+            let list: Vec<&str> = hit_escalations.into_iter().collect();
+            out.push(Issue::warn(
+                "lyric_cliche_escalation",
+                "/sections",
+                format!(
+                    "歌词出现 AI 高频励志口号套语（{}）：建议改为人物在具体场景下的真实动作或克制独白（LC-18）",
+                    list.join("、")
+                ),
+            ));
+        }
+        // 主副歌交界回声检查（Verse-Chorus Echo）：主歌/导歌末句不应与紧随的副歌首句同字撞韵或提前剧透副歌核心句
+        for win in p.sections.windows(2) {
+            let prev = &win[0];
+            let next = &win[1];
+            if matches!(prev.kind, SectionKind::Verse | SectionKind::PreChorus)
+                && kind_is_chorus_class(next.kind)
+            {
+                let prev_last = prev.lines.iter().rev().map(|s| s.trim()).find(|s| !s.is_empty());
+                let next_first = next.lines.iter().map(|s| s.trim()).find(|s| !s.is_empty());
+                if let (Some(pl), Some(nf)) = (prev_last, next_first) {
+                    let cjk_p = cjk_chars(pl);
+                    let cjk_n = cjk_chars(nf);
+                    if !cjk_p.is_empty() && !cjk_n.is_empty() && cjk_p != cjk_n {
+                        if let (Some(ch_p), Some(ch_n)) = (last_cjk(pl), last_cjk(nf)) {
+                            if ch_p == ch_n {
+                                out.push(Issue::warn(
+                                    "verse_chorus_echo",
+                                    "/sections",
+                                    format!(
+                                        "「{}」末句与紧随的「{}」首句均以同一个「{ch_p}」字收尾（主副歌交界同字回声会削弱副歌进入时的爆发反差，建议将导歌/主歌末句换为同辙其他字做蓄力铺垫）",
+                                        prev.label, next.label
+                                    ),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
         }
         // 检查非复沓句中是否存在同一个汉字被反复当作韵脚 ≥4 次（全曲统一押同一十三辙是优良全局统筹，但不能反复拿同一个字凑韵）
         let mut unique_lines: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
@@ -2403,5 +2642,76 @@ mod tests {
             issues_g.iter().any(|i| i.code == "homologous_section_rhyme_drift" && i.severity == Severity::Hard),
             "Verse 1(江阳) 与 Verse 2(遥条) 跨段跑韵必须触发 homologous_section_rhyme_drift Hard 打回: {issues_g:?}"
         );
+    }
+
+    #[test]
+    fn v6_2_open_source_skill_gates_work() {
+        // 1. 歌词行混入圆括号舞台/器乐指示 -> lyric_paren_direction (Hard)
+        let mut p = minimal_plan();
+        p.sections[1].lines = vec![
+            "雨落长街(吉他独奏)".into(),
+            "灯火未眠".into(),
+        ];
+        let issues = validate(&p, &ctx("mode_b"));
+        assert!(
+            issues.iter().any(|i| i.code == "lyric_paren_direction" && i.severity == Severity::Hard),
+            "歌词行内混入圆括号器乐/舞台指示必须触发 Hard 打回: {issues:?}"
+        );
+
+        // 2. 风格栏混入真实艺人名 + 8K 伪视觉词 + 参考音频参数失配 + 比喻自解 + 励志口号 + 主副歌交界回声
+        let mut p2 = minimal_plan();
+        p2.global.mood = Some("in the style of Taylor Swift, 8K lossless video".into());
+        p2.settings.reference_audio = true;
+        p2.settings.variety = 20;
+        p2.settings.audio_influence = Some(30);
+        p2.sections = vec![
+            Section {
+                kind: SectionKind::Verse,
+                label: "Verse 1".into(),
+                motion: None,
+                positive_local: vec!["close room".into()],
+                negative_local: vec![],
+                subtraction: None,
+                energy: Some(3),
+                instruments: vec!["guzheng".into(), "cello".into()],
+                minimal: false,
+                target_seconds: None,
+                lines: vec![
+                    "茶杯在桌上早就凉透".into(),
+                    "就像我们的爱已走不眠".into(),
+                ],
+            },
+            Section {
+                kind: SectionKind::Chorus,
+                label: "Chorus 1".into(),
+                motion: None,
+                positive_local: vec!["wide hall".into()],
+                negative_local: vec![],
+                subtraction: None,
+                energy: Some(8),
+                instruments: vec!["guzheng".into(), "cello".into(), "dizi".into(), "pipa".into()],
+                minimal: false,
+                target_seconds: None,
+                lines: vec![
+                    "冲破枷锁在这长夜不眠".into(),
+                    "逆风飞翔直到海角天边".into(),
+                ],
+            },
+        ];
+        let issues2 = validate(&p2, &ctx("mode_b"));
+        let codes2: Vec<&str> = issues2.iter().map(|i| i.code).collect();
+        for expected in [
+            "style_artist_name_leak",
+            "style_visual_hallucination",
+            "reference_audio_slider_mismatch",
+            "lyric_metaphor_decoded",
+            "lyric_cliche_escalation",
+            "verse_chorus_echo",
+        ] {
+            assert!(
+                codes2.contains(&expected),
+                "应检出 v6.2 诊断/硬门 {expected}，实际: {codes2:?}"
+            );
+        }
     }
 }

@@ -7,13 +7,12 @@
 
 use super::{SectionKind, SongPlan, VocalGender};
 
-/// 段头语法（竖线内联 cue）
+/// 段头语法（单一方括号竖线内联 cue：`[Verse 1 | cue, cue]`；
+/// 禁用独立行圆括号 `(cue)`——Suno v6 会将独立圆括号行当成背景歌词唱出）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SectionHeader {
     /// `[Verse 1 | cue, cue]`
     PipeInline,
-    /// `[Verse 1]` + 下一行 `(cue, cue)`
-    BracketThenParen,
 }
 
 pub const SECTION_HEADER: SectionHeader = SectionHeader::PipeInline;
@@ -223,9 +222,6 @@ pub fn render(p: &SongPlan) -> Rendered {
         match SECTION_HEADER {
             SectionHeader::PipeInline if !cues.is_empty() => {
                 lyrics.push_str(&format!("[{} | {}]\n", s.label.trim(), cues))
-            }
-            SectionHeader::BracketThenParen if !cues.is_empty() => {
-                lyrics.push_str(&format!("[{}]\n({})\n", s.label.trim(), cues))
             }
             _ => lyrics.push_str(&format!("[{}]\n", s.label.trim())),
         }

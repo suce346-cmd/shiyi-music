@@ -467,7 +467,7 @@ pub const EMBEDDED_TABLE_COUNT: usize = 9;
 /// 表名单源
 pub const VOCAL_MIX_TABLE: &str = "vocal_mix";
 /// 注入预算（字符）：完整块超出即退化为只注入 `id=label_en`（BLUEPRINT P1-5）
-pub const VOCAL_MIX_INJECT_MAX_CHARS: usize = 2200;
+pub const VOCAL_MIX_INJECT_MAX_CHARS: usize = 2600;
 
 /// 词表一行（只取校验/渲染/注入需要的列）
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2366,7 +2366,7 @@ mod tests {
     fn vocal_mix_table_shape_and_ids() {
         let kb = KnowledgeBase::load_embedded().unwrap();
         let rows = vocal_mix_entries(&kb).expect("嵌入版必须含 vocal_mix");
-        assert_eq!(rows.len(), 16, "人声 8 + 混音 8（含 phone-speaker 与 v3 声学扩展）");
+        assert_eq!(rows.len(), 18, "人声 9 + 混音 9（含 phone-speaker 与 v3/v6.2 声学扩展）");
         let mut ids = std::collections::HashSet::new();
         for e in &rows {
             assert!(ids.insert(e.id.clone()), "id 重复: {}", e.id);
@@ -2376,8 +2376,8 @@ mod tests {
             let l = e.label_en.to_lowercase();
             assert!(!l.split(',').any(|t| { let t = t.trim(); t.starts_with("no ") || t.starts_with("without ") }), "{} label_en 含否定（正向层禁否定）", e.id);
         }
-        assert_eq!(rows.iter().filter(|e| e.category == "vocal").count(), 8);
-        assert_eq!(rows.iter().filter(|e| e.category == "mix").count(), 8);
+        assert_eq!(rows.iter().filter(|e| e.category == "vocal").count(), 9);
+        assert_eq!(rows.iter().filter(|e| e.category == "mix").count(), 9);
     }
 
     #[test]

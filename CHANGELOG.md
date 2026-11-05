@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## 6.2.0（2026-11-04）
+
+- **[全面升级] v6.2.0 开源 Suno 生态十大声学与工程法则全链路内化（`docs/ROADMAP.md` / `docs/BLUEPRINT_v3_CONTRACT.md`）**：
+  - **知识库扩充（`knowledge/*.csv` & `knowledge.rs`）**：
+    - `vocal_mix.csv` 扩充至 18 项（9 人声 + 9 混音），新增 `V-09`（终局升调叠唱 `key modulation up a half-step, soaring final chorus belt, wide octave backing choir`）与 `M-09`（二创分轨预净化 `dry isolated lead vocal, natural pitch, stem-clean frequency separation, minimal reverb tail`）；`VOCAL_MIX_INJECT_MAX_CHARS` 同步升至 `2600`。
+    - `style_genre.csv` 新增「二次元燃系摇滚」（`anisong J-rock`）与「新中式禅意疗愈」（`zen ambient`）两条 14 列纯声学流派配方。
+    - `lyric_craft.csv` 深度升级 `LC-06`（防主副回声粘连）、`LC-08`（严禁圆括号舞台/配器指令混入歌词行）、`LC-15`（严禁破喻自解 Show-Don't-Decode）与 `LC-18`（反陈腐励志口号升华）。
+  - **编译器与双层校验硬门升级（`render_suno.rs` & `validate.rs`）**：
+    - 彻底移除 `SectionHeader::BracketThenParen` 废弃枚举，编译期 100% 强制单一方括号合并段头 `[Label | cue, cue]`，杜绝 Suno v6 将独立圆括号行当成歌词朗读。
+    - `plan::validate` 新增硬门 `lyric_paren_direction`（拦截歌词行内 `(吉他独奏)`/`(间奏)`/`(whispered)` 等圆括号舞台/配器指令，仅放行简短人声回声如 `(oh yeah)`）与 `style_artist_name_leak`（拦截真实歌手/乐队名或 `in the style of`，强制艺人四维声学转译，防 Suno 后台过滤重写整个 Style 框）。
+    - `plan::validate` 新增审美与参数告警：`style_visual_hallucination`（拦截 `4K/8K/1080p` 等跨域视觉废词）、`reference_audio_slider_mismatch`（参考音频二创滑块安全锁：`Variety=0` 且 `Audio Influence >= 65`）、`lyric_metaphor_decoded`（破喻自解告警）、`lyric_cliche_escalation`（陈腐励志口号告警）与 `verse_chorus_echo`（主歌末句与副歌首句复读告警）。
+  - **四模式系统提示词与审改角色全同步（`prompts.rs` / `roles.rs` / `tests/fixtures/prompts/*.txt`）**：
+    - 全面内化跨流派融合四要素公式（`Anchor + Contrast + Bridge Mechanism + Production Binder`）、艺人四维声学转译铁律、三级人声物理锚定法（物理音域 + 声带颗粒度 + `negative` 反向排斥）、八大配器职能动词（新增 `Counterline` 复调对话线与 `Texture glue` 纹理胶水层）及 `Bridge -> Final Chorus` 半音升调推顶。
+  - **前端工作台与反馈路由双端升级（`InputPanel.tsx` / `ResultPanel.tsx` / `refineTargets.ts` / `i18n.ts`）**：
+    - `InputPanel` 新增「声学质感与二创偏好（可选）」快捷胶囊（`V-09` 终局半音升调、`M-09` 二创分轨干声、`V-05` 脆弱微破音、`M-07` 模拟磁带暖感）。
+    - `ResultPanel` 优化面板新增「一键精修指令」快捷胶囊（终局副歌半音升调推顶、二创分轨干声净化、艺人名转四维声学特征、副歌前两拍乐器抽空留白）。
+    - 前后端反馈路由（`refineTargets.ts` ↔ `orchestrator::roles_for_feedback`）双向同步新增 `比喻/破喻/口号/括号/升调/分轨/干声/转译/融合` 关键词并由 `wireProtocol.test.ts` 锁定。
+
 ## 6.1.0（2026-11-03）
 
 - **[架构/规则重构] v3 词曲声学一体直通管线与去机器味规则体系（`docs/BLUEPRINT_v3_CONTRACT.md`）**：

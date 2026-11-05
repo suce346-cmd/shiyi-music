@@ -328,6 +328,31 @@ export default function ResultPanel({ conversation, streamText, status, onRefine
 
       {showRefine && !busy && hasOutput && (
         <div className="glass-panel rounded-2xl border border-border/30 p-3.5 space-y-2.5 animate-[fade_200ms_ease]">
+          <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
+            <span className="text-text-muted">{t(locale, "result.refine.quick")}</span>
+            {(
+              [
+                "result.refine.q1",
+                "result.refine.q2",
+                "result.refine.q3",
+                "result.refine.q4",
+              ] as const
+            ).map((qk) => {
+              const label = t(locale, qk);
+              return (
+                <button
+                  key={qk}
+                  type="button"
+                  onClick={() =>
+                    setFeedback((prev) => (prev.trim() ? `${prev}；${label}` : label))
+                  }
+                  className="px-2 py-0.5 rounded-lg bg-surface-2/60 hover:bg-surface-3 border border-border/35 text-text-2 transition-all duration-150"
+                >
+                  + {label}
+                </button>
+              );
+            })}
+          </div>
           <textarea value={feedback} onChange={e => setFeedback(e.target.value)}
             className="w-full h-16 bg-surface-1 border border-border/60 rounded-xl px-3 py-2.5 text-[13px]
               text-text-1 placeholder:text-text-muted/30 resize-y focus:outline-none

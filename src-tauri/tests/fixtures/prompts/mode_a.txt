@@ -47,6 +47,8 @@
 - **前景（Foreground）**：主唱人声 + 唯一器乐记忆钩子（`arrangement_hook`，如 `"recurring 4-note muted electric guitar ostinato"`），占据声场中央。
 - **中景（Midground）**：和声铺底与律动骨架（吉他分解/扫弦、钢琴和弦、贝斯与鼓组口袋律动），中频乐器必须向两侧或高低频让位，绝不掩蔽主唱中频（1–4 kHz）。
 - **背景（Background）**：空间混响长尾、大提琴/合成器长音铺垫（Pad）与环境声纹理。
+- **跨流派融合四要素公式（4-Part Fusion Builder）**：当需要混搭两种以上流派时，严禁无主次堆砌流派词，必须按四要素分工组合：`Anchor（唯一主干节拍与低频引擎）` + `Contrast（异质特色主奏乐器）` + `Bridge Mechanism（粘合两者的共同音型，如五声 Ostinato 或呼应律动）` + `Production Binder（统一声学空间胶水）`。
+- **艺人四维声学转译铁律（严禁直接写歌手/乐队真名）**：Suno v6 遇到真实艺人名会触发后台拦截并强制重写整个 Style 框！若用户提到参考歌手，必须将其拆解转译为「年代与流派分支 + 音域与声带颗粒度 + 标志性律动配器 + 混音空间质感」四维英文标签，严禁在 `global` 或 `sections` 中出现真实艺人名或 `in the style of X`。
 - **流派特征参考（禁止整行照抄，按立意推导）**：
   - 抒情流行：ballad, intimate, fingerpicked guitar, felt piano, warm bass, brushed snare, close-room production
   - 摇滚：alternative rock, distorted guitar riff, live drums, backbeat, bass groove, big room reverb, raw energy
@@ -54,19 +56,19 @@
   - R&B：neo-soul, Rhodes, muted guitar chops, warm bass, stacked harmonies, behind-the-beat feel
   - 电子/独立：synthwave, delayed guitar, analog synth arpeggio, sidechained sub-bass, wide stereo reverb
 
-### 2. 人声设计（不完美哲学与四型和声）
-- **从角色心理状态推导发声**：拒绝冰冷完美的机器修音感。根据歌词现场设计呼吸声、微破音、气声或胸声颗粒感。
-- **人声坐标维度**：六维思考检查表（音域/音色/发声/颤音/咬字/节奏感——在 `global.vocal` 选用《人声/混音词表》ID 如 `V-02`/`V-05`/`V-06`/`V-08` 或书写 ≥3 词的具象英文人声短语；每段说明行 ≤200 字符，只写最核心的 2-3 维局部人声状态变化）。
+### 2. 人声设计（三级物理锚定、不完美哲学与四型和声）
+- **三级声线物理锚定法**：拒绝只写空泛的年龄或情绪词（Suno 无法把抽象情绪词映射为声带振动，易回退为幼态或平庸罐头音）。必须：① 用具体物理音域（`contralto / mezzo-soprano / baritone / tenor`）+ 声带物理颗粒度（`smoky / weathered / gravelly / breathy`）定位音色；② 在 `global.negative` 中反向排斥冲突声线（如需要成熟沧桑感时排除 `youthful vocals, generic studio pop vocal`）；③ 在各段 `positive_local` 锚定局部发声姿态。
+- **人声坐标维度**：六维思考检查表（音域/音色/发声/颤音/咬字/节奏感——在 `global.vocal` 选用 1 项核心《人声/混音词表》ID（如 `V-02`/`V-05`/`V-06`/`V-08`/`V-09`，勿叠多个 V-xx）或 1 条 ≥3 词的具象英文人声短语；若用于提取分轨伴奏二创可选 `M-09`；每段说明行 ≤200 字符，只写最核心的 2-3 维局部人声状态变化）。
 - **能量与人声姿态映射**：
   - 0-2：close-mic whisper, audible breath, fragile parlando
   - 3-4：intimate restrained vocal, soft chest tone, close-mic
   - 5-6：deepening breath, forward projection, rising tension
   - 7-8：open chest-voice belt, double-tracked chorus lead, resonant
-  - 9-10：raw gritty peak belt, slight emotional voice crack, octave & 3rd harmony stack
+  - 9-10：raw gritty peak belt, slight emotional voice crack, octave & 3rd harmony stack, key modulation up a half-step
 - **四型和声按需配置**：Unison Double（齐唱加厚）、Octave（八度拓宽）、3rd/6th Harmony（三六度温暖包裹）、Call-and-Response Ad-libs（句尾呼应衬词）。
 
-### 3. 配器角色与弧线密度
-每个乐器必须带具体行为动词（Pulse carrier: ticks/strums; Groove anchor: locks/pushes; Harmonic bed: cushions/sustains; Signature hook: riffs/answers; Impact layer: slams/swells; Contrast color: strips/thins）。
+### 3. 配器八大职能动词与弧线密度
+每个乐器必须带具体行为动词（八大职能体系：Pulse carrier: carries/ticks/strums; Groove anchor: locks/pushes/swings; Harmonic bed: cushions/sustains/warms; Signature hook: riffs/answers/sparkles; Counterline 复调对话线: weaves/replies/shadows/circles; Impact layer: slams/swells/drops; Texture glue 纹理胶水层: washes/saturates/shimmers; Contrast color: strips/thins/exposes）。
 
 根据弧线类型规划逐段密度：
 
@@ -89,7 +91,7 @@
 - 全局核心乐器 3-7 件，全曲不超 7 件；【极简段豁免（模式 A/B）】配器按段核查：常规最弱段参考 3 件；若某段音乐上确需少于 3 件（如剥离型 Bridge/Intro/Outro、清唱反差段落），将该段 `minimal` 设为 `true`（或在 `exemptions` / `notes` 写明极简段理由）——声明后该段豁免最弱段下限；配器差 ≥2 件、最强段 ≥4 件、全曲 ≤7 件照常核查。
 
 ### 4. 段落说明行与歌词排版规范
-每段由 `label`、`positive_local`、`instruments`、`subtraction`、`negative_local`、`energy` 与 `lines` 组成，编译器自动渲染为单行段头：
+每段由 `label`、`positive_local`、`instruments`、`subtraction`、`negative_local`、`energy` 与 `lines` 组成，编译器自动渲染为单一方括号合并段头：
 
     [Intro]
     [solo piano low sparse notes, intimate close-room, no voice]
@@ -106,7 +108,7 @@
 
 规则：
 - 说明行要素：`positive_local` 必须包含乐器奏法变化、空间/力度（如 close room / wide hall / sudden drop）、人声状态（均为英文短语）；整段头渲染后 ≤200 字符。
-- 歌词行（`sections[].lines`）：保留用户歌词正文，**一行对应一个自然演唱呼吸短句（换行=强停顿），严禁在中文词组间机械插入单空格切碎词义**，禁用 `/` 斜杠与 `、` 顿号，禁止把 `[...]` 标签塞进 `lines`。
+- 歌词行（`sections[].lines`）：保留用户歌词正文，**一行对应一个自然演唱呼吸短句（换行=强停顿），严禁在中文词组间机械插入单空格切碎词义**，禁用 `/` 斜杠与 `、` 顿号，禁止把 `[...]` 标签或 `(吉他独奏)` 等圆括号舞台/配器指示塞进 `lines`（Suno v6 会把圆括号文字当成歌词唱出）。
 
 ### 5. Suno 参数
 根据弧线类型选值：
@@ -120,7 +122,7 @@
 - U型：Weirdness 25-35 | Style Influence 70-82
 - 单峰型：Weirdness 20-30 | Style Influence 75-85
 - 回环型：Weirdness 20-28 | Style Influence 78-85
-Audio Influence = 0（无参考音频/reference_audio=false 时；开启参考音频时可非 0），Variety = 0。
+Audio Influence = 0（无参考音频/reference_audio=false 时；开启参考音频 reference_audio=true 时建议设为 70–85），Variety = 0。
 
 ## 输出要求
 直接输出符合 schema 的完整 `SongPlan` JSON 对象（含 `intent`、`global`、`sections`、`settings`、`asymmetry`、`exemptions`、`notes`）。`notes` 仅用三两句话精炼说明核心声学映射与转折设计，不写长篇套话。`global` 与所有段落 cue 必须使用英文。

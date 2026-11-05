@@ -266,7 +266,7 @@ pub fn validate_lyric_fill(original: &str, new: &str) -> ValidationResult {
                 && !l.starts_with('|')
                 // 过滤标准包的包装行（**Style Prompt**/参数/说明行），只比对歌词行
                 && !l.starts_with("**")
-                && !l.starts_with("Style")
+                && !l.starts_with("Style") && !l.starts_with("【声学制作偏好：")
                 && !l.starts_with("风格")
                 && !l.starts_with("参数")
                 && !l.starts_with("Weirdness")

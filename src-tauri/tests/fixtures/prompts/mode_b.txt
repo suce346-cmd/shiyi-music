@@ -12,17 +12,19 @@
 
 ## 第二步：去机器味作词方法论（写入 `sections[].lines` 与 `asymmetry`）
 
-### 1. 重力法则与内外细节切换（Gravity & Toggling）
+### 1. 重力法则、防破喻与内外细节切换（Gravity, Show-Don't-Decode & Toggling）
 - **主歌开篇重力**：主歌前两句必须落地在可触摸的感官名词、空间细节或身体动作上（先演后说），**严禁前四句出现“时光、岁月、远方、星辰、余生、救赎、宿命、深渊”等悬空抽象词**。
+- **严禁破喻自解（Show, Don't Decode）**：当写下具体意象后，**严禁在同句或下句用“就像我们的/象征着/代表着/如同当初”把隐喻翻译成直白道理**（如写了“阳台那盆绿萝黄了半边”就停住，禁止紧接“就像我们枯萎的诺言”）。
 - **内外切换与锚点三层折射（Toggling & 3-Stage Refraction）**：一行外部感官镜头（看到的物/听到的声/手上的动作）↔ 一行内心微澜或口语自白；核心锚点物（`anchor_object`）在全曲必须完成三层折射：首现建立物理现场（Verse 1）→ 二现揭露嘴硬或反差刺痛（Verse 2）→ 终现改变状态或悬置留白（Bridge / Final Chorus / Outro），严禁 Verse 2 同义复读 Verse 1。
 
-### 2. 留白与反三段论鸡汤（Withholding）
-- **拒绝“受挫→顿悟→释怀祝福”的 AI 圆满闭环**：真挚的歌往往停在尚未愈合的刺点或具体动作上。在 `asymmetry.withholding` 中写明终局如何悬置留白（如停在“没有发出去的那条消息”或“绿灯亮了却没过马路”）。
+### 2. 留白与反三段论口号鸡汤（Withholding & Anti-Slogan）
+- **拒绝“受挫→顿悟→释怀祝福/逆风飞翔”的 AI 圆满闭环**：严禁在 Bridge 或末段堆砌“冲破枷锁/逆风飞翔/重写命运/不再彷徨/迎接曙光”等假大空口号（`lyric_cliche_escalation`）。真挚的歌往往停在尚未愈合的刺点或具体动作上。在 `asymmetry.withholding` 中写明终局如何悬置留白（如停在“没有发出去的那条消息”或“绿灯亮了却没过马路”）。
 
-### 3. 经典双循环曲式与副歌递进设计（曲式硬规范 + `asymmetry`）
+### 3. 经典双循环曲式与主副回声隔离（曲式硬规范 + `asymmetry`）
 - **标准流行双循环曲式（严禁把 Verse 1 和 Verse 2 连着堆在第一遍副歌之前）**：
   - 必须采用符合听觉期待的成熟流行曲式：`[Intro] → [Verse 1] → ([Pre-Chorus 1]) → [Chorus 1] → ([Interlude]) → [Verse 2] → ([Pre-Chorus 2]) → [Chorus 2] → [Bridge] → [Final Chorus] → [Outro]`；
   - **第一遍主歌（`Verse 1`）之后必须进入导歌/第一遍副歌（`Chorus 1`）**，随后再进第二遍主歌（`Verse 2`）与第二遍副歌（`Chorus 2`），绝不允许全曲只写一遍普通 Chorus 就直接跳进 Bridge！
+- **严禁主歌末句与副歌首句复读（`verse_chorus_echo`）**：主歌/导歌是蓄力与视角铺垫，副歌是核心金句释放；**严禁主歌或导歌的最后一句与紧随其后的副歌第一句完全相同或高度重合**，避免Suno生成时旋律粘连失去副歌爆发感。
 - **末遍副歌热点微变（`asymmetry.chorus_variation` 必填）**：`Chorus 1` 与 `Chorus 2` 保持核心记忆句稳定洗脑，`Final Chorus` 更换高音处的一个核心动词/代词或递进一层意象（如从“往你那边偏”递进为“往雨那边偏”）。
 - **破格短句与失韵留白（`short_line` / `deliberate_unrhymed` 默认填 `null`）**：全曲各段优先保持句式工整（四句八字/九字/十字对齐）与偶句/末句严格合辙，**严禁为了凑 `short_line` 把一句完整的话生硬拆成一长一短两行（如 7字+3字），也严禁在 Chorus 副歌内部故意失韵**！
 
@@ -42,16 +44,16 @@
 
 ### 三条核心铁律
 1. **全局与段落四象限分工明确**：`global` 放全曲基调（置顶 `mood` → `genre` → `bpm`/`key`/`meter` → `vocal` → `instruments` → `arrangement_hook` → `arc` → `mix`），**恒用英文短标签**；每段 `positive_local` 放局部变化量（Section Delta）。
-2. **Style Prompt 精炼高权重**：逗号分隔，≤ 1000 字符，禁填中文或空洞形容词（epic/emotional/beautiful/masterpiece）。
-3. **动态反差与减法留白**：最弱 vs 最强能量差 >= 3 级（0-10）。常规最弱段至少 3 件乐器，最强段至少 4 件最多不超过 7 件，差值 >= 2 件；高潮前必设至少一处能量回落或减法抽空（`subtraction`）。
+2. **Style Prompt 精炼高权重与艺人四维转译**：逗号分隔，≤ 1000 字符，禁填中文、空洞形容词（epic/emotional/beautiful/masterpiece）或视觉词（4K/8K/1080p）。**严禁直接写歌手/乐队真名（`style_artist_name_leak`）**，遇到参考艺人必须拆解转译为「年代流派分支 + 音域与声带颗粒度 + 标志性律动配器 + 混音空间质感」四维英文声学特征；跨流派混搭遵循 `Anchor + Contrast + Bridge Mechanism + Production Binder` 四要素公式。
+3. **动态反差、减法留白与终局升调**：最弱 vs 最强能量差 >= 3 级（0-10）。常规最弱段至少 3 件乐器，最强段至少 4 件最多不超过 7 件，差值 >= 2 件；高潮前必设至少一处能量回落或减法抽空（`subtraction`），`Bridge → Final Chorus` 可设计半音升调推顶（`key modulation up a half-step, soaring final chorus belt`，或选用 `V-09`）。
 
-### 1. 人声设计（从心理现场推导）
-六维思考检查表（音域/音色/发声/颤音/咬字/节奏感——在 `global.vocal` 选用《人声/混音词表》ID 如 `V-02`/`V-05`/`V-06`/`V-08` 或 ≥3 词具象英文人声短语；每段说明行 ≤200 字符，聚焦最关键的 2-3 维局部人声姿态）。
+### 1. 人声设计（三级物理锚定与心理现场推导）
+六维思考检查表（音域/音色/发声/颤音/咬字/节奏感——在 `global.vocal` 选用 1 项核心《人声/混音词表》ID（如 `V-02`/`V-05`/`V-06`/`V-08`/`V-09`，勿叠多个 V-xx）或 1 条 ≥3 词具象英文人声短语，搭配 `global.negative` 排除冲突声线；若需提取干净分轨二创可选 `M-09`；每段说明行 ≤200 字符，聚焦最关键的 2-3 维局部人声姿态）。
 
-### 2. 配器角色、频谱让路与器乐记忆钩子
-- **器乐记忆钩子生命周期（`arrangement_hook` Lifecycle）**：设计一个贯穿全曲的标志性器乐动机（如 `"recurring fingerpicked nylon guitar motif"`），在 `Intro` 首次建立、在 `Verse` 退居幕后让位主唱中频、在 `Interlude`/`Outro` 重现回收，形成首尾咬合的听觉签名。
+### 2. 配器八大职能、频谱让路与器乐记忆钩子
+- **器乐记忆钩子生命周期（`arrangement_hook` Lifecycle）**：设计一个贯穿全曲的标志性器乐动机（如 `"recurring fingerpicked nylon guitar motif"`），在 `Intro` 首次建立、在 `Verse` 退居幕后让位主唱中频（1–4 kHz）、在 `Interlude`/`Outro` 重现回收，形成首尾咬合的听觉签名。
 - **主歌律动接力（Verse 1 → Verse 2 Groove Handoff）**：`Verse 1` 克制低频与鼓组建立近麦空间；`Verse 2` 绝不原地踏步，必须引入低频根音或轻律动脉冲（如 `warm upright bass enters on roots, brushed snare pocket`），并在进副歌前通过 `subtraction` 做一拍抽空留白。
-- **乐器角色动词**：Pulse carrier (carries/ticks/strums)、Groove anchor (locks/pushes)、Harmonic bed (cushions/sustains)、Signature hook (answers/riffs)、Impact layer (hits/slams)、Contrast color (strips/thins)。
+- **乐器八大职能动词**：Pulse carrier (carries/ticks/strums)、Groove anchor (locks/pushes/swings)、Harmonic bed (cushions/sustains/warms)、Signature hook (answers/riffs/sparkles)、Counterline 复调对话线 (weaves/replies/shadows)、Impact layer (hits/slams/swells)、Texture glue 纹理胶水层 (washes/saturates/shimmers)、Contrast color (strips/thins/exposes)。
 - **配器数量与极简豁免**：全局核心乐器 3-7 件，全曲不超 7 件；【极简段豁免（模式 A/B）】配器按段核查：常规最弱段参考 3 件；若某段音乐上确需少于 3 件（如剥离型 Bridge/Intro/Outro、清唱反差段落），将该段 `minimal` 设为 `true`（或在 `exemptions` / `notes` 写明极简段理由）——声明后该段豁免最弱段下限；配器差 ≥2 件、最强段 ≥4 件、全曲 ≤7 件照常核查。
 - **流派调色板方向参考（禁止直接复制整行）**：
   - 抒情流行：ballad, intimate, fingerpicked guitar, felt piano, warm bass, brushed snare, close-room production
@@ -62,7 +64,7 @@
   - 国潮/新中式：guzheng, dizi, cello, electronic sub-bass, pentatonic motif, cinematic space
 
 ### 3. 段落说明行与歌词格式
-结构标签与说明行由编译器从 `Section` 字段渲染：
+结构标签与说明行由编译器从 `Section` 字段渲染为单一方括号合并段头：
 
     [Intro]
     [solo piano low sparse notes, intimate close-room, no voice]
@@ -79,10 +81,10 @@
 
 规则：
 - 每段说明行（`positive_local` + `instruments`）必须包含具体乐器+行为动词、空间/力度（声场或力度动态，如 close room / wide hall / sudden drop）、人声状态，整行含方括号 ≤200 字符。
-- 歌词正文（`sections[].lines`）：一行一句自然呼吸，不插行内机械空格，禁用 `/` 与 `、`；半角标点表达人声细节：假声 `*词*`、滑音 `~`、拖长 `...`、念白 `[spoken]`、和声 `(ooh~)`。
+- 歌词正文（`sections[].lines`）：一行一句自然呼吸，不插行内机械空格，禁用 `/` 与 `、`；**严禁在歌词行内写 `(吉他独奏)`、`(间奏)`、`(whispered)` 等圆括号舞台/配器指示（`lyric_paren_direction` 硬门拦截，Suno v6 会把括号文字当成歌词唱出）**；圆括号仅用于简短背景人声回声如 `(oh yeah)` 或 `(ooh~)`。
 
 ### 4. Suno 参数
-- Weirdness: 20-35 | Style Influence: 75-85 | Audio Influence = 0（无参考音频/reference_audio=false 时；开启参考音频时可非 0），Variety = 0。
+- Weirdness: 20-35 | Style Influence: 75-85 | Audio Influence = 0（无参考音频/reference_audio=false 时；开启参考音频 reference_audio=true 时建议设为 70–85），Variety = 0。
 
 ## 输出要求
 直接输出符合 schema 的完整 `SongPlan` JSON 对象（含 `intent`、`global`、`sections`、`settings`、`asymmetry`、`exemptions`、`notes`）。`notes` 仅用三两句话精炼说明立意锚点与编曲减法设计，`global` 与所有段落 cue 必须使用英文。
