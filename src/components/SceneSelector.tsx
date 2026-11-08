@@ -74,7 +74,7 @@ export default function SceneSelector({ locale, disabled, inspiration, value, on
 
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="text-[11px] text-ink-soft flex items-center gap-1">
+      <label className="text-[11px] text-text-2 font-medium flex items-center gap-1">
         {t(locale, "input.douyin.scene")}
       </label>
       <div className="flex flex-wrap gap-1.5">
@@ -91,14 +91,18 @@ export default function SceneSelector({ locale, disabled, inspiration, value, on
                 userPicked.current = true;
                 onChange(s.id);
               }}
-              className={`relative px-2.5 py-1 rounded-lg text-[11px] border transition-colors
-                ${active ? "border-brand-400 bg-brand-400/15 text-brand-100" : "border-line text-ink-soft hover:border-brand-400/50"}
+              className={`relative px-2.5 py-1 rounded-lg text-[11px] font-medium border transition-colors cursor-pointer
+                ${
+                  active
+                    ? "border-brand-500/50 bg-brand-500/15 text-brand-400"
+                    : "border-border bg-surface-1/70 text-text-2 hover:border-brand-500/40 hover:text-text-1"
+                }
                 disabled:opacity-40`}
               title={`${s.label_zh} · BPM ${s.bpm_min}–${s.bpm_max}`}
             >
               {s.label_zh}
               {rec && !userPicked.current && (
-                <span className="ml-1 text-[9px] text-brand-300">{t(locale, "input.douyin.recommended")}</span>
+                <span className="ml-1 text-[9px] text-brand-400 studio-mono">{t(locale, "input.douyin.recommended")}</span>
               )}
               {isDefault && active && !userPicked.current && (
                 <span className="ml-1 text-[9px] opacity-70">{t(locale, "input.douyin.default")}</span>

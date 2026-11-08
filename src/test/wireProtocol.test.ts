@@ -5,6 +5,9 @@ import GATE_SRC from "../../src-tauri/src/commands/gate.rs?raw";
 import LLM_SRC from "../../src-tauri/src/commands/llm.rs?raw";
 import PLAN_SRC from "../../src-tauri/src/plan/mod.rs?raw";
 import ORCH_SRC from "../../src-tauri/src/commands/orchestrator.rs?raw";
+import VOCAL_MIX_CSV from "../../src-tauri/knowledge/vocal_mix.csv?raw";
+import INPUT_PANEL_SRC from "../components/InputPanel.tsx?raw";
+import { FALLBACK_VOCAL_MIX_META } from "../components/InputPanel";
 import TYPES_SRC from "../types/index.ts?raw";
 import REFINE_SRC from "../utils/refineTargets.ts?raw";
 
@@ -229,5 +232,53 @@ describe("wire-format 跨语言一致性（第二十一批）", () => {
       .sort();
     expect(rustKeywords.length).toBeGreaterThan(20);
     expect(tsKeywords, "前端 refineTargets.ts 与后端 roles_for_feedback 关键词表不一致").toEqual(rustKeywords);
+  });
+
+  it("18项受控人声/混音词表（knowledge/vocal_mix.csv ↔ InputPanel FALLBACK_VOCAL_MIX_META & QUICK_PRESETS）前后端逐字同源", () => {
+    const parseCsvLine = (line: string): string[] => {
+      const out: string[] = [];
+      let cur = "";
+      let inQuotes = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') {
+          inQuotes = !inQuotes;
+        } else if (ch === "," && !inQuotes) {
+          out.push(cur.trim());
+          cur = "";
+        } else {
+          cur += ch;
+        }
+      }
+      out.push(cur.trim());
+      return out;
+    };
+    const csvRows = VOCAL_MIX_CSV.trim()
+      .split(/\r?\n/)
+      .slice(1)
+      .filter((l) => l.trim().length > 0)
+      .map((l) => {
+        const [id, category, label_cn, label_en, _keywords, _description, applies_to] =
+          parseCsvLine(l);
+        return { id, category, label_cn, label_en, applies_to };
+      });
+    expect(csvRows.length).toBe(18);
+    expect(
+      FALLBACK_VOCAL_MIX_META,
+      "前端 InputPanel.tsx 的 FALLBACK_VOCAL_MIX_META 与后端 knowledge/vocal_mix.csv 不一致（禁止第二套私造词表）",
+    ).toEqual(csvRows);
+
+    const presetStart = INPUT_PANEL_SRC.indexOf("const QUICK_PRESETS");
+    const presetEnd = INPUT_PANEL_SRC.indexOf("export const FALLBACK_VOCAL_MIX_META", presetStart);
+    const presetRegion = INPUT_PANEL_SRC.slice(presetStart, presetEnd);
+    const presetPairs = [
+      ...presetRegion.matchAll(/itemId:\s*"([VM]-\d{2})"[\s\S]*?category:\s*"(vocal|mix)"/g),
+    ].map((m) => ({ id: m[1], category: m[2] }));
+    expect(presetPairs.length).toBe(4);
+    for (const p of presetPairs) {
+      const csvHit = csvRows.find((r) => r.id === p.id);
+      expect(csvHit, `QUICK_PRESETS 引用了 vocal_mix.csv 不存在的 ID ${p.id}`).toBeDefined();
+      expect(csvHit?.category, `QUICK_PRESETS ${p.id} 的 category 与 vocal_mix.csv 不一致`).toBe(p.category);
+    }
   });
 });

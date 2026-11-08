@@ -25,7 +25,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import { scrubSettingsForExport } from "./utils/hotkeys";
 import { estimateRefineTargets } from "./utils/refineTargets";
-import type { AppError, Mode, ChatMessage, ChatTurn, HistoryEntry, LLMStatus, ExpertCard, PipelineRoleKey, StreamChunk, StructuredMode } from "./types";
+import type { AppError, Mode, ChatMessage, ChatTurn, HistoryEntry, LLMStatus, ExpertCard, PipelineRoleKey, StreamChunk, StructuredMode, SongPlan } from "./types";
 import { acceptStreamChunk } from "./utils/streamChunk";
 import { historyPlanFields } from "./utils/sunoPackage";
 import { MODE_LABELS, errKind, errText, isCancelledError, capKey, STRUCTURED_MODES } from "./types";
@@ -99,8 +99,10 @@ export default function App() {
   const [lastUserInput, setLastUserInput] = useState("");
   /** Mode D 最近一次生效场景（供优化/续跑/重试沿用，不再硬编码退回 daily） */
   const lastDouyinSceneRef = useRef<string>("daily");
+  /** 最近一次定稿的 SongPlan JSON（供快速增量优化注入，使后端 plan_from_checkpoint 成功并跳过阶段 0） */
+  const lastPlanRef = useRef<unknown>(null);
   const [conversation, setConversation] = useState<ChatTurn[]>([]);
-  // 历史改走文件存储——初始空，启动 useEffect 从 history_load 回填 + 迁移旧 localStorage
+  // 历史改走文件存储——初始空，启动 useEffect 从 history_load 回填
   const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>([]);
   const historyRef = useRef(historyEntries);
   historyRef.current = historyEntries;
@@ -144,7 +146,7 @@ export default function App() {
   const [showApiKey, setShowApiKey] = useState(false);
   const [testingApi, setTestingApi] = useState(false);
   const [testResult, setTestResult] = useState<"ok" | "fail" | null>(null);
-  const [showRoleApi, setShowRoleApi] = useState(false); // 默认收起（一页化：长度是主要痛点；头部"展开▼"保持可发现性）
+  const [showRoleApi, setShowRoleApi] = useState(false);
   const [expandedRole, setExpandedRole] = useState<PipelineRoleKey | null>(null);
   const { settings, updateSettings, clearGlobalApiKey, showSettings, setShowSettings, secretsReady, secretErrors } = useSettingsWithSecrets();
   const pipeline = usePipeline();
@@ -197,7 +199,6 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
       if (!mod) return;
-      // 聚焦输入框（输入框内已聚焦时不重复处理）
       if ((e.key === "k" || e.key === "K") && document.activeElement?.tagName !== "TEXTAREA") {
         e.preventDefault();
         inputRef.current?.focus();
@@ -250,7 +251,7 @@ export default function App() {
         defaultPath: "shiyi-settings.json",
         filters: [{ name: "JSON", extensions: ["json"] }],
       });
-      if (!filePath) return; // 用户取消
+      if (!filePath) return;
       await writeTextFile(filePath, JSON.stringify(scrubSettingsForExport(settings), null, 2));
       flashSettingsMsg(`已导出：${filePath}`);
     } catch (e) {
@@ -265,7 +266,7 @@ export default function App() {
         multiple: false,
         filters: [{ name: "JSON", extensions: ["json"] }],
       });
-      if (!filePath) return; // 用户取消
+      if (!filePath) return;
       const text = await readTextFile(filePath as string);
       const cleaned = sanitizeStored(JSON.parse(text));
       await updateSettings({ ...cleaned });
@@ -283,6 +284,7 @@ export default function App() {
       const dark = theme === "dark"
         || (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
       document.documentElement.classList.toggle("dark", dark);
+      document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
     };
     apply();
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
@@ -404,7 +406,6 @@ export default function App() {
     setRoleTestStates((p) => ({ ...p, [role]: "testing" }));
     try {
       await invoke<string>("test_api", { baseUrl, apiKey, model });
-      // 测试期间配置被改（effect 已清徽标）→ 结果过期，丢弃
       const cur = settingsRef.current;
       if (cur.apiKey !== snap.apiKey || cur.model !== snap.model || cur.baseUrl !== snap.baseUrl) return;
       setRoleTestStates((p) => ({ ...p, [role]: "ok" }));
@@ -418,17 +419,17 @@ export default function App() {
   }, [settings, updateSettings]);
 
   const saveToHistory = useCallback((input: string, output: string, conv: ChatTurn[], currentMode: Mode, usage?: { prompt_tokens: number; completion_tokens: number }) => {
-    const entry: HistoryEntry = { id: newId(), mode: currentMode, input, output, conversation: conv, usage, timestamp: Date.now() };
+    const entry: HistoryEntry = { id: newId(), mode: currentMode, input, output, conversation: conv, usage, timestamp: Date.now(), ...historyPlanFields(output, pipeline.finalPlanRef.current) };
     const updated = [entry, ...historyRef.current].slice(0, HISTORY_MAX_ENTRIES);
     setHistoryEntries(updated); scheduleSave(updated);
-  }, [scheduleSave]);
+  }, [scheduleSave, pipeline.finalPlanRef]);
 
   const updateHistoryEntry = useCallback((id: string, output: string, conv: ChatTurn[], usage?: { prompt_tokens: number; completion_tokens: number }, planFields?: Partial<Pick<HistoryEntry, "song_plan" | "rendered">>) => {
     const updated = historyRef.current.map(e =>
       e.id === id ? { ...e, ...(planFields ?? {}), output, conversation: conv, usage: usage ?? e.usage, timestamp: Date.now() } : e
     );
     setHistoryEntries(updated); scheduleSave(updated);
-  }, []);
+  }, [scheduleSave]);
 
   /** 实际执行一次生成（直接提交与队列调度共用；queueId 非空时归属队列项） */
   const runGenerateNow = useCallback(async (
@@ -439,7 +440,6 @@ export default function App() {
   ) => {
     const token = ++runTokenRef.current; // 作废旧 run
     setStatus("loading"); writeStreamText(""); clearRunError();
-    // mode_c 的 userInput 即新主题（原歌词走独立字段）；历史展示用拼接文本保留上下文
     const displayInput = runMode === "mode_c" && extra
       ? `原歌词：\n${extra.originalLyrics}\n\n新主题：\n${userInput}`
       : userInput;
@@ -449,14 +449,13 @@ export default function App() {
     }
     chatHistoryRef.current = [];
     speechLogRef.current = [];
+    lastPlanRef.current = null;
     setConversation([]);
     setDetailExpert(null);
-    setHistoryView(null); // 生成时关闭历史面板：新结果不能被旧历史遮住
+    setHistoryView(null);
 
-    // 四模式统一走流水线（A/B/C/D）
     try {
-      await ensureLlmListener(); // 失败抛错进 catch，不再卡死
-      // 原歌词独立字段直传（旧字符串拼接+正则拆分整条退役）
+      await ensureLlmListener();
       const originalLyrics = runMode === "mode_c" ? extra?.originalLyrics : undefined;
       const raw = await pipeline.run({
         mode: runMode,
@@ -465,18 +464,14 @@ export default function App() {
         extra: undefined,
         originalLyrics,
         douyinScene: runMode === "mode_d" ? lastDouyinSceneRef.current : undefined,
-        // 专家发言实时追加到对话流（记录进 speechLog，结束时合并，不进入 chatHistoryRef）
         onSpeech: (speech) => {
-          // 阶段0流式结束后清空中间态流式文本（首个专家发言时），避免统领全文重复显示
           if (speechLogRef.current.length === 0) writeStreamText("");
           speechLogRef.current.push(speech);
-          // D-1（#13）：专家发言按模式阵容序稳定归位（#14 后端改串行后为幂等兜底）；
-          // 作用域仅本轮（末尾连续 expert 段），上一轮 turns 不动——旧全局归位会跨轮重排
           setConversation((prev) => orderRoundSpeech([...prev, speech], rosterRef.current));
         },
       });
-      if (token !== runTokenRef.current) return; // 过期 run 的结果丢弃
-      // D-1（#13）：本轮专家发言归位后再拼接尾部（旧实现直接铺到达序，结束态即乱序）
+      if (token !== runTokenRef.current) return;
+      lastPlanRef.current = pipeline.finalPlanRef.current;
       const allTurns: ChatTurn[] = assembleFinalTurns(
         [{ role: "user", content: displayInput, timestamp: Date.now() }],
         speechLogRef.current,
@@ -489,7 +484,6 @@ export default function App() {
         { role: "user", content: displayInput },
         { role: "assistant", content: raw },
       ];
-      // C5/ADR-3：降级标记 + 硬校验结论随条目落盘（空数组不写，与旧记录一致）
       const degradedFlags = pipeline.degradedRef.current;
       const entry: HistoryEntry = {
         id: newId(), mode: runMode, input: displayInput, output: raw,
@@ -503,22 +497,14 @@ export default function App() {
       setCurrentHistoryId(entry.id);
       const updated = [entry, ...historyRef.current];
       setHistoryEntries(updated); scheduleSave(updated);
-      // 队列项完成归档（queueId 命中时标记 done + 关联 history id）
       if (queue.peek().some((q) => q.id === runId)) {
         queue.mark(runId, "done");
-        // 精确关联历史条目：点击查看不再按"输入前 20 字"模糊匹配（会串项/查不到）
         queue.linkHistory(runId, entry.id);
       }
     } catch (e) {
-      if (token !== runTokenRef.current) return; // 过期 run 的错误丢弃
-      // Q4：取消走空闲通道（不标红、不写历史）；失败才走 error
-      // #27-c：文案 + 类别同源落点（applyRunError 单源）
+      if (token !== runTokenRef.current) return;
       const cancelled = isCancelledError(e);
       applyRunError(e);
-      // #10 固化半成品（判定单源在 utils/partialDraft::freezePartial）：失败/取消前已流出的正文
-      // 此前只活在 streamText 里（可见但不可用——无 assistant 轮就没有复制入口，chatHistoryRef
-      // 又在 run 开始被清空 → 优化必丢半成品）。固化成 partial 轮 + 同步会话历史（两处同形），
-      // 使"复制 / 基于半成品继续优化"两条路都有源可依；无正文则不固化（由操作条提示承担引导）。
       const partialText = streamTextRef.current;
       const frozen = freezePartial(partialText, displayInput);
       if (frozen) {
@@ -526,28 +512,22 @@ export default function App() {
         chatHistoryRef.current = frozen.history;
         writeStreamText("");
       }
-      // 队列项终态 + **产出快照**：完成链会立即取队首续跑，而新 run 开头会清空会话——
-      // 产出若只活在会话 state 里，这一项的半成品会在被看见之前就被抹掉（#10 修好也白搭）。
-      // 状态按实际终态写：取消不能被 failure 覆盖成"失败"（旧实现无条件 mark error）
       if (queue.peek().some((q) => q.id === runId)) {
         queue.mark(runId, terminalQueueStatus(cancelled));
         if (frozen) queue.setResult(runId, { output: partialText, partial: true });
       }
     } finally {
-      // 完成链——无论成败，取队首继续（取消走 cancel 流程同样经此处继续）
       setRunningQueueId(null);
       const next = dequeueNext(queue.peek());
       if (next) {
         setRunningQueueId(next.id);
         queue.mark(next.id, "running");
-        // 注意：不 await，后台顺序执行
         void runGenerateNow(next.id, next.mode, next.userInput, next.extra);
       }
     }
-  }, [settings, ensureLlmListener, pipeline]);
+  }, [settings, ensureLlmListener, pipeline, applyRunError, clearRunError, queue, scheduleSave, writeStreamText]);
 
   const handleGenerate = useCallback(async (userInput: string, extra?: { originalLyrics?: string; douyinScene?: string }) => {
-    // 忙时入队（当前有运行项）——排队顺序执行，不作废在途任务
     if (pipeline.active) {
       queue.push({
         id: newId(),
@@ -559,23 +539,21 @@ export default function App() {
       return;
     }
     await runGenerateNow(newId(), mode, userInput, extra);
-  }, [mode, settings, ensureLlmListener, pipeline, queue]);
+  }, [mode, pipeline.active, queue, runGenerateNow]);
 
   const handleRefine = useCallback(async (feedback: string, refineMode: "fast" | "full" = "fast") => {
     if (!feedback.trim()) return;
-    const token = ++runTokenRef.current; // 作废旧 run
+    const token = ++runTokenRef.current;
     setStatus("loading"); writeStreamText(""); clearRunError();
     setLastFeedback(feedback);
     speechLogRef.current = [];
-    setHistoryView(null); // 优化时同样关闭历史面板（与 handleGenerate 一致）
+    setHistoryView(null);
 
     const currentHistory = [...chatHistoryRef.current];
 
     let raw: string;
     try {
-      await ensureLlmListener(); // 失败抛错进 catch，不再卡死
-      // lastUserInput 是展示用拼接文本（原歌词+新主题），从中拆出两部分直传。
-      // 注意：这是展示文本的解析（用户可见格式，稳定），不是旧协议——新生成已不再依赖它。
+      await ensureLlmListener();
       let originalLyrics: string | undefined;
       let input = lastUserInput;
       if (mode === "mode_c") {
@@ -585,12 +563,16 @@ export default function App() {
           input = m[2];
         }
       }
-      // 取最后一条 assistant（重复 refine 时注入的是上一版而非初始版）
       const lastMsg = [...currentHistory].reverse().find((m) => m.role === "assistant");
-      const lastOutput = lastMsg?.content || "";
-      // #10 上一版是否"生成中断的半成品"（由 catch 固化时打标）——透传给注入层附告知
       const lastOutputPartial = lastMsg?.partial === true;
-      // fast 增量时前端预估 targets 透传（无命中传空→后端自动路由；full 不传=全量）
+      // 关键协议对齐：fast 增量模式且存在有效 SongPlan IR 时，传入 SongPlan JSON 字符串作为【上一版方案】，
+      // 使后端 plan_from_checkpoint 校验通过并真正跳过阶段 0 初稿，直接跑目标角色增量审改；
+      // full 深度重做或半成品则传渲染文本，由阶段 0 重算初稿。
+      const activePlan = lastPlanRef.current ?? pipeline.finalPlanRef.current;
+      const lastOutput =
+        refineMode === "fast" && !lastOutputPartial && activePlan && typeof activePlan === "object"
+          ? JSON.stringify(activePlan)
+          : (lastMsg?.content || "");
       const estimated = refineMode === "fast" ? estimateRefineTargets(feedback, mode) : [];
       raw = await pipeline.refine({
         mode,
@@ -605,22 +587,19 @@ export default function App() {
         lastOutputPartial,
         refineTargets: refineMode === "fast" && estimated.length > 0 ? estimated : undefined,
         onSpeech: (speech) => {
-          // 阶段0流式结束后清空中间态流式文本（首个专家发言时）
           if (speechLogRef.current.length === 0) writeStreamText("");
           speechLogRef.current.push(speech);
-          // D-1（#13）：阵容序稳定归位，作用域仅本轮（同 handleGenerate）
           setConversation((prev) => orderRoundSpeech([...prev, speech], rosterRef.current));
         },
       });
     } catch (e) {
-      if (token !== runTokenRef.current) return; // 过期 run 的错误丢弃
-      // Q4：取消走空闲通道（#27-c：文案 + 类别同源落点）
+      if (token !== runTokenRef.current) return;
       applyRunError(e);
       return;
     }
-    if (token !== runTokenRef.current) return; // 过期 run 的结果丢弃
+    if (token !== runTokenRef.current) return;
 
-    // D-1（#13）：本轮（含本轮反馈）专家发言归位后再拼接尾部
+    lastPlanRef.current = pipeline.finalPlanRef.current;
     const allTurns: ChatTurn[] = assembleFinalTurns(
       conversation,
       speechLogRef.current,
@@ -642,9 +621,8 @@ export default function App() {
     } else {
       saveToHistory(conversation[0]?.content || lastUserInput, raw, allTurns, mode, { ...pipeline.usageRef.current });
     }
-  }, [mode, settings, conversation, lastUserInput, saveToHistory, currentHistoryId, updateHistoryEntry, pipeline, ensureLlmListener]);
+  }, [mode, settings, conversation, lastUserInput, saveToHistory, currentHistoryId, updateHistoryEntry, pipeline, ensureLlmListener, applyRunError, clearRunError, writeStreamText]);
 
-  /** U-3：重试可执行判定——mode_c 无 lastFeedback 时重试必然无路可走（原歌词会丢），按钮禁用而非死按 */
   const canRetry =
     status === "error" &&
     (Boolean(lastFeedback) || (mode !== "mode_c" && Boolean(lastUserInput)));
@@ -652,9 +630,6 @@ export default function App() {
     if (status === "error" && lastFeedback) {
       await handleRefine(lastFeedback, "fast");
     } else if (status === "error" && lastUserInput) {
-      // 重试走展示文本解析路径（handleGenerate 内部处理直传，此处传原始展示文本由其二次解析）
-      // 注意：mode_c 重试时 lastUserInput 为展示拼接文本，handleGenerate 会误判为新主题——
-      // 因此 mode_c 重试改走 refine 路径（带上次反馈），避免原歌词丢失
       if (mode === "mode_c" && lastFeedback) {
         await handleRefine(lastFeedback, "fast");
       } else if (mode !== "mode_c") {
@@ -663,10 +638,9 @@ export default function App() {
     }
   }, [status, lastFeedback, lastUserInput, handleRefine, handleGenerate, mode]);
 
-  /** R3：从上次继续（检查点续跑；无检查点时后端明确报错展示，不静默从头来） */
   const handleResume = useCallback(async () => {
     if (status !== "error") return;
-    const token = ++runTokenRef.current; // 作废旧 run
+    const token = ++runTokenRef.current;
     setStatus("loading"); writeStreamText(""); clearRunError();
     speechLogRef.current = [];
     try {
@@ -687,12 +661,11 @@ export default function App() {
         onSpeech: (speech) => {
           if (speechLogRef.current.length === 0) writeStreamText("");
           speechLogRef.current.push(speech);
-          // D-1（#13）：阵容序稳定归位，作用域仅本轮（同 handleGenerate）
           setConversation((prev) => orderRoundSpeech([...prev, speech], rosterRef.current));
         },
       });
-      if (token !== runTokenRef.current) return; // 过期 run 的结果丢弃
-      // D-1（#13）：本轮专家发言归位后再拼接尾部（同 handleGenerate）
+      if (token !== runTokenRef.current) return;
+      lastPlanRef.current = pipeline.finalPlanRef.current;
       const allTurns: ChatTurn[] = assembleFinalTurns(
         conversation,
         speechLogRef.current,
@@ -711,42 +684,34 @@ export default function App() {
         saveToHistory(conversation[0]?.content || lastUserInput, raw, allTurns, mode, { ...pipeline.usageRef.current });
       }
     } catch (e) {
-      if (token !== runTokenRef.current) return; // 过期 run 的错误丢弃
-      // Q4：取消走空闲通道（#27-c：文案 + 类别同源落点）
+      if (token !== runTokenRef.current) return;
       applyRunError(e);
     }
-  }, [status, mode, lastUserInput, conversation, saveToHistory, currentHistoryId, updateHistoryEntry, pipeline, ensureLlmListener, applyRunError]);
+  }, [status, mode, lastUserInput, conversation, saveToHistory, currentHistoryId, updateHistoryEntry, pipeline, ensureLlmListener, applyRunError, clearRunError, writeStreamText, settings]);
 
   const deleteHistory = (id: string) => { const u = historyEntries.filter(e => e.id !== id); setHistoryEntries(u); scheduleSave(u); };
   const clearHistory = () => { setHistoryEntries([]); scheduleSave([]); };
   const selectHistory = (entry: HistoryEntry) => { setHistoryView(entry); setShowHistory(false); };
 
-  /** 修复包 C（#9/#10/#11）：历史条目反馈——装载该条目为当前会话后复用 handleRefine 全链，
-   * 不复制 refine 实现（杜绝双源）。currentHistoryId 置空：新结果落新历史条目，不改写原条目。 */
   const handleRefineFromHistory = useCallback(async (entry: HistoryEntry, feedback: string, refineMode: "fast" | "full" = "fast") => {
     if (!feedback.trim()) return;
     const ctx = buildHistoryRefineContext(entry);
-    // 装载历史条目为当前会话（handleRefine 从 chatHistoryRef/lastUserInput/mode 取上下文）
-    // partial 必须随行（旧实现只搬 role/content → 半成品的标记在此丢失，后续优化不再注入
-    // "可能被截断"的告知，模型会把截断处当完整方案继续加工）
     chatHistoryRef.current = toChatMessages(ctx.conversation);
+    lastPlanRef.current = entry.song_plan ?? null;
     setConversation(ctx.conversation);
     setMode(ctx.mode);
     if (ctx.mode === "mode_d") {
       const savedScene = (entry.song_plan as { mode_meta?: { douyin?: { scene?: string } } } | undefined)?.mode_meta?.douyin?.scene;
       if (savedScene) lastDouyinSceneRef.current = savedScene;
     }
-    rosterRef.current = MODE_EXPERTS[ctx.mode].map((e) => e.id); // D-1：历史装载同步阵容序
+    rosterRef.current = MODE_EXPERTS[ctx.mode].map((e) => e.id);
     setLastUserInput(ctx.lastUserInput);
     setCurrentHistoryId(null);
-    setHistoryView(null); // 装载完成，关闭历史视图——后续走实时会话流
+    setHistoryView(null);
     await handleRefine(feedback, refineMode);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [handleRefine]);
 
-  /** 队列查看——**精确**取回该项产出：成功项 → 关联的历史条目；失败/取消项 → 产出快照。
-  旧实现按"输入前 20 字"模糊匹配历史，失败项（不写历史）永远查不到且**静默无响应**。
-  可点击性由 QueuePanel 的 canViewQueueItem 保证（有内容才画成可点），此处不再有死点击。 */
   const selectQueueItem = useCallback((id: string) => {
     const item = queue.peek().find((q) => q.id === id);
     if (!item) return;
@@ -756,8 +721,6 @@ export default function App() {
       setShowHistory(false);
       return;
     }
-    // 失败/取消的半成品：构造成与历史条目同形的视图（queueResultEntry 单源，带上 partial 标记），
-    // 复用既有"历史视图 + 继续优化"全链，不另起一套渲染
     const fromResult = queueResultEntry(item);
     if (fromResult) {
       setHistoryView(fromResult);
@@ -765,68 +728,84 @@ export default function App() {
     }
   }, [queue]);
 
-  /** 队列取消当前——只杀当前运行项，队列继续 */
   const handleCancelCurrent = useCallback(async () => {
     if (runningQueueId) {
       queue.mark(runningQueueId, "cancelled");
     }
     await pipeline.cancel();
-    // 完成链由 runGenerateNow.finally 驱动（取消同样走 finally 继续队首）
   }, [pipeline, queue, runningQueueId]);
 
-  /** #12 轮间确认门决断（"继续下一轮" / "结束讨论出终稿"）；后端无门在等时抛错并显示 */
   const handleGateDecide = useCallback(async (decision: "continue" | "finalize") => {
     try {
       await pipeline.decideGate(decision);
     } catch {
-      // decideGate 已把错误写进 pipeline.error（状态条可见），此处无需二次提示
+      /* decideGate 已写入 pipeline.error */
     }
   }, [pipeline]);
 
-  /** #12 一键关闭轮间确认：先放行当前这扇门，再落盘设置（此后全自动推进）。
-   *  顺序不可颠倒——先落盘会让"本次门"失去决策入口。 */
   const handleGateAutoOff = useCallback(async () => {
     await handleGateDecide("continue");
     updateSettings({ roundGate: false });
   }, [handleGateDecide, updateSettings]);
 
   const filteredHistory = historyFilter === "all" ? historyEntries : historyEntries.filter(e => e.mode === historyFilter);
-
-  /** #27 配套：全局 baseUrl 的**格式层**校验（协议/userinfo/localhost/字面内网 IP）。
-   *  DNS 层判定在后端 `models::validate_url`（前端拿不到可靠解析结果，不重复这一层）。
-   *  非 null 时：输入框下方给出原因，"测试连接"同步置灰（不再让必失败的按钮看起来可用）。 */
   const baseUrlIssue = formatUrlIssue(settings.baseUrl);
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden">
-      {/* Top bar */}
-      <header className="flex items-center justify-between px-4 py-2.5 border-b border-border/40 shrink-0 glass-panel">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-xl brand-gradient-btn flex items-center justify-center">
+    <div className="h-screen flex flex-col overflow-hidden ambient-bg">
+      {/* =====================================================================
+          TOP STUDIO COMMAND BAR（工作台顶栏 + 四模式矩阵）
+          ===================================================================== */}
+      <header className="flex items-center justify-between gap-4 px-4 py-2 border-b border-border/70 shrink-0 glass-panel">
+        <div className="flex items-center gap-2.5 shrink-0">
+          <div className="w-8 h-8 rounded-lg brand-gradient-btn flex items-center justify-center">
             <IconSparkles size={16} className="text-white" />
           </div>
-          <span className="text-[14px] font-semibold brand-gradient-text">shiyi音乐</span>
+          <div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[13.5px] font-bold tracking-tight text-text-1">shiyi音乐</span>
+              <span className="studio-mono text-[9.5px] px-1.5 py-0.2 rounded bg-brand-500/15 text-brand-400 border border-brand-500/35">
+                STUDIO v6.2
+              </span>
+            </div>
+            <div className="text-[10px] text-text-muted">Suno v6 声学提示词编译工作台</div>
+          </div>
         </div>
-        <div className="flex items-center gap-1.5">
+
+        {/* 四模式切换矩阵 */}
+        <div className="flex-1 max-w-[760px]">
+          <ModeSelector mode={mode} locale={settings.language} onChange={(m) => {
+            runTokenRef.current++;
+            if (llmUnlistenRef.current) { llmUnlistenRef.current(); llmUnlistenRef.current = null; }
+            setMode(m);
+            rosterRef.current = MODE_EXPERTS[m].map((e) => e.id);
+            lastPlanRef.current = null;
+            setStatus("idle"); writeStreamText(""); clearRunError();
+            setConversation([]); chatHistoryRef.current = [];
+            setLastUserInput(""); setLastFeedback("");
+            setHistoryView(null); setCurrentHistoryId(null);
+          }} />
+        </div>
+
+        <div className="flex items-center gap-1.5 shrink-0">
           <button onClick={() => { setShowHistory(true); setHistoryView(null); }}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] text-text-2
-                       bg-surface-2/60 hover:bg-surface-3/80 border border-border/40 transition-all duration-150 active:scale-95">
+                       bg-surface-2 hover:bg-surface-3 border border-border transition-all duration-150 active:scale-95 cursor-pointer">
             <IconHistory size={14} /> {t(settings.language, "app.history")}
           </button>
           <button onClick={() => { setShowSettings(!showSettings); setTestResult(null); }}
             aria-label={t(settings.language, "app.settings")}
             className="flex items-center justify-center w-8 h-8 rounded-lg text-text-2
-                       bg-surface-2/60 hover:bg-surface-3/80 border border-border/40 transition-all duration-150 active:scale-95">
+                       bg-surface-2 hover:bg-surface-3 border border-border transition-all duration-150 active:scale-95 cursor-pointer">
             <IconSettings size={15} />
           </button>
         </div>
       </header>
 
-      {/* Settings dropdown：一页化（#28 用户反馈）——面板加宽 + 主体两列网格，
-          角色级 API 默认收起；max-h 兜底防极小窗口溢出 */}
+      {/* Settings dropdown */}
       {showSettings && (
-        <div className="absolute right-4 top-14 z-40 w-[600px] p-4 glass-panel rounded-2xl border border-border/40
-                        animate-[fade_200ms_ease] space-y-3 max-h-[calc(100vh-4.5rem)] overflow-y-auto">
+        <div className="absolute right-4 top-14 z-40 w-[600px] p-4 glass-panel rounded-2xl border border-border
+                        animate-fade-in space-y-3 max-h-[calc(100vh-4.5rem)] overflow-y-auto shadow-2xl">
           <h3 className="text-[13px] font-medium text-text-1">{t(settings.language, "settings.title")}</h3>
           <div className="grid grid-cols-2 gap-x-4 gap-y-3 items-start">
           <div>
@@ -878,7 +857,6 @@ export default function App() {
                 className="w-full bg-surface-0 border border-border/60 rounded-lg px-3 py-2 text-[13px]
                            text-text-1 focus:outline-none focus:border-brand-500/40 focus:ring-1 focus:ring-brand-500/20
                            transition-all duration-150" />
-              {/* 格式层校验结果（与后端 validate_url 同口径的前半段；DNS 层由后端兜底） */}
               {baseUrlIssue && (
                 <p className="text-[9px] text-danger mt-1 leading-relaxed">
                   {t(settings.language, `settings.url.err.${baseUrlIssue}`)}
@@ -896,8 +874,7 @@ export default function App() {
               onChange={e => { updateSettings({ thinking: e.target.checked }); setTestResult(null); }}
               className="w-4 h-4 accent-brand-500 cursor-pointer shrink-0" />
           </div>
-          {/* #12 轮间确认门开关：默认开启（讨论轮之间必须给用户一次"继续/收工"的机会）；
-              关闭后全程自动推进（生成期间不暂停）。与后端 round_gate 字段同名单源。 */}
+          {/* #12 轮间确认门开关 */}
           <div className="flex items-center justify-between gap-2 rounded-lg border border-border/40 bg-surface-0/40 px-3 py-2">
             <label htmlFor="round-gate" className="text-[11px] text-text-2 cursor-pointer select-none">
               {t(settings.language, "settings.roundGate")}
@@ -907,7 +884,7 @@ export default function App() {
               onChange={e => { updateSettings({ roundGate: e.target.checked }); setTestResult(null); }}
               className="w-4 h-4 accent-brand-500 cursor-pointer shrink-0" />
           </div>
-          {/* P1-13：文本评估 Judge 旁路，默认关闭；开启才用圆桌同模型打分 */}
+          {/* P1-13：文本评估 Judge 旁路 */}
           <div className="flex items-center justify-between gap-2 rounded-lg border border-border/40 bg-surface-0/40 px-3 py-2">
             <label htmlFor="text-eval-judge" className="text-[11px] text-text-2 cursor-pointer select-none">
               {t(settings.language, "settings.textEvalJudge")}
@@ -917,8 +894,7 @@ export default function App() {
               onChange={e => { updateSettings({ textEvalJudge: e.target.checked }); setTestResult(null); }}
               className="w-4 h-4 accent-brand-500 cursor-pointer shrink-0" />
           </div>
-          {/* 产出语言开关：en 时流水线产出物（方案/歌词/最终提示词包）以英文输出；
-              专家讨论与界面语言不变。与后端 output_lang 字段同名单源。 */}
+          {/* 产出语言开关 */}
           <div className="flex items-center justify-between gap-2 rounded-lg border border-border/40 bg-surface-0/40 px-3 py-2">
             <label htmlFor="output-lang" className="text-[11px] text-text-2 cursor-pointer select-none">
               {t(settings.language, "settings.outputLang")}
@@ -931,7 +907,7 @@ export default function App() {
               <option value="en">{t(settings.language, "settings.outputLang.en")}</option>
             </select>
           </div>
-          {/* 高级参数（缺省走后端默认；temperature 0~2，max_tokens 1000~30000——F-1 与后端 MAX_TOKENS_CAP 对齐，32000 会被后端拒绝） */}
+          {/* 高级参数 */}
           <div className="rounded-lg border border-border/40 bg-surface-0/40 px-3 py-2 space-y-2">
             <div className="flex items-center justify-between gap-2">
               <label htmlFor="gen-temperature" className="text-[11px] text-text-2 cursor-pointer select-none">
@@ -946,7 +922,6 @@ export default function App() {
                   setTestResult(null);
                 }}
                 onBlur={e => {
-                  // 失焦归一（同 max_tokens）：显示值收敛进 0~2
                   const n = Number(e.target.value);
                   if (e.target.value !== "" && Number.isFinite(n) && (n < 0 || n > 2)) {
                     updateSettings({ generation: { ...settings.generation, temperature: Math.min(2, Math.max(0, n)) } });
@@ -968,7 +943,6 @@ export default function App() {
                   setTestResult(null);
                 }}
                 onBlur={e => {
-                  // 失焦归一（F-1 根治之一）：显示值收敛进 1000~30000，与落盘/请求同值
                   const n = Math.round(Number(e.target.value));
                   if (e.target.value !== "" && Number.isFinite(n) && (n < 1000 || n > 30000)) {
                     updateSettings({ generation: { ...settings.generation, max_tokens: Math.min(30000, Math.max(1000, n)) } });
@@ -978,7 +952,6 @@ export default function App() {
                 className="w-20 bg-surface-0 border border-border/60 rounded-lg px-2 py-1 text-[12px] text-text-1 focus:outline-none focus:border-brand-500/40 transition-all duration-150" />
             </div>
           </div>
-          {/* 地址格式层不过 → 置灰（该按钮此刻必然失败；与其做假 affordance，不如给出上面的原因） */}
           <button onClick={handleTestApi} disabled={testingApi || !settings.apiKey || !secretsReady || baseUrlIssue !== null}
             className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-[12px] font-medium
                        bg-surface-2 hover:bg-surface-3 border border-border/50 text-text-2
@@ -988,7 +961,6 @@ export default function App() {
             {testResult === "fail" && t(settings.language, "settings.fail")}
             {testResult === null && (testingApi ? t(settings.language, "settings.testing") : t(settings.language, "settings.test"))}
           </button>
-          {/* P1-2：当前全局配置的结构化档位（探测结果） */}
           {(() => {
             const m = settings.structuredCaps?.[capKey(settings.baseUrl, settings.model)];
             return m ? (
@@ -998,16 +970,13 @@ export default function App() {
               </p>
             ) : null;
           })()}
-          {/* 日志/配置目录：两个低频入口堆叠成一列，与"测试连接"同排（一页化） */}
           <div className="space-y-1.5">
-          {/* 打开日志目录（诊断用，失败提示路径） */}
           <button onClick={handleOpenLogDir}
             className="w-full py-1.5 rounded-lg text-[11px] text-text-muted hover:text-text-2
                        bg-surface-2/60 hover:bg-surface-3/80 border border-border/40
                        transition-all duration-150 active:scale-[0.98]">
             {logDirMsg || t(settings.language, "settings.logdir")}
           </button>
-          {/* 打开配置目录（prompt/知识库覆盖文件投放处） */}
           <button onClick={handleOpenConfigDir}
             className="w-full py-1.5 rounded-lg text-[11px] text-text-muted hover:text-text-2
                        bg-surface-2/60 hover:bg-surface-3/80 border border-border/40
@@ -1017,7 +986,7 @@ export default function App() {
           </div>
           </div>
 
-          {/* 角色级 API 覆盖（可选）：不配置 = 所有角色共用全局；配置了生效单独 */}
+          {/* 角色级 API 覆盖（可选） */}
           <div className="border-t border-border/40 pt-3">
             <button onClick={() => setShowRoleApi(!showRoleApi)}
               className="w-full flex items-center justify-between text-[11px] text-text-2 hover:text-text-1 transition-colors">
@@ -1027,17 +996,14 @@ export default function App() {
             {showRoleApi && (
               <div className="mt-2 space-y-1.5 max-h-64 overflow-y-auto pr-0.5">
                 {(Object.keys(ROLE_NAMES) as PipelineRoleKey[]).map((role) => {
-                  /** 该角色**生效**的 API 地址（覆盖缺省继承全局）——模型候选与地址校验都以它为准 */
                   const roleOverrideUrl = settings.roleOverrides?.[role]?.base_url?.trim() ?? "";
                   const roleBaseUrl = roleOverrideUrl || settings.baseUrl;
-                  /** 留空 = 继承全局，故空值不算错；非空才校验（与全局同一套格式层判定） */
                   const roleUrlIssue = roleOverrideUrl ? formatUrlIssue(roleOverrideUrl) : null;
                   return (
                   <div key={role} className="rounded-lg border border-border/40 bg-surface-0/40 p-2">
                     <div className="flex items-center justify-between">
                       <span className="text-[11px] text-text-1">{ROLE_EMOJIS[role]} {ROLE_NAMES[role]}</span>
                       <div className="flex items-center gap-1.5">
-                        {/* 角色级测试连接（测该角色的生效配置：覆盖缺省 fallback 全局） */}
                         <button
                           onClick={() => handleTestRoleApi(role)}
                           disabled={roleTestStates[role] === "testing" || roleUrlIssue !== null}
@@ -1062,7 +1028,6 @@ export default function App() {
                     </div>
                     {expandedRole === role && (
                       <div className="mt-1.5 space-y-1.5">
-                        {/* 模型同样走可搜索下拉：候选 = 该角色**生效地址**命中的厂商模板（留空 = 继承全局） */}
                         <SearchableSelect value={settings.roleOverrides?.[role]?.model ?? ""}
                           options={modelsForBaseUrl(roleBaseUrl)} locale={settings.language}
                           placeholder="模型（留空继承全局）"
@@ -1078,7 +1043,6 @@ export default function App() {
                           onChange={e => updateRoleOverride(role, "base_url", e.target.value)}
                           placeholder="API 地址（留空继承全局）"
                           className="w-full bg-surface-0 border border-border/60 rounded-lg px-2.5 py-1.5 text-[11px] text-text-1 placeholder:text-text-muted/30 focus:outline-none focus:border-brand-500/40 transition-all duration-150" />
-                        {/* P1-2：结构化档位显式选择（自动 = 探测缓存 / 后端缺省 json_object） */}
                         <select value={settings.roleOverrides?.[role]?.structured_mode ?? ""}
                           aria-label={`${ROLE_NAMES[role]} 结构化输出档位`}
                           onChange={e => updateRoleStructuredMode(role, (e.target.value || undefined) as StructuredMode | undefined)}
@@ -1109,7 +1073,7 @@ export default function App() {
             </p>
           </div>
 
-          {/* 配置导入导出（密钥不落地：导出排除 apiKey/api_key，需重新输入） */}
+          {/* 配置导入导出 */}
           <div className="border-t border-border/40 pt-3">
             <div className="flex gap-2">
               <button onClick={handleExportSettings}
@@ -1165,61 +1129,57 @@ export default function App() {
         </div>
       )}
 
-      {/* Main content */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {/* 模式选择（横向 tab 置顶） */}
-        <div className="shrink-0 px-4 pt-3 pb-2 border-b border-border/40">
-          <div className="flex items-center gap-3">
-            <div className="flex-1 max-w-[720px]">
-              <ModeSelector mode={mode} locale={settings.language} onChange={(m) => {
-                runTokenRef.current++; // 作废在途 run
-                if (llmUnlistenRef.current) { llmUnlistenRef.current(); llmUnlistenRef.current = null; }
-                setMode(m);
-                rosterRef.current = MODE_EXPERTS[m].map((e) => e.id); // D-1：阵容序同步
-                setStatus("idle"); writeStreamText(""); clearRunError();
-                setConversation([]); chatHistoryRef.current = [];
-                setLastUserInput(""); setLastFeedback("");
-                setHistoryView(null); setCurrentHistoryId(null);
-              }} />
-            </div>
+      {/* =====================================================================
+          MAIN STUDIO WORKBENCH（左：输入与编排机架 · 右：四栏母带与蓝图舞台）
+          ===================================================================== */}
+      <div className="flex-1 flex overflow-hidden min-h-0">
+        {/* 左侧机架（410px）：01 创作与声学预设台 + 02 编排管线与角色通道 */}
+        <aside className="w-[410px] shrink-0 flex flex-col border-r border-border/70 bg-surface-1/35 overflow-y-auto">
+          {/* 01 · 创作立意与 18 项受控声学矩阵输入台 */}
+          <div className="p-3.5 border-b border-border/70">
+            <InputPanel
+              key={mode}
+              mode={mode}
+              disabled={status === "loading" || status === "streaming" || !secretsReady}
+              settings={settings}
+              onGenerate={handleGenerate}
+              inputRef={inputRef}
+              locale={settings.language}
+            />
           </div>
-        </div>
 
-        {/* 工作区：圆桌舞台 + 结果 */}
-        <div className="flex-1 flex overflow-hidden min-h-0">
-          {/* 左侧：圆桌舞台（四模式统一渲染） */}
-          <div className="w-[380px] shrink-0 flex flex-col border-r border-border/40 overflow-y-auto">
-            <div className="p-3">
-              <RoundtablePanel
-                experts={pipeline.experts}
-                phase={pipeline.phase}
-                validation={pipeline.validation}
-                error={pipeline.error}
-                active={pipeline.active}
-                onOpenDetail={(e) => setDetailExpert(e)}
-                currentStage={pipeline.currentStage}
-                doneStages={pipeline.doneStages}
-                usage={pipeline.usage}
-                locale={settings.language}
-              />
-              {/* F3：停止无效果/失败时可见（旧规则吞掉 cancel_pipeline 结果） */}
-              {pipeline.cancelNotice && (
-                <p role="status" className="mt-2 text-[11px] text-text-muted">{pipeline.cancelNotice}</p>
-              )}
-            </div>
+          {/* 02 · 编排管线与专家声学通道 */}
+          <div className="p-3.5 flex-1">
+            <RoundtablePanel
+              experts={pipeline.experts}
+              phase={pipeline.phase}
+              validation={pipeline.validation}
+              error={pipeline.error}
+              active={pipeline.active}
+              onOpenDetail={(e) => setDetailExpert(e)}
+              currentStage={pipeline.currentStage}
+              doneStages={pipeline.doneStages}
+              usage={pipeline.usage}
+              locale={settings.language}
+            />
+            {pipeline.cancelNotice && (
+              <p role="status" className="mt-2 text-[11px] text-text-muted">{pipeline.cancelNotice}</p>
+            )}
 
             {detailExpert && (
-              <div className="mx-3 mb-3 p-3 glass-panel rounded-xl border border-border/40 animate-[fade_200ms_ease]">
+              <div className="mt-3 p-3 studio-card rounded-xl border border-border animate-fade-in">
                 <div className="flex items-center justify-between mb-1.5">
                   <span className="text-[12px] font-semibold text-text-1">
                     {detailExpert.emoji} {detailExpert.name}
                   </span>
-                  <button onClick={() => setDetailExpert(null)} className="text-text-muted hover:text-text-2 text-[11px]">{t(settings.language, "detail.close")}</button>
+                  <button onClick={() => setDetailExpert(null)} className="text-text-muted hover:text-text-1 text-[11px] cursor-pointer">
+                    {t(settings.language, "detail.close")}
+                  </button>
                 </div>
                 <p className="text-[11px] text-text-2 leading-relaxed">
                   {t(settings.language, "detail.knowledge")}📚 {detailExpert.knowledge.length > 0 ? detailExpert.knowledge.join(", ") + ".csv" : t(settings.language, "detail.none")}
                 </p>
-                <p className="text-[10px] text-text-muted mt-1">
+                <p className="text-[10.5px] text-text-muted mt-1.5 whitespace-pre-wrap leading-relaxed">
                   {detailExpert.status === "working" && t(settings.language, "detail.working")}
                   {detailExpert.status === "done" && `${t(settings.language, "detail.done")}${detailExpert.note || t(settings.language, "detail.done.empty")}`}
                   {detailExpert.status === "error" && `${t(settings.language, "detail.error")}${detailExpert.note || errText(detailExpert.note)}`}
@@ -1228,69 +1188,92 @@ export default function App() {
               </div>
             )}
           </div>
+        </aside>
 
-          {/* 右侧：输入 + 结果 */}
-          <div className="flex-1 flex flex-col overflow-hidden">
-            {status !== "idle" && (
-              <div className="shrink-0">
-                <StatusIndicator status={status} errorMessage={errorMessage} onRetry={handleRetry} canRetry={canRetry} onResume={handleResume} onCancel={handleCancelCurrent} getRunId={pipeline.getRunId} locale={settings.language} backoff={pipeline.backoff} errorKind={errorKind} />
-                {/* 生成队列面板（等待项列表；完成项点击查看） */}
-                <QueuePanel
-                  queue={queue.queue}
-                  locale={settings.language}
-                  runningId={runningQueueId}
-                  onRemove={(id) => queue.remove(id)}
-                  onClear={() => queue.clearWaiting()}
-                  onSelect={selectQueueItem}
-                />
-              </div>
-            )}
-
-            {/* #12 轮间确认门：流水线真的停在轮末等决断（不点就一直等，超时后端自动继续） */}
-            {pipeline.gate && (
-              <div className="shrink-0">
-                <RoundGateBar
-                  gate={pipeline.gate}
-                  onDecide={handleGateDecide}
-                  onAutoOff={handleGateAutoOff}
-                  getRunId={pipeline.getRunId}
-                  locale={settings.language}
-                />
-              </div>
-            )}
-
-            <div className="flex-1 overflow-y-auto p-4">
-              {historyView ? (() => {
-                const ctx = buildHistoryRefineContext(historyView);
-                return (
-                  <ResultPanel conversation={ctx.conversation} streamText="" status="done"
-                    onRefine={(feedback, refineMode) => { handleRefineFromHistory(historyView, feedback, refineMode); }}
-                    mode={historyView.mode} locale={settings.language} />
-                );
-              })() : (
-                /* 结果区渲染不由 App 判定内容（旧实现复制了一份"有无产出"判定 → 错误且无产出时
-                   把用户丢回新手引导）：空态/失败态/引导在 ResultPanel 内单源判定 */
-                <ResultPanel conversation={conversation} streamText={streamText} status={status} onRefine={handleRefine} mode={mode} locale={settings.language} />
-              )}
+        {/* 右侧主舞台：遥测状态条 + 轮间门 + 四栏工程交付与蓝图检视台 */}
+        <main className="flex-1 flex flex-col overflow-hidden min-w-0">
+          {status !== "idle" && (
+            <div className="shrink-0">
+              <StatusIndicator
+                status={status}
+                errorMessage={errorMessage}
+                onRetry={handleRetry}
+                canRetry={canRetry}
+                onResume={handleResume}
+                onCancel={handleCancelCurrent}
+                getRunId={pipeline.getRunId}
+                locale={settings.language}
+                backoff={pipeline.backoff}
+                errorKind={errorKind}
+                stageNote={pipeline.stageNote}
+              />
+              <QueuePanel
+                queue={queue.queue}
+                locale={settings.language}
+                runningId={runningQueueId}
+                onRemove={(id) => queue.remove(id)}
+                onClear={() => queue.clearWaiting()}
+                onSelect={selectQueueItem}
+              />
             </div>
+          )}
 
-            {/* 输入区（底部固定） */}
-            <div className="shrink-0 p-4 border-t border-border/40">
-              {historyView && (
-                <div className="mb-2 p-2 bg-brand-500/8 border border-brand-500/20 rounded-lg flex items-center justify-between">
-                  <span className="text-[11px] text-brand-400 truncate">
-                    {MODE_LABELS[historyView.mode]} · {new Date(historyView.timestamp).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}
-                  </span>
-                  <button onClick={() => setHistoryView(null)}
-                    className="text-[11px] text-brand-400 hover:text-brand-300 font-medium shrink-0 ml-2">关闭</button>
-                </div>
-              )}
-              {/* U-4：钥匙串回填完成前（secretsReady=false）哨兵还不是真 key，输入面板整体禁用防带哨兵直发 */}
-              <InputPanel key={mode} mode={mode} disabled={status === "loading" || status === "streaming" || !secretsReady}
-                settings={settings} onGenerate={handleGenerate} inputRef={inputRef}  locale={settings.language} />
+          {pipeline.gate && (
+            <div className="shrink-0">
+              <RoundGateBar
+                gate={pipeline.gate}
+                onDecide={handleGateDecide}
+                onAutoOff={handleGateAutoOff}
+                getRunId={pipeline.getRunId}
+                locale={settings.language}
+              />
             </div>
+          )}
+
+          {historyView && (
+            <div className="mx-4 mt-2.5 px-3 py-2 bg-brand-500/10 border border-brand-500/30 rounded-lg flex items-center justify-between shrink-0">
+              <span className="text-[11.5px] text-brand-400 font-medium truncate">
+                历史快照回放 · {MODE_LABELS[historyView.mode]} · {new Date(historyView.timestamp).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}
+              </span>
+              <button onClick={() => setHistoryView(null)}
+                className="text-[11px] text-brand-400 hover:text-text-1 font-semibold shrink-0 ml-2 cursor-pointer">
+                返回当前工作台
+              </button>
+            </div>
+          )}
+
+          <div className="flex-1 overflow-y-auto p-4">
+            {historyView ? (() => {
+              const ctx = buildHistoryRefineContext(historyView);
+              return (
+                <ResultPanel
+                  conversation={ctx.conversation}
+                  streamText=""
+                  status="done"
+                  onRefine={(feedback, refineMode) => { handleRefineFromHistory(historyView, feedback, refineMode); }}
+                  mode={historyView.mode}
+                  locale={settings.language}
+                  songPlan={(historyView.song_plan as SongPlan | null) ?? null}
+                  validationPassed={historyView.validation_passed}
+                  degraded={historyView.degraded}
+                />
+              );
+            })() : (
+              <ResultPanel
+                conversation={conversation}
+                streamText={streamText}
+                status={status}
+                onRefine={handleRefine}
+                mode={mode}
+                locale={settings.language}
+                songPlan={pipeline.finalPlan}
+                textEval={pipeline.textEval}
+                validationPassed={pipeline.validation?.passed}
+                degraded={pipeline.degradedRef.current}
+              />
+            )}
           </div>
-        </div>
+        </main>
       </div>
 
       {showHistory && (

@@ -277,7 +277,7 @@ pub const RULE_REGISTRY: &[RuleSpec] = &[
     },
     RuleSpec {
         id: "audio_influence_zero",
-        modes: &["mode_a", "mode_b"],
+        modes: &["mode_a", "mode_b", "mode_d"],
         symbols: &[],
         executor: "check_params",
     },
@@ -3562,7 +3562,7 @@ const PLAN_FIELD_CONTRACT: &str = "【SongPlan 字段契约（最高优先级：
 2. Style Prompt → global：mood（置顶核心情绪与声学质地，单字符串）/ genre（**字符串数组**）/ bpm（整数）/ key（单字符串）/ meter（单字符串）/ vocal（**字符串数组**）/ instruments（**字符串数组**）/ arrangement_hook（贯穿全曲的器乐记忆点，单字符串）/ arc（单字符串）/ mix（**字符串数组**），均填具象英文短标签（禁 epic/emotional/beautiful/masterpiece 等空洞词，严禁出现真实艺人/乐队名或 4K/8K 视觉词）；vocal 只填 1 项核心人声画像（1 个《人声/混音词表》id 如 V-01..V-09 或 1 条≥3词具象英文人声短语，禁叠多个 V-xx 防词义打架），mix 填 1–2 项（如 M-01..M-09，各 ≥1；渲染为精炼逗号串，≤${STYLE_PROMPT_MAX} 字符）。\n\
 3. Exclude → global.negative（**字符串数组**）：直接写要排除的英文声学元素（不加 no/without）；正向字段不得出现否定写法。\n\
 4. 说明行 → 每段 motion（push/stop）+ instruments + positive_local + subtraction（本段抽空/减法事件，英文）+ energy + negative_local（instruments / positive_local / negative_local 均为**字符串数组**；energy 为整数）：instruments 只放在场乐器；positive_local 写局部变化量（奏法行为、${DESC_LINE_SPACE_SLOT}、人声状态）；energy 为 ${ENERGY_SCALE}（A/B 必填）；段内退出写 subtraction 或 negative_local（渲染为 X drop out）。\n\
-5. 极简段 → minimal=true：intro/outro/bridge/interlude/verse 等剥离段且 energy≤${MINIMAL_ENERGY_MAX}，或在 exemptions 写明理由。\n\
+5. 极简段 → minimal=true：intro/outro/bridge/interlude 等过渡剥离段且 energy≤${MINIMAL_ENERGY_MAX}，或在 exemptions 写明理由。\n\
 6. 配器参考（A/B）：极简 ≥${MIN_INSTRUMENT_MINIMAL}；Chorus 类 ≥${MIN_INSTRUMENT_CHORUS}；其余 ≥${MIN_INSTRUMENT_CORE}；最强 ≥${MIN_INSTRUMENT_STRONG}；差 ≥${MIN_INSTRUMENT_GAP}；全曲硬上限 ${INSTRUMENT_MAX}（防止频谱拥挤）。\n\
 7. 歌词 → sections[].lines（纯歌词行，禁塞 `[...]` 结构标签或 `(吉他独奏)`/`(间奏)` 等圆括号舞台/配器指令；一行对应一乐句自然呼吸，禁行内机械按词插空格，禁 `/` 与 `、`）；参数 → settings（variety=${VARIETY}；reference_audio 默认 false，为 true 时 audio_influence 可非 0 且建议 70–85）；notes 只写精简决策备忘（三两句话），不渲染。\n8. D 模式另填 mode_meta.douyin（clip/hook_line/loop_tail；scene 由请求盖写勿自选）；mix 含 M-01+M-06；negative 含 long intro/slow build/fade out。\n9. 可选文本层（默认 null=关闭）：pronunciation_hints（多音字/发音）、persona（声音指纹）、series_context（专辑/系列一致性）。";
 

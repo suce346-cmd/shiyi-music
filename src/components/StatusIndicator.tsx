@@ -24,6 +24,8 @@ interface Props {
   backoff?: BackoffInfo | null;
   /** #27-c：终态错误类别（rate_limit 时额外给可操作指引，与错误正文区分"该等"还是"该换 Key"） */
   errorKind?: AppError["kind"] | null;
+  /** P1-2：结构化阶段实时遥测说明（替代死等 llm-chunk） */
+  stageNote?: string | null;
 }
 
 /** 状态文案 key（locale 运行时解析）。`idle` 无文案，故取值域为 `MessageKey | ""`
@@ -55,7 +57,7 @@ const BACKOFF_TEXT_KEY: Record<BackoffReason, MessageKey> = {
   network: "status.backoff.network",
 };
 
-export default function StatusIndicator({ status, errorMessage, onRetry, onResume, onCancel, getRunId, locale, canRetry = true, backoff, errorKind }: Props) {
+export default function StatusIndicator({ status, errorMessage, onRetry, onResume, onCancel, getRunId, locale, canRetry = true, backoff, errorKind, stageNote }: Props) {
   /** 插话输入展开态 + 发送中 + 结果提示 */
   const [showInterject, setShowInterject] = useState(false);
   const [note, setNote] = useState("");
@@ -103,10 +105,15 @@ export default function StatusIndicator({ status, errorMessage, onRetry, onResum
   const running = status === "loading" || status === "streaming";
 
   return (
-    <div className={`mx-4 mt-3 px-3 py-2 rounded-xl glass-panel border border-border/30 ${c.bg} ${c.color} text-[13px]`}>
-      <div className="flex items-center gap-2">
+    <div className={`mx-4 mt-2.5 px-3.5 py-2 rounded-xl studio-card border border-border/40 ${c.bg} ${c.color} text-[12px]`}>
+      <div className="flex items-center gap-2 flex-wrap">
         <Icon size={14} className={running ? "animate-spin" : ""} />
-        <span className="font-medium">{STATUS_TEXT_KEY[status] ? t(locale, STATUS_TEXT_KEY[status]) : ""}</span>
+        <span className="font-semibold tracking-tight">{STATUS_TEXT_KEY[status] ? t(locale, STATUS_TEXT_KEY[status]) : ""}</span>
+        {running && stageNote && (
+          <span className="px-2 py-0.5 rounded-md bg-surface-0/70 border border-border/50 text-text-1 font-mono text-[11px] truncate max-w-[360px]">
+            {stageNote}
+          </span>
+        )}
         {/* 修复包 C（#12 可发现性）：运行中显式提示可插话——功能早已存在，缺的是用户看得见 */}
         {running && (
           <span className="text-[11px] opacity-60">· {t(locale, "interject.hint")}</span>
@@ -152,7 +159,7 @@ export default function StatusIndicator({ status, errorMessage, onRetry, onResum
           </button>
         )}
         {running && (
-          <div className="flex-1 h-[2px] rounded-full bg-surface-3 overflow-hidden ml-2">
+          <div className="flex-1 h-[2px] rounded-full bg-surface-3 overflow-hidden ml-2 min-w-[60px]">
             <div className="h-full w-1/4 rounded-full bg-current/40"
               style={{ animation: "streamBar 1.2s ease-in-out infinite" }} />
           </div>

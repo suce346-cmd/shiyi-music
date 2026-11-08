@@ -55,7 +55,8 @@ pub fn run() {
             commands::orchestrator::pipeline_resume,
             plan::suno_profile::get_suno_meta,
             plan::douyin::get_douyin_meta,
-            plan::douyin::suggest_douyin_scenes
+            plan::douyin::suggest_douyin_scenes,
+            knowledge::get_vocal_mix_meta
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -81,20 +81,20 @@ pub fn style_tags(p: &SongPlan) -> Vec<String> {
         .iter()
         .take(vocal_cap)
         .for_each(|x| push_nonempty(&mut t, &vocal_mix_expand(x)));
-    let inst_cap = if compact { 4 } else { g.instruments.len() };
+    let inst_cap = if compact {
+        crate::rules::INSTRUMENT_MAX
+    } else {
+        g.instruments.len()
+    };
     g.instruments.iter().take(inst_cap).for_each(|x| push_nonempty(&mut t, x));
     if let Some(hook) = &g.arrangement_hook {
-        if !compact || hook.trim().chars().count() <= 48 {
-            push_nonempty(&mut t, hook);
-        }
+        push_nonempty(&mut t, hook);
     }
     if let Some(a) = &g.arc {
-        if !compact || a.trim().chars().count() <= 40 {
-            push_nonempty(&mut t, a);
-        }
+        push_nonempty(&mut t, a);
     }
     let mix_cap = if compact {
-        if p.mode_meta.douyin.is_some() { 2 } else { 1 }
+        if p.mode_meta.douyin.is_some() { 3 } else { 2 }
     } else {
         g.mix.len()
     };
@@ -153,29 +153,38 @@ pub fn section_cues(s: &super::Section) -> Vec<String> {
     let mut c = Vec::new();
     s.positive_local.iter().for_each(|x| push_nonempty(&mut c, x));
     // 避免 positive_local 已写带奏法的该乐器（如 "piano rolled chords"）时再重复塞入同乐器（如 "felt piano"），
-    // 且当说明行已接近 DESC_LINE_MAX_CHARS 时不再追加冗余裸乐器名（防止拼装后超 200 字符硬门）。
+    // 并预留 subtraction / negative_local / energy N 预算，使未在 positive_local 提及的在场乐器始终按标准逻辑补入且不超 DESC_LINE_MAX_CHARS。
     let pos_joined = c.join(" ").to_lowercase();
     let label_len = s.label.trim().chars().count();
     let budget = crate::rules::DESC_LINE_MAX_CHARS.saturating_sub(label_len + 18);
-    // v3 Section Delta 原则：当 positive_local 已写出完整的局部声学变化量（>= 32 字符，含具体奏法/空间/人声）时，
-    // 不再向段头重复追加裸乐器名清单；仅对极短简写（如 minimal_plan 夹具）补充在场乐器。
-    if pos_joined.chars().count() < 32 {
-        for inst in &s.instruments {
-            let t = inst.trim();
-            if t.is_empty() {
-                continue;
-            }
-            let tl = t.to_lowercase();
-            let tail_noun = tl.split_whitespace().last().unwrap_or("");
-            let already_mentioned = pos_joined.contains(&tl)
-                || (tail_noun.len() >= 4
-                    && !matches!(tail_noun, "kit" | "set" | "pad" | "lead" | "line" | "part")
-                    && pos_joined.contains(tail_noun));
-            if !already_mentioned {
-                let cur_len: usize = c.iter().map(|x| x.chars().count() + 2).sum();
-                if c.is_empty() || cur_len + t.chars().count() <= budget {
-                    push_unique_ci(&mut c, t);
-                }
+    let sub_reserve: usize = if let Some(sub) = &s.subtraction {
+        let r = rewrite_negative_local(sub);
+        if r.is_empty() { 0 } else { r.chars().count() + 2 }
+    } else {
+        s.negative_local
+            .iter()
+            .map(|n| {
+                let r = rewrite_negative_local(n);
+                if r.is_empty() { 0 } else { r.chars().count() + 2 }
+            })
+            .sum()
+    };
+    let inst_budget = budget.saturating_sub(sub_reserve);
+    for inst in &s.instruments {
+        let t = inst.trim();
+        if t.is_empty() {
+            continue;
+        }
+        let tl = t.to_lowercase();
+        let tail_noun = tl.split_whitespace().last().unwrap_or("");
+        let already_mentioned = pos_joined.contains(&tl)
+            || (tail_noun.len() >= 4
+                && !matches!(tail_noun, "kit" | "set" | "pad" | "lead" | "line" | "part")
+                && pos_joined.contains(tail_noun));
+        if !already_mentioned {
+            let cur_len: usize = c.iter().map(|x| x.chars().count() + 2).sum();
+            if c.is_empty() || cur_len + t.chars().count() <= inst_budget {
+                push_unique_ci(&mut c, t);
             }
         }
     }

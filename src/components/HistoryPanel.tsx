@@ -34,11 +34,7 @@ async function exportEntry(id: string, format: "txt" | "md"): Promise<string | n
 
 const modeIcon: Record<Mode, typeof IconFileText> = { mode_a: IconFileText, mode_b: IconStars, mode_c: IconEdit, mode_d: IconBrandTiktok };
 
-/** 筛选页签标签（**穷尽映射**：`Record<Mode | "all", string>`）。
- *
- *  旧写法是数组 `{label, value}[]`——TS 对数组**不做**取值域穷尽检查，新增一个 `Mode` 变体时
- *  本面板只是**静默少一个筛选页签**：该模式的历史条目在筛选下不可达，而 tsc / 全部测试照旧
- *  全绿（第十九批，与 `ModeSelector` 的 `MODES` 数组同族一并修复）。改 `Record` 后漏配即编译期报错。 */
+/** 筛选页签标签（**穷尽映射**：`Record<Mode | "all", string>`）。 */
 const FILTER_LABELS: Record<Mode | "all", string> = {
   all: "全部",
   mode_a: "A",
@@ -82,51 +78,51 @@ export default function HistoryPanel({ entries, allEntriesCount, filter, onFilte
   };
 
   return (
-    <div className="fixed inset-0 oklch(0.50 0.02 55 / 0.35) backdrop-blur-md z-50 flex items-start justify-center pt-20
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-md z-50 flex items-start justify-center pt-20
                     animate-[fade_150ms_ease]">
-      <div className="glass-panel rounded-2xl border border-border/40 w-full max-w-md mx-4
-                      max-h-[70vh] flex flex-col overflow-hidden">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border/50">
+      <div className="studio-card rounded-2xl border border-border w-full max-w-lg mx-4
+                      max-h-[72vh] flex flex-col overflow-hidden shadow-2xl">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border/60">
           <div className="flex items-center gap-2">
             <IconHistory size={16} className="text-brand-400" />
             <h2 className="text-[13px] font-semibold text-text-1">{t(locale, "history.title")}</h2>
-            <span className="text-[11px] text-text-muted">({allEntriesCount})</span>
+            <span className="text-[11px] text-text-muted studio-mono">({allEntriesCount})</span>
           </div>
           <div className="flex items-center gap-1">
             {allEntriesCount > 0 && (
               <button onClick={() => confirmClear ? (onClear(), setConfirmClear(false)) : setConfirmClear(true)}
                 className="text-[11px] text-text-muted hover:text-danger px-2 py-1 rounded-lg
-                           hover:bg-danger/8 transition-colors duration-150">
+                           hover:bg-danger/8 transition-colors duration-150 cursor-pointer">
                 <IconTrash size={13} className="inline mr-0.5" />
                 {confirmClear ? t(locale, "history.confirm") : t(locale, "history.clear")}
               </button>
             )}
             <button onClick={onClose}
-              className="p-1 rounded-lg text-text-muted hover:text-text-1 hover:bg-surface-3 transition-colors">
+              className="p-1 rounded-lg text-text-muted hover:text-text-1 hover:bg-surface-3 transition-colors cursor-pointer">
               <IconX size={15} />
             </button>
           </div>
         </div>
 
-        <div className="flex gap-1 px-4 py-2 border-b border-border/50">
+        <div className="flex gap-1 px-4 py-2 border-b border-border/60">
           {FILTER_TABS.map(tab => (
             <button key={tab.value} onClick={() => onFilterChange(tab.value)}
-              className={`px-2 py-1 rounded-lg text-[11px] font-medium transition-all duration-150
+              className={`px-2 py-1 rounded-lg text-[11px] font-medium transition-all duration-150 cursor-pointer
                 ${filter === tab.value
-                  ? "bg-brand-500/15 text-brand-400"
-                  : "text-text-muted hover:text-text-2 hover:bg-surface-3"}`}>
+                  ? "bg-brand-500/15 text-brand-400 border border-brand-500/35"
+                  : "text-text-muted hover:text-text-2 hover:bg-surface-3 border border-transparent"}`}>
               {tab.value === "all" ? t(locale, "history.filter.all") : tab.label}
             </button>
           ))}
         </div>
         {/* 导出结果提示 */}
         {exportMsg && (
-          <div className="px-4 py-1.5 border-b border-border/50 text-[10px] text-text-muted truncate">
+          <div className="px-4 py-1.5 border-b border-border/60 text-[10px] text-text-muted truncate">
             {exportMsg}
           </div>
         )}
 
-        <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
+        <div className="flex-1 overflow-y-auto p-2 space-y-1">
           {entries.length === 0 && (
             <div className="flex flex-col items-center justify-center py-10 text-text-muted">
               <IconHistory size={28} className="opacity-30 mb-2" />
@@ -135,21 +131,42 @@ export default function HistoryPanel({ entries, allEntriesCount, filter, onFilte
           )}
           {entries.map((entry) => {
             const Icon = modeIcon[entry.mode];
+            const planTitle =
+              entry.rendered?.title ||
+              (entry.song_plan && typeof entry.song_plan === "object"
+                ? (entry.song_plan as { title?: string | null }).title
+                : null);
             return (
               <div key={entry.id}
                 className="group flex items-center gap-3 p-2.5 rounded-xl cursor-pointer
-                           hover:bg-surface-2/50 transition-all duration-150"
+                           hover:bg-surface-2/70 border border-transparent hover:border-border/60 transition-all duration-150"
                 onClick={() => onSelect(entry)}>
                 <div className="w-7 h-7 rounded-lg bg-surface-3 flex items-center justify-center shrink-0
                                 group-hover:bg-border transition-colors">
                   <Icon size={14} className="text-text-2" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[11px] font-medium text-brand-400">{MODE_LABELS[entry.mode]}</span>
-                    <span className="text-[10px] text-text-muted">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[11px] font-semibold text-brand-400 studio-mono">{MODE_LABELS[entry.mode]}</span>
+                    {planTitle && (
+                      <span className="text-[11px] font-semibold text-text-1 truncate max-w-[140px]">
+                        《{planTitle}》
+                      </span>
+                    )}
+                    <span className="text-[10px] text-text-muted studio-mono">
                       {new Date(entry.timestamp).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}
                     </span>
+                    {typeof entry.validation_passed === "boolean" && (
+                      <span
+                        className={`text-[9px] px-1 py-px rounded studio-mono shrink-0 ${
+                          entry.validation_passed
+                            ? "bg-success/12 text-success"
+                            : "bg-warning/15 text-warning"
+                        }`}
+                      >
+                        {entry.validation_passed ? "✓ 校验通过" : "⚠ 校验告警"}
+                      </span>
+                    )}
                     {/* C5/ADR-3：降级徽章——该次生成存在降级环节，可信度需结合完整度声明评估 */}
                     {entry.degraded && entry.degraded.length > 0 && (
                       <span
@@ -168,12 +185,12 @@ export default function HistoryPanel({ entries, allEntriesCount, filter, onFilte
                   <button onClick={(e) => handleExport(e, entry.id)}
                     title="导出为 Markdown 文件"
                     className="p-1 rounded-md text-text-muted opacity-0 group-hover:opacity-100
-                               hover:text-brand-400 hover:bg-brand-500/10 transition-all duration-150 disabled:opacity-50">
+                               hover:text-brand-400 hover:bg-brand-500/10 transition-all duration-150 disabled:opacity-50 cursor-pointer">
                     <IconDownload size={13} className={exportingId === entry.id ? "animate-pulse" : ""} />
                   </button>
                   <button onClick={(e) => { e.stopPropagation(); onDelete(entry.id); }}
                     className="p-1 rounded-md text-text-muted opacity-0 group-hover:opacity-100
-                               hover:text-danger hover:bg-danger/8 transition-all duration-150">
+                               hover:text-danger hover:bg-danger/8 transition-all duration-150 cursor-pointer">
                     <IconX size={13} />
                   </button>
                 </div>

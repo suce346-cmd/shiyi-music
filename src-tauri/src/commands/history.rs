@@ -202,12 +202,75 @@ fn honesty_declaration(e: &HistoryEntry) -> String {
     )
 }
 
+fn render_plan_blueprint(plan: &serde_json::Value, format: &str) -> String {
+    let Some(obj) = plan.as_object() else {
+        return String::new();
+    };
+    let mut lines: Vec<String> = Vec::new();
+    if let Some(intent) = obj.get("intent").and_then(|v| v.as_object()) {
+        let one = intent.get("one_thing").and_then(|v| v.as_str()).unwrap_or("");
+        let anchor = intent.get("anchor_object").and_then(|v| v.as_str()).unwrap_or("");
+        let moment = intent.get("at_what_moment").and_then(|v| v.as_str()).unwrap_or("");
+        let rhyme = intent.get("rhyme_plan").and_then(|v| v.as_str()).unwrap_or("");
+        if !one.is_empty() || !anchor.is_empty() {
+            lines.push(format!("· 立意真话：{}（锚点物：{} · 时刻：{}）", one, anchor, moment));
+        }
+        if !rhyme.is_empty() {
+            lines.push(format!("· 全局声律：{}", rhyme));
+        }
+    }
+    if let Some(asym) = obj.get("asymmetry").and_then(|v| v.as_object()) {
+        let sl = asym.get("short_line").and_then(|v| v.as_str()).unwrap_or("");
+        let cv = asym.get("chorus_variation").and_then(|v| v.as_str()).unwrap_or("");
+        let wh = asym.get("withholding").and_then(|v| v.as_str()).unwrap_or("");
+        let mut parts = Vec::new();
+        if !sl.is_empty() {
+            parts.push(format!("破格短句「{}」", sl));
+        }
+        if !cv.is_empty() {
+            parts.push(format!("副歌微变「{}」", cv));
+        }
+        if !wh.is_empty() {
+            parts.push(format!("留白「{}」", wh));
+        }
+        if !parts.is_empty() {
+            lines.push(format!("· 去机器味设计：{}", parts.join(" / ")));
+        }
+    }
+    if let Some(global) = obj.get("global").and_then(|v| v.as_object()) {
+        let mood = global.get("mood").and_then(|v| v.as_str()).unwrap_or("");
+        let hook = global.get("arrangement_hook").and_then(|v| v.as_str()).unwrap_or("");
+        if !mood.is_empty() || !hook.is_empty() {
+            lines.push(format!("· 声场与器乐钩子：mood={} | hook={}", mood, hook));
+        }
+    }
+    if let Some(dy) = plan.pointer("/mode_meta/douyin") {
+        let hl = dy.get("hook_line").and_then(|v| v.as_str()).unwrap_or("");
+        let st = dy.pointer("/clip/start_section").and_then(|v| v.as_str()).unwrap_or("");
+        let ed = dy.pointer("/clip/end_section").and_then(|v| v.as_str()).unwrap_or("");
+        if !hl.is_empty() {
+            lines.push(format!("· 抖音切片：{} → {} | Hook「{}」", st, ed, hl.replace('\n', " / ")));
+        }
+    }
+    if lines.is_empty() {
+        return String::new();
+    }
+    if format == "md" {
+        format!("## 📐 声学与词曲蓝图（SongPlan v3）\n\n{}\n\n", lines.join("\n"))
+    } else {
+        format!("--- 声学与词曲蓝图（SongPlan v3） ---\n{}\n\n", lines.join("\n"))
+    }
+}
+
 fn render_export(e: &HistoryEntry, format: &str) -> String {
     let mut out = String::new();
     if format == "md" {
         out.push_str(&format!("# {} · {}\n\n", mode_label(&e.mode), e.id));
         out.push_str(&honesty_declaration(e));
         out.push_str(&format!("> 输入：{}\n\n", e.input));
+        if let Some(plan) = &e.song_plan {
+            out.push_str(&render_plan_blueprint(plan, format));
+        }
         if let Some(conv) = &e.conversation {
             for t in conv {
                 let who = match t.role.as_str() {
@@ -234,6 +297,9 @@ fn render_export(e: &HistoryEntry, format: &str) -> String {
             e.id,
             e.input
         ));
+        if let Some(plan) = &e.song_plan {
+            out.push_str(&render_plan_blueprint(plan, format));
+        }
         if let Some(conv) = &e.conversation {
             for t in conv {
                 out.push_str(&format!("--- {} ---\n{}\n\n", t.role, t.content));
@@ -383,4 +449,41 @@ mod tests {
         };
         assert!(render_export(&e3, "md").contains("硬校验 结论未知"));
     }
+
+    #[test]
+    fn render_export_includes_song_plan_blueprint() {
+        let mut e = sample_entry("bp1");
+        e.song_plan = Some(serde_json::json!({
+            "intent": {
+                "one_thing": "不是放不下你，是气自己还在等",
+                "anchor_object": "冷掉的关东煮",
+                "at_what_moment": "凌晨便利店",
+                "rhyme_plan": "言前辙(an/ian)"
+            },
+            "asymmetry": {
+                "short_line": "别回头",
+                "chorus_variation": "末遍高八度",
+                "withholding": "没发出的消息"
+            },
+            "global": {
+                "mood": "intimate, nocturnal",
+                "arrangement_hook": "muted guitar ostinato"
+            },
+            "mode_meta": {
+                "douyin": {
+                    "hook_line": "别回头",
+                    "clip": { "start_section": "Chorus 1", "end_section": "Chorus 1" }
+                }
+            }
+        }));
+        let md = render_export(&e, "md");
+        assert!(md.contains("声学与词曲蓝图（SongPlan v3）"));
+        assert!(md.contains("冷掉的关东煮"));
+        assert!(md.contains("言前辙(an/ian)"));
+        assert!(md.contains("破格短句「别回头」"));
+        assert!(md.contains("muted guitar ostinato"));
+        let txt = render_export(&e, "txt");
+        assert!(txt.contains("--- 声学与词曲蓝图（SongPlan v3） ---"));
+    }
 }
+

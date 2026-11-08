@@ -374,3 +374,49 @@ export interface StreamChunk {
   run_id: string;
   content: string;
 }
+
+/** P1-5：get_vocal_mix_meta 返回的单条受控人声/混音预设 */
+export interface VocalMixMetaItem {
+  id: string;
+  category: "vocal" | "mix" | string;
+  label_cn: string;
+  label_en: string;
+  applies_to: string;
+}
+
+/** get_suno_meta 后端真实返回结构（与 Rust `plan::suno_profile::SunoMeta` 对齐） */
+export interface SunoMetaLimitItem {
+  name: string;
+  value: number;
+  fact?: {
+    kind: "measured" | "user_probed";
+    source?: string;
+    date: string;
+  };
+}
+
+export interface SunoMetaWire {
+  limits: SunoMetaLimitItem[];
+}
+
+/** 前端归一化后的 Suno 引擎预算上限与契约参数 */
+export interface SunoMetaLimits {
+  style_max_chars: number;
+  lyrics_max_chars: number;
+  exclude_max_chars: number;
+  style_tags_min: number;
+  style_tags_max: number;
+  variety_default: number;
+  energy_scale: number;
+  desc_line_max_chars: number;
+  section_cues_max: number;
+}
+
+/** P1-13：Judge 旁路七维文本评估结构化卡片 */
+export interface TextEvalScorecard {
+  total: number;
+  lines: string[];
+  small_sample: boolean;
+  note: string;
+}
+

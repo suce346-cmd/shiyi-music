@@ -470,7 +470,7 @@ pub const VOCAL_MIX_TABLE: &str = "vocal_mix";
 pub const VOCAL_MIX_INJECT_MAX_CHARS: usize = 2600;
 
 /// 词表一行（只取校验/渲染/注入需要的列）
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct VocalMixEntry {
     pub id: String,
     pub category: String,
@@ -497,6 +497,12 @@ pub fn vocal_mix_entries(kb: &KnowledgeBase) -> Option<Vec<VocalMixEntry>> {
             })
             .collect(),
     )
+}
+
+/// 前端查询 vocal_mix 词表元数据（18 条人声/混音预设，含 id/category/label_cn/label_en/applies_to）。
+#[tauri::command]
+pub fn get_vocal_mix_meta() -> Vec<VocalMixEntry> {
+    vocal_mix_entries(shared_knowledge()).unwrap_or_default()
 }
 
 /// id → label_en（渲染用；未知 id 返回 None，渲染原样透传，由 validate 报 unknown）

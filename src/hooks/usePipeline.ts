@@ -11,6 +11,8 @@ import type {
   ExpertCard,
   BackoffInfo,
   PhaseKind,
+  SongPlan,
+  TextEvalScorecard,
 } from "../types";
 import { errText } from "../types";
 import { sanitizeStored } from "./useSettings";
@@ -107,8 +109,6 @@ export function buildExpertsFromMeta(meta: PipelineMeta, mode: Mode): Omit<Exper
   });
 }
 
-
-
 export interface PipelineRunOptions {
   mode: Mode;
   userInput: string;
@@ -160,6 +160,12 @@ interface PipelineState {
   backoff: BackoffInfo | null;
   /** F3：停止请求结果提示（null = 无提示）——后端回报"任务已结束、停止无效果"或请求失败时可见 */
   cancelNotice: string | null;
+  /** P1-2 结构化阶段实时遥测提示（解决 StatusIndicator 永远只显示"连接中..."的问题） */
+  stageNote: string | null;
+  /** 终版结构化 SongPlan（供蓝图检视器与逐段声学轨渲染） */
+  finalPlan: SongPlan | null;
+  /** 文本评估 Judge 评分卡（仅启用 Judge 时有值） */
+  textEval: TextEvalScorecard | null;
 }
 
 /** 用量零值（startRun/reset 时复位） */
@@ -273,6 +279,9 @@ export function usePipeline() {
     gate: null,
     backoff: null,
     cancelNotice: null,
+    stageNote: null,
+    finalPlan: null,
+    textEval: null,
   });
 
   const unlistenRef = useRef<UnlistenFn | null>(null);
@@ -374,7 +383,11 @@ export function usePipeline() {
       const e = envelope.event;
       switch (e.type) {
         case "step_start":
-          setState((prev) => ({ ...prev, currentStage: e.role }));
+          setState((prev) => ({
+            ...prev,
+            currentStage: e.role,
+            stageNote: `${ROLE_NAMES[e.role] ?? e.role} · 审查与声学拆解中…`,
+          }));
           updateExpert(e.role, { status: "working", note: "思考中…" });
           break;
         case "step_done":
@@ -387,7 +400,12 @@ export function usePipeline() {
           speechCbRef.current?.(makeSpeech(e.role, e.summary));
           break;
         case "host_start":
-          setState((prev) => ({ ...prev, phase: "synthesizing", currentStage: "host" }));
+          setState((prev) => ({
+            ...prev,
+            phase: "synthesizing",
+            currentStage: "host",
+            stageNote: e.stage === "summarize" ? "主持人 · 汇总讨论并分发任务中…" : "主持人 · 词曲一体初稿架构中…",
+          }));
           updateExpert("host", {
             status: "working",
             note: e.stage === "summarize" ? "汇总讨论并分发任务中…" : "全局统领中…",
@@ -419,6 +437,7 @@ export function usePipeline() {
             // 重置 auditor 的完成态：讨论轮审查已完成 ≠ 结构化定稿已完成（阶段条 chip 与卡片状态一致）
             doneStages: prev.doneStages.filter((s) => s !== "auditor"),
             validation: null,
+            stageNote: "校验员 · 结构化定稿与物理硬门校验中…",
           }));
           validationRef.current = null;
           finalPlanRef.current = null;
@@ -448,7 +467,11 @@ export function usePipeline() {
           break;
         case "retry":
           // 打回过程可见——auditor 卡片状态 + 对话流发言 + 错误提示
-          setState((prev) => ({ ...prev, error: `格式打回重做：${e.reason}` }));
+          setState((prev) => ({
+            ...prev,
+            error: `格式打回重做：${e.reason}`,
+            stageNote: `硬校验打回返修：${e.reason.slice(0, 48)}`,
+          }));
           updateExpert("auditor", { status: "working", note: "格式打回重做中…" });
           speechCbRef.current?.(makeSpeech(
             "auditor",
@@ -466,7 +489,7 @@ export function usePipeline() {
         }
         case "cancelled":
           // 用户取消——回到空闲，不标红为错误（#12：暂停中取消同样要撤下确认条）
-          setState((prev) => ({ ...prev, error: null, phase: "done", active: false, currentStage: null, gate: null, backoff: null }));
+          setState((prev) => ({ ...prev, error: null, phase: "done", active: false, currentStage: null, gate: null, backoff: null, stageNote: null }));
           break;
         case "step_usage": {
           // 累计本轮 token 用量（过期 run 的事件已在顶部丢弃）。
@@ -498,6 +521,7 @@ export function usePipeline() {
             phase: "discussing",
             currentStage: null,
             gate: { round: e.round, nextRound: e.next_round, timeoutSecs: e.timeout_secs },
+            stageNote: `第 ${e.round} 轮完成，等待人工确认门决断…`,
           }));
           speechCbRef.current?.(makeSpeech(
             "host",
@@ -527,17 +551,34 @@ export function usePipeline() {
             },
           }));
           break;
-        case "phase_progress":
+        case "phase_progress": {
           // P1-2：结构化阶段无 token 流，以进度+解析后预览代替
-          updateExpert(e.role, { status: "working", note: phaseProgressNote(e.phase, e.preview) });
+          const note = phaseProgressNote(e.phase, e.preview);
+          updateExpert(e.role, { status: "working", note });
+          setState((prev) => ({
+            ...prev,
+            stageNote: `${ROLE_NAMES[e.role] ?? e.role} · ${note}`,
+          }));
           break;
+        }
         case "final_plan": {
-          finalPlanRef.current = e.song_plan ?? null;
+          const plan = (e.song_plan as SongPlan) ?? null;
+          finalPlanRef.current = plan;
+          setState((prev) => ({ ...prev, finalPlan: plan }));
           break;
         }
         case "text_eval": {
           // P1-13：旁路 Judge 结果（仅 settings.textEvalJudge=true 时后端才发）
           const dims = (e.lines || []).join(" ");
+          setState((prev) => ({
+            ...prev,
+            textEval: {
+              total: e.total,
+              lines: e.lines || [],
+              small_sample: e.small_sample,
+              note: e.note,
+            },
+          }));
           speechCbRef.current?.(
             makeSpeech(
               "assistant",
@@ -552,7 +593,7 @@ export function usePipeline() {
           break;
         case "failed":
           // active:false + 清 currentStage：防后端只发 Failed 不返回 Err 时 UI 永久卡"进行中"
-          setState((prev) => ({ ...prev, error: e.error, phase: "done", active: false, currentStage: null, gate: null, backoff: null }));
+          setState((prev) => ({ ...prev, error: e.error, phase: "done", active: false, currentStage: null, gate: null, backoff: null, stageNote: null }));
           break;
         default: {
           // C5/D6 兜底：未知事件类型显式忽略（后端只增枚举值时旧前端不崩）
@@ -567,7 +608,7 @@ export function usePipeline() {
   const finishRun = useCallback(() => {
     // #12：收尾一律撤下确认条（正常结束/异常结束都不留悬挂的门条）
     // #27-c：退避提示同理——收尾若仍在退避（如取消/异常中断），不能把倒计时留在屏上
-    setState((prev) => ({ ...prev, active: false, phase: "done", error: null, gate: null, backoff: null }));
+    setState((prev) => ({ ...prev, active: false, phase: "done", error: null, gate: null, backoff: null, stageNote: null }));
     cleanup();
   }, [cleanup]);
 
@@ -597,6 +638,9 @@ export function usePipeline() {
         gate: null,
         backoff: null,
         cancelNotice: null,
+        stageNote: null,
+        finalPlan: null,
+        textEval: null,
       });
       usageRef.current = { ...ZERO_USAGE };
       degradedRef.current = [];
@@ -667,7 +711,7 @@ export function usePipeline() {
     } catch (e) {
       cancelNotice = `停止请求失败：${errText(e)}`;
     }
-    setState((prev) => ({ ...prev, active: false, phase: "done", error: null, currentStage: null, cancelNotice }));
+    setState((prev) => ({ ...prev, active: false, phase: "done", error: null, currentStage: null, cancelNotice, stageNote: null }));
   }, []);
 
   /** 重置 */
@@ -694,6 +738,9 @@ export function usePipeline() {
         gate: null,
         backoff: null,
         cancelNotice: null,
+        stageNote: null,
+        finalPlan: null,
+        textEval: null,
       });
       usageRef.current = { ...ZERO_USAGE };
       degradedRef.current = [];

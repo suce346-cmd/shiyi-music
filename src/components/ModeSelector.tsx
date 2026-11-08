@@ -1,61 +1,71 @@
-import { IconFileText, IconBrandTiktok, IconEdit, IconStars } from "@tabler/icons-react";
-import type { Mode, Locale } from "../types";
+import { IconMusic, IconSparkles, IconPencil, IconFlame } from "@tabler/icons-react";
+import type { Locale, Mode } from "../types";
 import { t } from "../i18n";
 import type { MessageKey } from "../i18n";
 
 interface Props {
   mode: Mode;
   onChange: (mode: Mode) => void;
-  /** 界面语言（缺省中文） */
+  disabled?: boolean;
   locale?: Locale;
 }
 
-/** 模式元数据（**穷尽映射**：`Record<Mode, …>`）。
- *
- *  旧写法是 `{value: Mode; …}[]`（数组）——TS 对数组**不做**取值域穷尽检查，于是新增
- *  一个 `Mode` 变体时本组件只是**静默少画一个按钮**：该模式在界面上不可达，而 tsc / 全部
- *  测试照旧全绿（与后端 `rules::ALL_MODES` 漏登记同族，第十九批一并修复）。
- *  改 `Record<Mode, …>` 后，漏配任一模式即**编译期**报错。
- *
- *  渲染顺序 = 此处的声明顺序（`Object.keys` 对字符串键保持插入序），不再另写一份顺序清单
- *  ——那会是同一事实的第二个真源。 */
-const MODE_META: Record<Mode, { labelKey: MessageKey; descKey: MessageKey; icon: typeof IconFileText }> = {
-  mode_a: { labelKey: "mode.a", descKey: "mode.a.desc", icon: IconFileText },
-  mode_b: { labelKey: "mode.b", descKey: "mode.b.desc", icon: IconStars },
-  mode_c: { labelKey: "mode.c", descKey: "mode.c.desc", icon: IconEdit },
-  mode_d: { labelKey: "mode.d", descKey: "mode.d.desc", icon: IconBrandTiktok },
-};
+const modes: { key: Mode; code: string; titleKey: MessageKey; descKey: MessageKey; icon: typeof IconMusic }[] = [
+  { key: "mode_a", code: "MODE A", titleKey: "mode.a", descKey: "mode.a.desc", icon: IconMusic },
+  { key: "mode_b", code: "MODE B", titleKey: "mode.b", descKey: "mode.b.desc", icon: IconSparkles },
+  { key: "mode_c", code: "MODE C", titleKey: "mode.c", descKey: "mode.c.desc", icon: IconPencil },
+  { key: "mode_d", code: "MODE D", titleKey: "mode.d", descKey: "mode.d.desc", icon: IconFlame },
+];
 
-/** 渲染序条目（键类型由 `MODE_META` 的 `Record<Mode, …>` 保证恰为 `Mode`） */
-function modeEntries(): [Mode, (typeof MODE_META)[Mode]][] {
-  return Object.entries(MODE_META) as [Mode, (typeof MODE_META)[Mode]][];
-}
-
-export default function ModeSelector({ mode, onChange, locale }: Props) {
+export default function ModeSelector({ mode, onChange, disabled, locale }: Props) {
   return (
-    <div className="flex gap-1.5 w-full">
-      {modeEntries().map(([value, meta]) => {
-        const active = mode === value;
-        const Icon = meta.icon;
+    <div className="grid grid-cols-4 gap-2">
+      {modes.map((m) => {
+        const Icon = m.icon;
+        const active = mode === m.key;
         return (
           <button
-            key={value}
-            onClick={() => onChange(value)}
-            className={`relative flex-1 flex flex-col items-center gap-1 px-2 py-2 rounded-xl text-center
-              transition-all duration-200
+            key={m.key}
+            onClick={() => onChange(m.key)}
+            disabled={disabled}
+            className={`group relative flex items-center gap-2.5 px-3 py-2 rounded-lg text-left transition-all duration-150
               ${active
-                ? "glass-panel border border-brand-500/30 shadow-sm"
-                : "border border-transparent hover:bg-surface-2/50"
-              }`}
+                ? "studio-card border-brand-500/60 bg-surface-2 text-text-1"
+                : "bg-surface-0/50 border border-border/50 text-text-2 hover:text-text-1 hover:bg-surface-2/60 hover:border-border-hover"
+              }
+              ${disabled ? "opacity-40 cursor-not-allowed" : "cursor-pointer active:scale-[0.99]"}`}
           >
-            <span className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all duration-200
-              ${active ? "brand-gradient-btn text-white" : "bg-surface-2/60 text-text-muted"}`}>
-              <Icon size={15} />
-            </span>
-            <span className={`text-[11px] font-medium leading-tight ${active ? "text-text-1" : "text-text-2"}`}>
-              {t(locale, meta.labelKey)}
-            </span>
-            <span className="text-[9px] text-text-muted leading-tight">{t(locale, meta.descKey)}</span>
+            {active && (
+              <span className="absolute left-0 top-2 bottom-2 w-[3px] rounded-r bg-brand-400" />
+            )}
+            <div
+              className={`w-7 h-7 rounded-md flex items-center justify-center shrink-0 border transition-colors
+                ${active
+                  ? "bg-brand-500/15 border-brand-500/40 text-brand-400"
+                  : "bg-surface-1 border-border/60 text-text-muted group-hover:text-text-2"
+                }`}
+            >
+              <Icon size={14} strokeWidth={active ? 2.2 : 1.75} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[12px] font-semibold tracking-tight truncate">
+                  {t(locale, m.titleKey)}
+                </span>
+                <span
+                  className={`studio-mono text-[9px] px-1 py-0.2 rounded border shrink-0
+                    ${active
+                      ? "border-brand-500/40 bg-brand-500/10 text-brand-400"
+                      : "border-border/60 bg-surface-1 text-text-muted"
+                    }`}
+                >
+                  {m.code}
+                </span>
+              </div>
+              <div className="text-[10px] text-text-muted truncate mt-0.5">
+                {t(locale, m.descKey)}
+              </div>
+            </div>
           </button>
         );
       })}

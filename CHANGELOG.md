@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 6.3.0（2026-11-08）
+
+- **[全栈对齐与工作台重构] v6.3.0 前后端契约全量打通、Studio Rack 声学工作台重构与跨模块规则单源收口**：
+  - **前后端数据流与 IPC 全链路对齐（`types/index.ts` / `usePipeline.ts` / `knowledge.rs` / `history.rs` / `orchestrator.rs`）**：
+    - `types/index.ts` 完整映射后端 `SongPlan` IR 结构（`SongIntent` 立意五问、`AsymmetryPlan` 不对称留白、`GlobalStyle`、`SongSection`、`SunoSettings`、`ModeMeta`），并由 `wireProtocol.test.ts` 跨语言逐字段锁定。
+    - 新增 IPC `get_vocal_mix_meta`，前端启动时拉取后端 18 项受控人声/混音词表（`V-01..V-09`、`M-01..M-09`），内置兜底表 `FALLBACK_VOCAL_MIX_META` 与 `knowledge/vocal_mix.csv` 逐字同源并由单测锁定。
+    - 精修闭环打通 `prev_plan` 结构化回传：前端 `usePipeline` 与历史抽屉装载 `finalPlan` 时自动携带完整 `SongPlan` JSON，后端 `orchestrator` 在 `has_prev_plan` 时直通走结构化 patch，消除从文本正则反推造成的立意与局部字段丢失。
+    - 历史导出（Markdown / TXT）新增「立意五问与声律蓝图（`intent` + `asymmetry` + `douyin` 切片）」结构化回显段。
+  - **跨模块规则矛盾与历史测试遗留分支彻底清理（`render_suno.rs` / `validate.rs` / `rules.rs` / `roles.rs`）**：
+    - `render_suno.rs`：移除 `section_cues` 中为迎合测试夹具而设的 `< 32` 字符魔法分支，改为按 `already_mentioned` 去重 + 预留 `subtraction/negative_local/energy` 预算补入在场乐器；`style_tags` 在 `compact` 下将 `inst_cap` 对齐 `INSTRUMENT_MAX`（7 件）、`mix_cap` 对齐模式上限（常规 2 项 / 抖音 3 项），不再静默截断 `arrangement_hook` 与 `arc`。
+    - `validate.rs`：从 `validate()` 主链路移除与硬门矛盾的旧版 `advise_rhyme`（Warn）重复调用，Mode C 改词声律硬门（`mode_c_rhyme_scheme` / `mode_c_copied_rhyme_char`）取消 `n < 3` 旁路、对所有 `≥2` 行改词统一生效；`break_mark` 断句符拦截扩展至 A/B/C/D 四模式全覆盖；`audio_influence` 硬门覆盖 `mode_a/b/d`。
+    - `rules.rs` & `roles.rs`：`PLAN_FIELD_CONTRACT` 第 5 条移除与 `kind_allows_minimal` 冲突的 `/verse`；`producer()` 第 8 条同步支持 `reference_audio=true` 下 `Audio Influence` 建议 `70–85`。
+  - **Studio Rack 专业声学工作台三层架构重塑（`index.css` / `App.tsx` / `InputPanel.tsx` / `RoundtablePanel.tsx` / `ResultPanel.tsx` / `HistoryPanel.tsx`）**：
+    - 摒弃无层次 AI 模板感，重构为「顶部 Studio Console 导航栏 + Stage 01 声学输入与 18 项受控矩阵抽屉 + Stage 02 三阶段管线轨道与圆桌信号面板 + Stage 03 创作蓝图回显、Suno v6 四栏交付包（带实时物理字符/标签进度条）与七维 Judge 评分雷达」的专业 DAW 机架式层次布局。
+
 ## 6.2.0（2026-11-04）
 
 - **[全面升级] v6.2.0 开源 Suno 生态十大声学与工程法则全链路内化（`docs/ROADMAP.md` / `docs/BLUEPRINT_v3_CONTRACT.md`）**：

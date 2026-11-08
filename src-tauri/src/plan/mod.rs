@@ -182,7 +182,7 @@ pub struct Section {
     pub energy: Option<u8>,
     /// 段落在场乐器（只放乐器名称）
     pub instruments: Vec<String>,
-    /// 极简段显式声明（intro/outro/bridge/interlude/verse 等剥离段）
+    /// 极简段显式声明（仅限 intro/outro/bridge/interlude 等过渡剥离段）
     pub minimal: bool,
     /// 仅 D 模式必填（时间预算校验）
     #[schemars(range(min = 1, max = 600))]

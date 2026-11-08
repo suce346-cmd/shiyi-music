@@ -1747,18 +1747,16 @@ async fn run_pipeline_inner<R: Runtime>(
 
     // ---- 阶段 0：主持人统领（增量模式跳过——上一版方案即起步，上一版格式已注入 user_input）----
     checkpoint()?;
-    let mut current_plan = if incremental {
-        // 增量起步：从 user_input 的【上一版方案】段提取；缺失则回落全量阶段 0（不静默用空方案）
-        // P1-3：上一版须为 SongPlan JSON（检查点口径）；渲染后的交付包文本不可回填 IR →
-        // 回落全量阶段 0（上一版文本仍在 user_input 内作上下文），避免讨论跑完才在定稿处 Parse 失败。
-        match extract_previous_plan(&request.user_input)
+    let prev_plan_json = if incremental {
+        extract_previous_plan(&request.user_input)
             .filter(|p| plan_flow::plan_from_checkpoint(p).is_ok())
-        {
-            Some(plan) => plan,
-            None => run_host_initial(&app, &request, &budget, &run_id).await?,
-        }
     } else {
-        run_host_initial(&app, &request, &budget, &run_id).await?
+        None
+    };
+    let has_prev_plan = prev_plan_json.is_some();
+    let mut current_plan = match prev_plan_json {
+        Some(plan) => plan,
+        None => run_host_initial(&app, &request, &budget, &run_id).await?,
     };
     // 主持人上轮任务分发（第一轮无任务）
     let mut next_tasks = String::new();
@@ -1779,9 +1777,10 @@ async fn run_pipeline_inner<R: Runtime>(
     let mut stop_at_user_gate: Option<u32> = None;
     // 实际走到的轮次（含收敛/上限/提前收工三种终局）——检查点与降级声明同源读取
     let mut last_round: u32 = 0;
-    // v3 直通管线（Direct Pipeline）：常规生成（非增量精修、未开启轮间确认门、且阶段0期间无用户插话）
-    // 直接从阶段0 词曲一体初稿进入阶段2 物理硬门+去机器味审计与编译，彻底告别无意义的委员会多轮任务分发扯皮；
-    // 仅在增量角色精修（incremental）、手动开启轮间门（gate_enabled）或存在用户中途插话时才运行定向审改轮。
+    // v3 直通管线（Direct Pipeline）：常规生成（或未携带有效上一版 SongPlan JSON、已在阶段0 重算初稿的精修）、
+    // 未开启轮间确认门、且阶段0期间无用户插话时，直接从阶段0 词曲一体初稿进入阶段2 物理硬门+去机器味审计与编译；
+    // 仅在真正跳过阶段0 的增量角色精修（incremental && has_prev_plan）、手动开启轮间门（gate_enabled）
+    // 或存在用户中途插话时才运行定向审改轮。
     let initial_notes = interject::drain(&run_id);
     for note in &initial_notes {
         let preview: String = note.chars().take(60).collect();
@@ -1796,7 +1795,8 @@ async fn run_pipeline_inner<R: Runtime>(
             summary: format!("收到用户插话，已纳入本轮讨论：{}", preview),
         });
     }
-    let run_discussion_loop = incremental || gate_enabled || !initial_notes.is_empty();
+    let run_discussion_loop =
+        (incremental && has_prev_plan) || gate_enabled || !initial_notes.is_empty();
     let max_rounds = if run_discussion_loop { MAX_DISCUSSION_ROUNDS } else { 0 };
     if !run_discussion_loop {
         converged = true;

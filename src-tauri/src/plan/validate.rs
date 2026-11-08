@@ -169,8 +169,6 @@ pub fn validate(p: &SongPlan, ctx: &ValidateCtx<'_>) -> Vec<Issue> {
             {
                 out.push(Issue::hard("lyric_fill", "/sections", m));
             }
-            // P1-8 / C-03：韵脚咨询保留（2 行极小样本走 Warn；≥3 行真实曲目由 check_prosody_and_rhyme 硬门拦截）
-            out.extend(advise_rhyme(orig, &rendered.lyrics));
         }
     }
     out
@@ -427,9 +425,13 @@ fn check_prosody_and_rhyme(p: &SongPlan, ctx: &ValidateCtx<'_>, out: &mut Vec<Is
         .iter()
         .map(|s| s.lines.iter().filter(|l| !l.trim().is_empty()).count())
         .sum();
-    // 保留 2 行极简测试夹具（minimal_plan / advise_rhyme_known_samples）的独立门测试语义；
-    // 任何真实生成的歌曲或 ≥3 行的改词/写词/抖音作品全部强制过声律硬门。
-    if total_lines < 3 {
+    // Mode C 改词只要有 ≥2 行即全量执行原词押韵对齐与照搬尾字硬门；
+    // Mode B/D 仅在极简 2 行无立意结构夹具（minimal_plan）时跳过，任何带 intent 或 ≥3 行的作品全部强制过声律硬门。
+    if ctx.mode == "mode_c" {
+        if total_lines < 2 {
+            return;
+        }
+    } else if total_lines < 3 && p.intent.is_none() {
         return;
     }
     let exempted = has_exemption(p);
@@ -856,7 +858,7 @@ fn check_prosody_and_rhyme(p: &SongPlan, ctx: &ValidateCtx<'_>, out: &mut Vec<Is
                 .filter(|l| !l.is_empty())
                 .collect();
             let n = orig_lines.len().min(new_lines.len());
-            if n >= 3 {
+            if n >= 2 {
                 let orig_p: Vec<Option<(char, String, &'static str)>> =
                     orig_lines[..n].iter().map(|l| line_tail_prosody(l)).collect();
                 let new_p: Vec<Option<(char, String, &'static str)>> =
@@ -1317,8 +1319,8 @@ fn check_params(p: &SongPlan, mode: &str, out: &mut Vec<Issue>) {
         }
         _ => {}
     }
-    // P1-9 / M-12：默认关闭参考音频 → 非 0 仍硬拦；reference_audio=true 时允许
-    if matches!(mode, "mode_a" | "mode_b")
+    // P1-9 / M-12：默认关闭参考音频 → 非 0 仍硬拦；reference_audio=true 时允许（对齐 CHECKLIST_A/B/D）
+    if matches!(mode, "mode_a" | "mode_b" | "mode_d")
         && p.settings.audio_influence.is_some_and(|a| a != 0)
         && !p.settings.reference_audio
     {
@@ -1430,7 +1432,7 @@ fn check_lyric_lines(p: &SongPlan, mode: &str, out: &mut Vec<Issue>) {
                     }
                 }
             }
-            if matches!(mode, "mode_a" | "mode_b") && (l.contains('/') || l.contains('、')) {
+            if matches!(mode, "mode_a" | "mode_b" | "mode_c" | "mode_d") && (l.contains('/') || l.contains('、')) {
                 out.push(Issue::hard(
                     "break_mark",
                     path.clone(),
@@ -2345,7 +2347,7 @@ mod tests {
         );
     }
 
-    /// P1-8：已知押韵样本同辙不告警；破坏押韵位置则 Warn 且不致 passed=false
+    /// P1-8 独立咨询函数 + v3 Mode C 声律硬门统一性验证：破坏原词押韵行对在 validate() 中由 mode_c_rhyme_scheme 硬门拦截，不再双发冲突的 rhyme_advise Warn
     #[test]
     fn advise_rhyme_known_samples() {
         let orig = "[Verse]\n天上的星星不说话\n地上的孩子想妈妈\n";
@@ -2360,10 +2362,8 @@ mod tests {
             "{w:?}"
         );
         let mut p = minimal_plan();
-        p.sections[0].lines = vec!["海边的灯火不说话".into()];
+        p.sections[0].lines = vec!["海边的灯火还没灭".into()];
         p.sections[1].lines = vec!["夜里的孩子在跑步".into()];
-        let rendered =
-            crate::plan::render_suno::to_package_text(&crate::plan::render_suno::render(&p));
         let v = validate(
             &p,
             &ValidateCtx {
@@ -2372,15 +2372,13 @@ mod tests {
                 original_lyrics: Some(orig),
             },
         );
-        let _ = rendered;
         assert!(
-            passed(&v) || v.iter().any(|i| i.code == "lyric_fill"),
-            "字数可能硬红，但韵脚不得单独打回"
+            codes(&v).contains(&"mode_c_rhyme_scheme"),
+            "2 行 Mode C 改词破坏原词押韵位置必须由 mode_c_rhyme_scheme 硬门拦截: {v:?}"
         );
         assert!(
-            v.iter()
-                .all(|i| i.code != "rhyme_advise" || i.severity == Severity::Warn),
-            "韵脚必须是 Warn"
+            !v.iter().any(|i| i.code == "rhyme_advise"),
+            "validate() 不得再重复发出与硬门矛盾的 rhyme_advise Warn: {v:?}"
         );
     }
 

@@ -1,214 +1,220 @@
 @import "tailwindcss";
 
 @theme {
-  /* Brand: warm terracotta → amber gradient family */
-  --color-brand-300: oklch(0.88 0.08 60);
-  --color-brand-400: oklch(0.78 0.13 55);
-  --color-brand-500: oklch(0.68 0.17 50);
-  --color-brand-600: oklch(0.58 0.18 45);
-
-  /* Surfaces: warm cream / ivory layered system.
-     L=0.92~0.98 — bright, airy, warm-toned. */
-  --color-surface-0: oklch(0.95 0.012 80);
-  --color-surface-1: oklch(0.93 0.014 75);
-  --color-surface-2: oklch(0.90 0.016 70);
-  --color-surface-3: oklch(0.86 0.020 65);
-  --color-border: oklch(0.80 0.020 60);
-  --color-border-light: oklch(0.84 0.016 65);
-
-  /* Text: warm dark brown-charcoal, NOT pure black */
-  --color-text-1: oklch(0.28 0.015 55);
-  --color-text-2: oklch(0.45 0.015 55);
-  --color-text-muted: oklch(0.58 0.018 55);
-
-  /* Accents — warm, earthy, saturated */
-  --color-accent-purple: oklch(0.55 0.20 300);
-  --color-accent-pink: oklch(0.65 0.18 10);
-  --color-accent-cyan: oklch(0.60 0.12 210);
-  --color-accent-amber: oklch(0.75 0.16 70);
-
-  --color-success: oklch(0.62 0.15 150);
-  --color-warning: oklch(0.72 0.15 75);
-  --color-danger: oklch(0.58 0.20 25);
+  /* Studio Acoustic Workbench — Precision Dark Console (Default) */
+  --color-surface-0: #0a0b0e;
+  --color-surface-1: #111318;
+  --color-surface-2: #171a21;
+  --color-surface-3: #20242e;
+  --color-border: #262b38;
+  --color-border-hover: #384054;
+  --color-text-1: #f3f5f8;
+  --color-text-2: #b4bccb;
+  --color-text-muted: #768196;
+  --color-brand-400: #f0a45d;
+  --color-brand-500: #e28738;
+  --color-brand-600: #c86d21;
+  --color-accent: #5ec2b7;
+  --color-danger: #f06868;
+  --color-success: #4cc38a;
+  --color-warning: #f5b342;
 }
 
-/* ── F7 暗色主题：.dark 覆盖层（Tailwind v4 @theme 变量重定义，组件 token 自动跟随）── */
-.dark {
-  /* Brand：暗底提亮半档，保持暖色辨识度 */
-  --color-brand-300: oklch(0.90 0.09 60);
-  --color-brand-400: oklch(0.82 0.14 55);
-  --color-brand-500: oklch(0.74 0.17 50);
-  --color-brand-600: oklch(0.66 0.18 45);
-
-  /* Surfaces：暖深棕梯度（L=0.22~0.32） */
-  --color-surface-0: oklch(0.24 0.015 55);
-  --color-surface-1: oklch(0.27 0.016 55);
-  --color-surface-2: oklch(0.31 0.018 55);
-  --color-surface-3: oklch(0.36 0.020 55);
-  --color-border: oklch(0.42 0.020 55);
-  --color-border-light: oklch(0.38 0.018 55);
-
-  /* Text：暖米白 */
-  --color-text-1: oklch(0.93 0.012 75);
-  --color-text-2: oklch(0.78 0.014 70);
-  --color-text-muted: oklch(0.62 0.016 65);
-
-  --color-success: oklch(0.72 0.15 150);
-  --color-warning: oklch(0.78 0.15 75);
-  --color-danger: oklch(0.68 0.20 25);
+/* Studio Daylight Console — High-Contrast Paper & Slate */
+html[data-theme="light"] {
+  --color-surface-0: #f4f5f7;
+  --color-surface-1: #ffffff;
+  --color-surface-2: #edf0f5;
+  --color-surface-3: #e1e6ef;
+  --color-border: #d3dae6;
+  --color-border-hover: #b2bdd0;
+  --color-text-1: #141821;
+  --color-text-2: #434c5e;
+  --color-text-muted: #6e788c;
+  --color-brand-400: #c86416;
+  --color-brand-500: #d97320;
+  --color-brand-600: #b3530c;
+  --color-accent: #0f8a7d;
 }
 
-.dark body {
-  background-color: oklch(0.20 0.015 55);
-  background-image:
-    radial-gradient(ellipse 80% 60% at 15% 0%, oklch(0.30 0.05 50 / 0.50), transparent 60%),
-    radial-gradient(ellipse 70% 50% at 85% 10%, oklch(0.28 0.04 30 / 0.35), transparent 55%),
-    radial-gradient(ellipse 60% 80% at 80% 100%, oklch(0.26 0.03 70 / 0.35), transparent 60%),
-    radial-gradient(ellipse 50% 50% at 10% 90%, oklch(0.28 0.03 40 / 0.25), transparent 55%);
+html[data-theme="light"] .ambient-bg {
+  background:
+    radial-gradient(ellipse 65% 45% at 15% 0%, rgba(217, 115, 32, 0.05) 0%, transparent 70%),
+    radial-gradient(ellipse 55% 40% at 85% 100%, rgba(15, 138, 125, 0.04) 0%, transparent 70%),
+    var(--color-surface-0);
 }
 
-.dark .glass-panel {
-  background: oklch(0.27 0.016 55 / 0.82);
-  box-shadow:
-    inset 0 1px 0 oklch(1 0 0 / 0.08),
-    0 4px 24px oklch(0 0 0 / 0.40);
+html[data-theme="light"] .glass-panel {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(20, 24, 33, 0.09);
 }
 
-.dark ::-webkit-scrollbar-thumb {
-  background: oklch(0.45 0.025 55 / 0.6);
-}
-.dark ::-webkit-scrollbar-thumb:hover {
-  background: oklch(0.55 0.030 55 / 0.8);
+html[data-theme="light"] .studio-card {
+  background: #ffffff;
+  border-color: #d5dce8;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
 }
 
-/* ── Global background: warm cream base with soft amber/peach radial glows ── */
-html, body, #root {
-  height: 100%;
-  margin: 0;
+html[data-theme="light"] .studio-subcard {
+  background: #f7f9fc;
+  border-color: #dee4ee;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 body {
-  background-color: oklch(0.94 0.015 75);
-  background-image:
-    radial-gradient(ellipse 80% 60% at 15% 0%, oklch(0.90 0.06 60 / 0.60), transparent 60%),
-    radial-gradient(ellipse 70% 50% at 85% 10%, oklch(0.88 0.05 30 / 0.40), transparent 55%),
-    radial-gradient(ellipse 60% 80% at 80% 100%, oklch(0.92 0.04 90 / 0.45), transparent 60%),
-    radial-gradient(ellipse 50% 50% at 10% 90%, oklch(0.90 0.03 40 / 0.30), transparent 55%);
-  background-attachment: fixed;
+  margin: 0;
+  background: var(--color-surface-0);
+  color: var(--color-text-1);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Inter", system-ui, sans-serif;
+  user-select: none;
+  overflow: hidden;
 }
 
-/* ── Animations ── */
-@keyframes fade {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
+/* Precision Scrollbar */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.16);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.32);
+}
+
+/* Studio Console Ambient Canvas */
+.ambient-bg {
+  background:
+    radial-gradient(ellipse 60% 45% at 18% 0%, rgba(226, 135, 56, 0.055) 0%, transparent 70%),
+    radial-gradient(ellipse 50% 40% at 85% 100%, rgba(94, 194, 183, 0.04) 0%, transparent 70%),
+    var(--color-surface-0);
+}
+
+/* Studio Glass & Hardware Rack Panels */
+.glass-panel {
+  background: rgba(17, 19, 24, 0.88);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+.studio-card {
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-border);
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.studio-subcard {
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+}
+
+.studio-mono {
+  font-family: "SF Mono", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.studio-section-tag {
+  font-family: "SF Mono", "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Primary Console Action Button */
+.brand-gradient-btn {
+  background: linear-gradient(180deg, #e89244 0%, #cf7222 100%);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+.brand-gradient-btn:hover:not(:disabled) {
+  background: linear-gradient(180deg, #f09d52 0%, #db7c29 100%);
+  box-shadow:
+    0 3px 12px rgba(226, 135, 56, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+/* Animations */
+@keyframes pulse-glow {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
 }
 
 @keyframes slideUp {
-  from { opacity: 0; transform: translateY(8px); }
+  from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 @keyframes streamBar {
   0% { transform: translateX(-100%); }
-  100% { transform: translateX(100%); }
+  100% { transform: translateX(400%); }
 }
 
-@keyframes glowPulse {
-  0%, 100% { opacity: 0.5; }
-  50% { opacity: 0.8; }
+.animate-slide-up {
+  animation: slideUp 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-/* ── Q版角色动态 ── */
-/* 呼吸悬浮：待命/思考时轻微上下浮动 */
-@keyframes bob {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-3px); }
+.animate-fade-in {
+  animation: fadeIn 0.15s ease-out;
 }
-.avatar-bob { animation: bob 2.4s ease-in-out infinite; }
 
-/* 发言跳起（被点击/聚焦提问时） */
-@keyframes jump {
-  0%, 100% { transform: translateY(0); }
-  30% { transform: translateY(-14px); }
-  50% { transform: translateY(-14px); }
-  70% { transform: translateY(0); }
+/* Role Avatar Motion */
+@keyframes chibi-breathe {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-1.5px) scale(1.02); }
 }
-.avatar-jump { animation: jump 0.9s ease-in-out 2; }
 
-/* 完成弹跳（开心） */
-@keyframes celebrate {
-  0% { transform: translateY(0) rotate(0); }
-  25% { transform: translateY(-10px) rotate(-6deg); }
-  50% { transform: translateY(-14px) rotate(6deg); }
-  75% { transform: translateY(-6px) rotate(-4deg); }
-  100% { transform: translateY(0) rotate(0); }
+@keyframes chibi-bounce {
+  0%, 100% { transform: translateY(0) rotate(0deg) scale(1); }
+  25% { transform: translateY(-4px) rotate(-4deg) scale(1.06); }
+  50% { transform: translateY(-1px) rotate(0deg) scale(1.03); }
+  75% { transform: translateY(-4px) rotate(4deg) scale(1.06); }
 }
-.avatar-celebrate { animation: celebrate 0.8s ease-in-out 1; }
 
-/* 出错抖动 */
-@keyframes shake {
+@keyframes chibi-nod {
+  0% { transform: scale(0.92); }
+  50% { transform: scale(1.08) translateY(-2px); }
+  100% { transform: scale(1) translateY(0); }
+}
+
+@keyframes chibi-shake {
   0%, 100% { transform: translateX(0); }
-  20% { transform: translateX(-4px); }
-  40% { transform: translateX(4px); }
-  60% { transform: translateX(-3px); }
-  80% { transform: translateX(3px); }
-}
-.avatar-shake { animation: shake 0.5s ease-in-out 2; }
-
-/* 说话气泡弹出 */
-@keyframes bubbleIn {
-  from { opacity: 0; transform: translateY(8px) scale(0.9); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
-}
-.speech-bubble { animation: bubbleIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
-
-/* 发光波纹（发言/思考） */
-@keyframes glowRing {
-  0% { opacity: 0.5; transform: scale(1); }
-  100% { opacity: 0; transform: scale(1.5); }
-}
-.glow-ring { animation: glowRing 1.5s ease-out infinite; }
-
-@media (prefers-reduced-motion: reduce) {
-  .avatar-bob, .avatar-jump, .avatar-celebrate, .avatar-shake,
-  .glow-ring, .speech-bubble { animation: none !important; }
+  25% { transform: translateX(-3px) rotate(-4deg); }
+  75% { transform: translateX(3px) rotate(4deg); }
 }
 
-/* ── Scrollbar ── */
-::-webkit-scrollbar { width: 5px; height: 5px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb {
-  background: oklch(0.78 0.025 60 / 0.6);
-  border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: oklch(0.70 0.030 55 / 0.8);
+@keyframes chibi-ripple {
+  0% { transform: scale(0.95); opacity: 0.65; }
+  100% { transform: scale(1.45); opacity: 0; }
 }
 
-/* ── Glass panel: warm translucent ivory with soft shadow ── */
-.glass-panel {
-  background: oklch(0.93 0.014 75 / 0.82);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  box-shadow:
-    inset 0 1px 0 oklch(1 0 0 / 0.50),
-    0 4px 24px oklch(0.60 0.03 55 / 0.15);
+.chibi-idle {
+  animation: chibi-breathe 3.6s ease-in-out infinite;
 }
 
-/* ── Brand gradient text: terracotta → amber ── */
-.brand-gradient-text {
-  background: linear-gradient(135deg, oklch(0.62 0.18 45), oklch(0.72 0.16 65));
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
+.chibi-working {
+  animation: chibi-bounce 0.85s ease-in-out infinite;
 }
 
-/* ── Brand gradient button: terracotta → amber ── */
-.brand-gradient-btn {
-  background: linear-gradient(135deg, oklch(0.62 0.18 45), oklch(0.68 0.17 55));
-  box-shadow: 0 2px 12px oklch(0.55 0.15 50 / 0.30);
+.chibi-done {
+  animation: chibi-nod 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
-.brand-gradient-btn:hover {
-  background: linear-gradient(135deg, oklch(0.66 0.18 45), oklch(0.72 0.17 55));
-  box-shadow: 0 4px 18px oklch(0.58 0.16 50 / 0.40);
+
+.chibi-error {
+  animation: chibi-shake 0.45s ease-in-out;
+}
+
+.chibi-ripple-ring {
+  animation: chibi-ripple 1.4s ease-out infinite;
 }
